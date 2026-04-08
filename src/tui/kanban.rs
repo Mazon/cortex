@@ -96,7 +96,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         && task_idx == focused_idx
                         && state.ui.focused_task_id.as_deref() == Some(task_id.as_str());
 
-                    let card_height = 3u16;
+                    let card_height = 4u16;
                     if card_y + card_height > inner.y + inner.height {
                         break; // No more space
                     }
