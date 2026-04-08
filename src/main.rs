@@ -18,9 +18,9 @@ use persistence::db::Db;
 use state::types::AppState;
 use tui::app::App;
 
-/// cortex2 — TUI Kanban board with OpenCode SDK integration
+/// cortex — TUI Kanban board with OpenCode SDK integration
 #[derive(Parser, Debug)]
-#[command(name = "cortex2", version, about = "TUI Kanban board with OpenCode SDK integration")]
+#[command(name = "cortex", version, about = "TUI Kanban board with OpenCode SDK integration")]
 struct Cli {
     /// Reset all persisted state (delete database)
     #[arg(long)]
@@ -78,15 +78,9 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Bridge log records from crates using the `log` facade
-    if let Err(e) = tracing_log::LogTracer::init() {
-        // Already initialized by another subscriber — not fatal, but log it
-        eprintln!("Warning: LogTracer bridge failed to initialize: {}", e);
-    }
-
     tracing::debug!("Logging to {}/cortex.log", log_dir.display());
     tracing::info!("Logger initialized — writing to {}/cortex.log", log_dir.display());
-    tracing::info!("Starting cortex2...");
+    tracing::info!("Starting cortex...");
 
     // Redirect stderr to the log file so nothing leaks to the TUI
     #[cfg(unix)]
@@ -280,7 +274,7 @@ fn main() -> Result<()> {
     });
 
     result?;
-    tracing::info!("cortex2 exited cleanly");
+    tracing::info!("cortex exited cleanly");
     Ok(())
 }
 
