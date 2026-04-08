@@ -4,6 +4,7 @@ use crate::config::types::CortexConfig;
 use crate::state::types::AppState;
 use crate::tui::{CrosstermBackend, Terminal};
 use crossterm::event::{self, Event, KeyEventKind};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,7 +23,12 @@ impl App {
     /// residual log output from the primary terminal buffer.
     pub fn setup_terminal() -> anyhow::Result<()> {
         crossterm::terminal::enable_raw_mode()?;
-        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::EnterAlternateScreen,
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+        )?;
+        std::io::stdout().flush()?;
         Ok(())
     }
 

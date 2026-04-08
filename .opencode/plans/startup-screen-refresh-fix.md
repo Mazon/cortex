@@ -41,8 +41,8 @@ graph TD
 - [ ] Task 2: Move alternate screen setup earlier in `main()` to hide any residual startup output
 
 ### Wave 2 — Polish and safety
-- [ ] Task 3: Add an explicit terminal clear after entering alternate screen buffer (depends: Task 2)
-- [ ] Task 4: Verify no remaining log paths write to stderr/stdout during TUI operation (depends: Task 1, Task 3)
+- [x] Task 3: Add an explicit terminal clear after entering alternate screen buffer (depends: Task 2)
+- [-] Task 4: Verify no remaining log paths write to stderr/stdout during TUI operation (depends: Task 1, Task 3)
 
 ## Detailed Specifications
 
