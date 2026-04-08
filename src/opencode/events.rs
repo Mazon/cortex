@@ -30,7 +30,12 @@ pub async fn sse_event_loop(
                     let event = match event_result {
                         Ok(e) => e,
                         Err(e) => {
-                            warn!("SSE event error: {}", e);
+                            let msg = e.to_string();
+                            if msg.contains("unknown variant") {
+                                debug!("SSE unknown event type: {}", msg);
+                            } else {
+                                warn!("SSE event error: {}", msg);
+                            }
                             continue;
                         }
                     };
