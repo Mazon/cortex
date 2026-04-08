@@ -1,0 +1,36 @@
+[package]
+name = "cortex2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Config
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Persistence
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# OpenCode SDK — provides HTTP client (hpx), SSE streaming, typed API,
+# automatic retries, structured errors.
+opencode-sdk-rs = "0.2"
+
+# HTTP client (server health checks only)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }

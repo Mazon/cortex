@@ -1,0 +1,648 @@
+//! Core domain types for the Cortex2 application.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+// ─── Enums ────────────────────────────────────────────────────────────────
+
+/// Kanban column identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct KanbanColumn(pub String);
+
+impl KanbanColumn {
+    pub const TODO: &'static str = "todo";
+    pub const PLANNING: &'static str = "planning";
+    pub const RUNNING: &'static str = "running";
+    pub const REVIEW: &'static str = "review";
+    pub const DONE: &'static str = "done";
+
+    /// Returns the default column set.
+    pub fn default_columns() -> Vec<KanbanColumn> {
+        vec![
+            KanbanColumn(Self::TODO.to_string()),
+            KanbanColumn(Self::PLANNING.to_string()),
+            KanbanColumn(Self::RUNNING.to_string()),
+            KanbanColumn(Self::REVIEW.to_string()),
+            KanbanColumn(Self::DONE.to_string()),
+        ]
+    }
+
+    /// Returns default visible columns.
+    pub fn default_visible_columns() -> Vec<KanbanColumn> {
+        vec![
+            KanbanColumn(Self::TODO.to_string()),
+            KanbanColumn(Self::PLANNING.to_string()),
+            KanbanColumn(Self::RUNNING.to_string()),
+            KanbanColumn(Self::REVIEW.to_string()),
+        ]
+    }
+}
+
+impl std::fmt::Display for KanbanColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for KanbanColumn {
+    fn from(s: &str) -> Self {
+        KanbanColumn(s.to_string())
+    }
+}
+
+/// Task agent type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskAgentType {
+    None,
+    Planning,
+    Do,
+    ReviewerAlpha,
+    ReviewerBeta,
+    ReviewerGamma,
+}
+
+impl TaskAgentType {
+    pub fn from_str_opt(s: &str) -> Self {
+        match s {
+            "planning" => TaskAgentType::Planning,
+            "do" => TaskAgentType::Do,
+            "reviewer-alpha" => TaskAgentType::ReviewerAlpha,
+            "reviewer-beta" => TaskAgentType::ReviewerBeta,
+            "reviewer-gamma" => TaskAgentType::ReviewerGamma,
+            _ => TaskAgentType::None,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            TaskAgentType::None => "none",
+            TaskAgentType::Planning => "planning",
+            TaskAgentType::Do => "do",
+            TaskAgentType::ReviewerAlpha => "reviewer-alpha",
+            TaskAgentType::ReviewerBeta => "reviewer-beta",
+            TaskAgentType::ReviewerGamma => "reviewer-gamma",
+        }
+    }
+}
+
+/// Agent execution status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentStatus {
+    Pending,
+    Running,
+    Hung,
+    Complete,
+    Error,
+}
+
+impl AgentStatus {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            AgentStatus::Pending => "·",
+            AgentStatus::Running => "◐",
+            AgentStatus::Hung => "⏸",
+            AgentStatus::Complete => "✓",
+            AgentStatus::Error => "✗",
+        }
+    }
+}
+
+impl std::fmt::Display for AgentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentStatus::Pending => write!(f, "pending"),
+            AgentStatus::Running => write!(f, "working"),
+            AgentStatus::Hung => write!(f, "hung"),
+            AgentStatus::Complete => write!(f, "done"),
+            AgentStatus::Error => write!(f, "failed"),
+        }
+    }
+}
+
+/// Project status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectStatus {
+    Disconnected,
+    Idle,
+    Working,
+    Question,
+    Done,
+    Error,
+    Hung,
+}
+
+impl ProjectStatus {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            ProjectStatus::Disconnected => "○",
+            ProjectStatus::Idle => "●",
+            ProjectStatus::Working => "◐",
+            ProjectStatus::Question => "?",
+            ProjectStatus::Done => "✓",
+            ProjectStatus::Error => "✗",
+            ProjectStatus::Hung => "⏸",
+        }
+    }
+}
+
+/// Tool execution state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolState {
+    Pending,
+    Running,
+    Completed,
+    Error,
+}
+
+/// Application mode — determines rendering and key routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppMode {
+    Normal,
+    TaskEditor,
+    Help,
+}
+
+/// Which field is focused in the task editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorField {
+    Title,
+    Description,
+}
+
+/// Which panel is focused in normal mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FocusedPanel {
+    Kanban,
+    TaskDetail,
+}
+
+/// Message role.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageRole {
+    User,
+    Assistant,
+}
+
+/// Notification variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationVariant {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+/// Cursor direction for movement in the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+}
+
+// ─── Structs ──────────────────────────────────────────────────────────────
+
+/// A task in the kanban board.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CortexTask {
+    pub id: String,
+    pub number: u32,
+    pub title: String,
+    pub description: String,
+    pub column: KanbanColumn,
+    pub session_id: Option<String>,
+    pub agent_type: TaskAgentType,
+    pub agent_status: AgentStatus,
+    pub entered_column_at: i64,
+    pub last_activity_at: i64,
+    pub error_message: Option<String>,
+    pub plan_output: Option<String>,
+    pub pending_permission_count: u32,
+    pub pending_question_count: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub project_id: String,
+}
+
+/// A project in the sidebar.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CortexProject {
+    pub id: String,
+    pub name: String,
+    pub working_directory: String,
+    pub status: ProjectStatus,
+    pub position: usize,
+}
+
+/// Kanban board state — column ordering and task placement.
+#[derive(Debug, Clone, Default)]
+pub struct KanbanState {
+    /// Maps column ID → ordered list of task IDs.
+    pub columns: HashMap<String, Vec<String>>,
+    /// Currently focused column index among visible columns.
+    pub focused_column_index: usize,
+    /// Per-column focused task index.
+    pub focused_task_index: HashMap<String, usize>,
+}
+
+/// UI state — tracks the current view mode and focus.
+#[derive(Debug, Clone)]
+pub struct UIState {
+    pub mode: AppMode,
+    pub focused_panel: FocusedPanel,
+    pub focused_column: String,
+    pub focused_task_id: Option<String>,
+    pub viewing_task_id: Option<String>,
+    pub notification: Option<Notification>,
+    pub input_text: String,
+    pub task_editor: Option<TaskEditorState>,
+}
+
+impl Default for UIState {
+    fn default() -> Self {
+        Self {
+            mode: AppMode::Normal,
+            focused_panel: FocusedPanel::Kanban,
+            focused_column: KanbanColumn::TODO.to_string(),
+            focused_task_id: None,
+            viewing_task_id: None,
+            notification: None,
+            input_text: String::new(),
+            task_editor: None,
+        }
+    }
+}
+
+/// A notification toast.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub message: String,
+    pub variant: NotificationVariant,
+    pub expires_at: i64,
+}
+
+/// Fullscreen task editor state.
+#[derive(Debug, Clone)]
+pub struct TaskEditorState {
+    /// `None` = creating new task, `Some(id)` = editing existing task.
+    pub task_id: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub focused_field: EditorField,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub scroll_offset: usize,
+    pub column_id: Option<String>,
+    pub agent_type: TaskAgentType,
+}
+
+impl TaskEditorState {
+    /// Creates empty state for a new task.
+    pub fn new_for_create(default_column: &str) -> Self {
+        Self {
+            task_id: None,
+            title: String::new(),
+            description: String::new(),
+            focused_field: EditorField::Title,
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_offset: 0,
+            column_id: Some(default_column.to_string()),
+            agent_type: TaskAgentType::None,
+        }
+    }
+
+    /// Pre-populates from an existing task for editing.
+    pub fn new_for_edit(task: &CortexTask) -> Self {
+        Self {
+            task_id: Some(task.id.clone()),
+            title: task.title.clone(),
+            description: task.description.clone(),
+            focused_field: EditorField::Title,
+            cursor_row: 0,
+            cursor_col: task.title.len(),
+            scroll_offset: 0,
+            column_id: Some(task.column.0.clone()),
+            agent_type: task.agent_type.clone(),
+        }
+    }
+
+    /// Returns the lines of the description (split by '\n').
+    fn desc_lines(&self) -> Vec<&str> {
+        self.description.split('\n').collect()
+    }
+
+    /// Returns the text of the line the cursor is on.
+    pub fn current_line(&self) -> &str {
+        match self.focused_field {
+            EditorField::Title => &self.title,
+            EditorField::Description => {
+                let lines = self.desc_lines();
+                lines.get(self.cursor_row).copied().unwrap_or("")
+            }
+        }
+    }
+
+    /// Inserts a character at cursor position in the focused field.
+    pub fn insert_char(&mut self, ch: char) {
+        match self.focused_field {
+            EditorField::Title => {
+                self.title.insert(self.cursor_col.min(self.title.len()), ch);
+                self.cursor_col = (self.cursor_col + 1).min(self.title.len());
+            }
+            EditorField::Description => {
+                let lines: Vec<&str> = self.description.split('\n').collect();
+                let row = self.cursor_row.min(lines.len().saturating_sub(1));
+                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+                if let Some(line) = lines.get(row) {
+                    let mut new_line = line.to_string();
+                    new_line.insert(col, ch);
+                    // Rebuild description
+                    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+                    if row < new_lines.len() {
+                        new_lines[row] = new_line;
+                    }
+                    self.description = new_lines.join("\n");
+                    self.cursor_col = col + 1;
+                    self.cursor_row = row;
+                }
+            }
+        }
+    }
+
+    /// Deletes character before cursor (backspace).
+    pub fn delete_char_back(&mut self) {
+        match self.focused_field {
+            EditorField::Title => {
+                if self.cursor_col > 0 {
+                    self.title.remove(self.cursor_col - 1);
+                    self.cursor_col -= 1;
+                }
+            }
+            EditorField::Description => {
+                let lines: Vec<&str> = self.description.split('\n').collect();
+                let row = self.cursor_row.min(lines.len().saturating_sub(1));
+                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+
+                let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+                if let Some(line) = new_lines.get_mut(row) {
+                    if col > 0 {
+                        line.remove(col - 1);
+                        self.cursor_col = col - 1;
+                    } else if row > 0 {
+                        // Merge with previous line
+                        let prev_len = new_lines[row - 1].len();
+                        let current = new_lines.remove(row);
+                        new_lines[row - 1].push_str(&current);
+                        self.cursor_row = row - 1;
+                        self.cursor_col = prev_len;
+                    }
+                }
+                self.description = new_lines.join("\n");
+            }
+        }
+    }
+
+    /// Deletes character at cursor (delete key).
+    pub fn delete_char_forward(&mut self) {
+        match self.focused_field {
+            EditorField::Title => {
+                if self.cursor_col < self.title.len() {
+                    self.title.remove(self.cursor_col);
+                }
+            }
+            EditorField::Description => {
+                let lines: Vec<String> = self.description.split('\n').map(String::from).collect();
+                let row = self.cursor_row.min(lines.len().saturating_sub(1));
+                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+
+                let mut new_lines = lines;
+                if row < new_lines.len() {
+                    if col < new_lines[row].len() {
+                        new_lines[row].remove(col);
+                    } else if row + 1 < new_lines.len() {
+                        // Merge with next line
+                        let next = new_lines.remove(row + 1);
+                        new_lines[row].push_str(&next);
+                    }
+                }
+                self.description = new_lines.join("\n");
+            }
+        }
+    }
+
+    /// Inserts a newline at cursor (only in description field).
+    pub fn insert_newline(&mut self) {
+        if self.focused_field != EditorField::Description {
+            return;
+        }
+        let lines: Vec<String> = self.description.split('\n').map(String::from).collect();
+        let row = self.cursor_row.min(lines.len().saturating_sub(1));
+        let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+
+        let mut new_lines = lines;
+        if row < new_lines.len() {
+            let rest = new_lines[row].split_off(col);
+            new_lines.insert(row + 1, rest);
+        }
+        self.description = new_lines.join("\n");
+        self.cursor_row = row + 1;
+        self.cursor_col = 0;
+    }
+
+    /// Moves cursor in the given direction, clamped to valid positions.
+    pub fn move_cursor(&mut self, direction: CursorDirection) {
+        match self.focused_field {
+            EditorField::Title => match direction {
+                CursorDirection::Left => {
+                    self.cursor_col = self.cursor_col.saturating_sub(1);
+                }
+                CursorDirection::Right => {
+                    self.cursor_col = (self.cursor_col + 1).min(self.title.len());
+                }
+                CursorDirection::Home => {
+                    self.cursor_col = 0;
+                }
+                CursorDirection::End => {
+                    self.cursor_col = self.title.len();
+                }
+                _ => {}
+            },
+            EditorField::Description => {
+                let num_lines = self.description.split('\n').count();
+                let max_row = num_lines.saturating_sub(1);
+
+                match direction {
+                    CursorDirection::Up => {
+                        if self.cursor_row > 0 {
+                            self.cursor_row -= 1;
+                            let line_len = self
+                                .desc_lines()
+                                .get(self.cursor_row)
+                                .map_or(0, |l| l.len());
+                            self.cursor_col = self.cursor_col.min(line_len);
+                        }
+                    }
+                    CursorDirection::Down => {
+                        if self.cursor_row < max_row {
+                            self.cursor_row += 1;
+                            let line_len = self
+                                .desc_lines()
+                                .get(self.cursor_row)
+                                .map_or(0, |l| l.len());
+                            self.cursor_col = self.cursor_col.min(line_len);
+                        }
+                    }
+                    CursorDirection::Left => {
+                        self.cursor_col = self.cursor_col.saturating_sub(1);
+                    }
+                    CursorDirection::Right => {
+                        let line_len = self
+                            .desc_lines()
+                            .get(self.cursor_row)
+                            .map_or(0, |l| l.len());
+                        self.cursor_col = (self.cursor_col + 1).min(line_len);
+                    }
+                    CursorDirection::Home => {
+                        self.cursor_col = 0;
+                    }
+                    CursorDirection::End => {
+                        let line_len = self
+                            .desc_lines()
+                            .get(self.cursor_row)
+                            .map_or(0, |l| l.len());
+                        self.cursor_col = line_len;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Adjusts scroll_offset so cursor row is within the visible textarea area.
+    pub fn ensure_cursor_visible(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        if self.cursor_row < self.scroll_offset {
+            self.scroll_offset = self.cursor_row;
+        } else if self.cursor_row >= self.scroll_offset + visible_height {
+            self.scroll_offset = self.cursor_row - visible_height + 1;
+        }
+    }
+
+    /// Returns (title, description) for saving.
+    pub fn to_task_fields(&self) -> (String, String) {
+        (self.title.clone(), self.description.clone())
+    }
+}
+
+/// A message in a task's session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskMessage {
+    pub id: String,
+    pub role: MessageRole,
+    pub parts: Vec<TaskMessagePart>,
+    pub created_at: Option<String>,
+}
+
+/// A part within a task message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TaskMessagePart {
+    Text {
+        text: String,
+    },
+    Tool {
+        id: String,
+        tool: String,
+        state: ToolState,
+        input: Option<String>,
+        output: Option<String>,
+        error: Option<String>,
+    },
+    StepStart {
+        id: String,
+    },
+    StepFinish {
+        id: String,
+    },
+    Agent {
+        id: String,
+        agent: String,
+    },
+    Reasoning {
+        text: String,
+    },
+    Unknown,
+}
+
+/// A permission request from an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRequest {
+    pub id: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub description: String,
+    pub status: String,
+    pub details: Option<String>,
+}
+
+/// A question request from an agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionRequest {
+    pub id: String,
+    pub session_id: String,
+    pub question: String,
+    pub answers: Vec<String>,
+    pub status: String,
+}
+
+/// Session data for a task (messages, streaming state).
+#[derive(Debug, Clone, Default)]
+pub struct TaskDetailSession {
+    pub task_id: String,
+    pub session_id: Option<String>,
+    pub messages: Vec<TaskMessage>,
+    pub streaming_text: Option<String>,
+    pub pending_permissions: Vec<PermissionRequest>,
+    pub pending_questions: Vec<QuestionRequest>,
+}
+
+// ─── Top-Level State ──────────────────────────────────────────────────────
+
+/// The single source of truth for all application state.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub projects: Vec<CortexProject>,
+    pub tasks: HashMap<String, CortexTask>,
+    pub kanban: KanbanState,
+    pub ui: UIState,
+    pub connected: bool,
+    pub active_project_id: Option<String>,
+    pub task_number_counters: HashMap<String, u32>,
+    /// Reverse index: session_id → task_id for O(1) lookup.
+    pub session_to_task: HashMap<String, String>,
+    /// Session data for task detail view.
+    pub task_sessions: HashMap<String, TaskDetailSession>,
+    /// Dirty flag for persistence.
+    pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            projects: Vec::new(),
+            tasks: HashMap::new(),
+            kanban: KanbanState::default(),
+            ui: UIState::default(),
+            connected: false,
+            active_project_id: None,
+            task_number_counters: HashMap::new(),
+            session_to_task: HashMap::new(),
+            task_sessions: HashMap::new(),
+            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
