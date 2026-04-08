@@ -290,12 +290,12 @@ fn project_status_to_str(s: &ProjectStatus) -> &'static str {
     }
 }
 
-/// Returns the default database path: `~/.local/share/cortex2/cortex.db`.
+/// Returns the default database path: `~/.local/share/cortex/cortex.db`.
 pub fn default_db_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     std::path::PathBuf::from(home)
         .join(".local")
         .join("share")
-        .join("cortex2")
+        .join("cortex")
         .join("cortex.db")
 }

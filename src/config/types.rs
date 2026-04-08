@@ -1,4 +1,4 @@
-//! Configuration type definitions for Cortex2.
+//! Configuration type definitions for Cortex.
 //!
 //! These types mirror the TOML config structure and support serde
 //! serialization/deserialization.

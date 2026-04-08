@@ -1,4 +1,4 @@
-//! Core domain types for the Cortex2 application.
+//! Core domain types for the Cortex application.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

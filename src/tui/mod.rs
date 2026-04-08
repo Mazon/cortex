@@ -1,4 +1,4 @@
-//! TUI module — terminal user interface for cortex2.
+//! TUI module — terminal user interface for cortex.
 
 pub mod app;
 pub mod editor_handler;

@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use defaults::default_config;
 use types::CortexConfig;
 
-/// Returns the default config path: `~/.config/cortex2/cortex.toml`.
+/// Returns the default config path: `~/.config/cortex/cortex.toml`.
 pub fn default_config_path() -> PathBuf {
     dirs_or_home()
         .join(".config")
-        .join("cortex2")
+        .join("cortex")
         .join("cortex.toml")
 }
 
