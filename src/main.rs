@@ -9,7 +9,7 @@ pub mod tui;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::prelude::*;
 
@@ -56,10 +56,12 @@ async fn main() -> Result<()> {
         .join("share")
         .join("cortex")
         .join("logs");
-    std::fs::create_dir_all(&log_dir).ok();
+    std::fs::create_dir_all(&log_dir)
+        .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
 
     let file_appender = tracing_appender::rolling::never(&log_dir, "cortex.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // IMPORTANT: This guard must live until program exit. When dropped, it flushes all buffered log writes to disk.
+    let (non_blocking, _log_flush_guard) = tracing_appender::non_blocking(file_appender);
 
     // Build filter: config sets default, RUST_LOG env var overrides
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -76,9 +78,13 @@ async fn main() -> Result<()> {
         .init();
 
     // Bridge log records from crates using the `log` facade
-    tracing_log::LogTracer::init().ok();
+    if let Err(e) = tracing_log::LogTracer::init() {
+        // Already initialized by another subscriber — not fatal, but log it
+        eprintln!("Warning: LogTracer bridge failed to initialize: {}", e);
+    }
 
     tracing::debug!("Logging to {}/cortex.log", log_dir.display());
+    tracing::info!("Logger initialized — writing to {}/cortex.log", log_dir.display());
     tracing::info!("Starting cortex2...");
 
     // Enter alternate screen early to hide any residual startup output
@@ -207,19 +213,6 @@ async fn main() -> Result<()> {
 
     // Cancel persistence task
     persistence_handle.abort();
-
-    // Force-save state before exit
-    {
-        let state = state.lock().unwrap();
-        let db_path = persistence::db::default_db_path();
-        if let Ok(db) = Db::new(&db_path) {
-            if let Err(e) = persistence::save_state(&state, &db) {
-                tracing::error!("Failed to save state on shutdown: {}", e);
-            } else {
-                tracing::info!("State saved on shutdown");
-            }
-        }
-    }
 
     // Force-save state before exit
     {

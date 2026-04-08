@@ -42,7 +42,7 @@ graph TD
 
 ### Wave 2 — Polish and safety
 - [x] Task 3: Add an explicit terminal clear after entering alternate screen buffer (depends: Task 2)
-- [-] Task 4: Verify no remaining log paths write to stderr/stdout during TUI operation (depends: Task 1, Task 3)
+- [x] Task 4: Verify no remaining log paths write to stderr/stdout during TUI operation (depends: Task 1, Task 3)
 
 ## Detailed Specifications
 
@@ -277,4 +277,16 @@ Search the entire codebase for any remaining paths that could write to stdout/st
 
 ## Outcomes & Retrospective
 
-_To be completed during execution._
+### Wave 2 Completion
+
+**Task 3 — Terminal clear safety:**
+- Added `Clear(ClearType::All)` and `flush()` to `App::setup_terminal()` after `EnterAlternateScreen`
+- Required adding `use std::io::Write` import for the `flush()` method
+- `cargo check` passes with no new errors or warnings
+
+**Task 4 — Log path audit (clean):**
+- Zero `println!` or `eprintln!` calls in non-test source code
+- Child process stdout/stderr in `server.rs` are correctly piped (`Stdio::piped()`), not inherited
+- Tracing subscriber writes only to the file appender — no stdout/stderr layer present
+- `tracing-log::LogTracer` bridges downstream `log` crate records into tracing (which goes to file)
+- No code changes needed — all paths are clean
