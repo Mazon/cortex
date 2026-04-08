@@ -58,7 +58,7 @@ fn start_agent(
             let task = match s.tasks.get(&task_id) {
                 Some(t) => t.clone(),
                 None => {
-                    log::warn!("Task {} not found for agent start", task_id);
+                    tracing::warn!("Task {} not found for agent start", task_id);
                     return;
                 }
             };
@@ -82,7 +82,7 @@ fn start_agent(
                     sid
                 }
                 Err(e) => {
-                    log::error!("Failed to create session: {}", e);
+                    tracing::error!("Failed to create session: {}", e);
                     let mut s = state.lock().unwrap();
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                     return;
@@ -109,10 +109,10 @@ fn start_agent(
             .await
         {
             Ok(_) => {
-                log::info!("Prompt sent to agent '{}' for task {}", agent, task_id_clone);
+                tracing::info!("Prompt sent to agent '{}' for task {}", agent, task_id_clone);
             }
             Err(e) => {
-                log::error!("Failed to send prompt: {}", e);
+                tracing::error!("Failed to send prompt: {}", e);
                 let mut s = state.lock().unwrap();
                 s.set_task_error(
                     &task_id_clone,
@@ -136,7 +136,7 @@ pub fn on_agent_completed(
         .map(|t| t.column.clone());
     if let Some(col) = column {
         if let Some(target) = columns_config.auto_progress_for(&col.0) {
-            log::info!(
+            tracing::info!(
                 "Auto-progressing task {} from {} to {}",
                 task_id,
                 col.0,

@@ -1,7 +1,7 @@
 //! Thin wrapper around `opencode_sdk_rs::Opencode`.
 
 use anyhow::{Context, Result};
-use log::{debug, info};
+use tracing::{debug, info};
 use opencode_sdk_rs::resources::app::App;
 use opencode_sdk_rs::resources::event::EventListResponse;
 use opencode_sdk_rs::resources::session::{

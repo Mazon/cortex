@@ -30,7 +30,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
-log = "0.4"
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
+log = "0.4"  # kept for tracing-log bridge (downstream crates use `log`)
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

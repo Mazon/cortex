@@ -1,7 +1,7 @@
 //! Per-project OpenCode server manager.
 
 use anyhow::{Context, Result};
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use std::collections::HashMap;
 use tokio::process::{Child, Command};
 use tokio::time::Duration;

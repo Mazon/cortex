@@ -21,6 +21,31 @@ pub struct CortexConfig {
     pub keybindings: KeybindingConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
+    #[serde(default)]
+    pub log: LogConfig,
+}
+
+// ─── Log Configuration ───
+
+/// Logging configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// Log level: "trace", "debug", "info", "warn", "error".
+    /// Overridden by the `RUST_LOG` environment variable if set.
+    #[serde(default = "default_log_level")]
+    pub level: String,
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+        }
+    }
 }
 
 // ─── Columns Configuration ───

@@ -66,6 +66,9 @@ abort_session = "ctrl+a a"
 [theme]
 sidebar_width = 20
 column_width = 30
+
+[log]
+level = "info"
 "#;
 
 /// Returns a sensible default config.
@@ -76,5 +79,6 @@ pub fn default_config() -> CortexConfig {
         orchestration: OrchestrationRulesConfig::default(),
         keybindings: KeybindingConfig::default(),
         theme: ThemeConfig::default(),
+        log: LogConfig::default(),
     }
 }

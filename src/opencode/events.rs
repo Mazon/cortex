@@ -1,7 +1,7 @@
 //! SSE event loop — subscribe to events, match variants, update state directly.
 
 use futures::StreamExt;
-use log::{debug, warn};
+use tracing::{debug, warn};
 use std::sync::{Arc, Mutex};
 
 use crate::opencode::client::{

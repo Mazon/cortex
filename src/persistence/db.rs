@@ -24,7 +24,7 @@ impl Db {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(MIGRATIONS)?;
 
-        log::info!("Database opened: {:?}", path);
+        tracing::info!("Database opened: {:?}", path);
         Ok(Self { conn })
     }
 

@@ -317,7 +317,7 @@ impl App {
                         .and_then(|t| t.session_id.clone())
                 };
                 if let Some(sid) = session_id {
-                    log::info!("Abort session requested: {}", sid);
+                    tracing::info!("Abort session requested: {}", sid);
                     let mut state = self.state.lock().unwrap();
                     state.set_notification(
                         "Session abort requested".to_string(),

@@ -72,7 +72,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> AppResult<()> {
         counters,
     );
 
-    log::info!(
+    tracing::info!(
         "Restored state: {} projects, {} tasks",
         state.projects.len(),
         state.tasks.len()

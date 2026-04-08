@@ -17,7 +17,7 @@ pub fn default_config_path() -> PathBuf {
         .join("cortex.toml")
 }
 
-fn dirs_or_home() -> PathBuf {
+pub fn dirs_or_home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
@@ -27,7 +27,7 @@ fn dirs_or_home() -> PathBuf {
 /// If the file exists, parse it and deep-merge with defaults for any missing fields.
 pub fn load_config(path: &Path) -> Result<CortexConfig> {
     if !path.exists() {
-        log::info!("Config file not found at {:?}, using defaults", path);
+        tracing::info!("Config file not found at {:?}, using defaults", path);
         return Ok(default_config());
     }
 
@@ -40,7 +40,7 @@ pub fn load_config(path: &Path) -> Result<CortexConfig> {
     // Validate
     validate_config(&user_config)?;
 
-    log::info!("Loaded config from {:?}", path);
+    tracing::info!("Loaded config from {:?}", path);
     Ok(user_config)
 }
 
@@ -56,7 +56,7 @@ pub fn save_config(config: &CortexConfig, path: &Path) -> Result<()> {
     std::fs::write(path, content)
         .with_context(|| format!("Failed to write config file: {:?}", path))?;
 
-    log::info!("Saved config to {:?}", path);
+    tracing::info!("Saved config to {:?}", path);
     Ok(())
 }
 

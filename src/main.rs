@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap::Parser;
+use tracing_subscriber::prelude::*;
 
 use config::types::CortexConfig;
 use persistence::db::Db;
@@ -35,16 +36,7 @@ async fn main() -> Result<()> {
     // Parse CLI args
     let cli = Cli::parse();
 
-    // Initialize logger
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp(None)
-    .init();
-
-    log::info!("Starting cortex2...");
-
-    // Load config
+    // Load config (must happen before logger init so we can read config.log.level)
     let config_path = cli
         .config
         .as_ref()
@@ -58,11 +50,42 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
+    // Initialize tracing with file appender
+    let log_dir = config::dirs_or_home()
+        .join(".local")
+        .join("share")
+        .join("cortex")
+        .join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+
+    let file_appender = tracing_appender::rolling::never(&log_dir, "cortex.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Build filter: config sets default, RUST_LOG env var overrides
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log.level));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_target(false),
+        )
+        .init();
+
+    // Bridge log records from crates using the `log` facade
+    tracing_log::LogTracer::init().ok();
+
+    tracing::debug!("Logging to {}/cortex.log", log_dir.display());
+    tracing::info!("Starting cortex2...");
+
     // Handle --reset flag
     let db_path = persistence::db::default_db_path();
     if cli.reset {
         if db_path.exists() {
-            log::info!("Resetting database: {:?}", db_path);
+            tracing::info!("Resetting database: {:?}", db_path);
             std::fs::remove_file(&db_path)?;
         }
     }
@@ -77,7 +100,7 @@ async fn main() -> Result<()> {
     {
         let mut state = state.lock().unwrap();
         if let Err(e) = persistence::restore_state(&mut state, &db) {
-            log::warn!("Failed to restore state: {}", e);
+            tracing::warn!("Failed to restore state: {}", e);
         }
     }
 
@@ -116,10 +139,10 @@ async fn main() -> Result<()> {
         .await
         {
             Ok(_) => {
-                log::info!("Server started for project: {}", project.name);
+                tracing::info!("Server started for project: {}", project.name);
             }
             Err(e) => {
-                log::warn!(
+                tracing::warn!(
                     "Failed to start server for project {}: {}. Continuing without server.",
                     project.name,
                     e
@@ -135,7 +158,7 @@ async fn main() -> Result<()> {
         let state = state.clone();
         let pid = project_id.clone();
         let handle = tokio::spawn(async move {
-            log::info!("Starting SSE event loop for project {}", pid);
+            tracing::info!("Starting SSE event loop for project {}", pid);
             opencode::events::sse_event_loop(client, state).await;
         });
         sse_handles.push(handle);
@@ -157,16 +180,16 @@ async fn main() -> Result<()> {
             let db = match Db::new(&db_path_for_save) {
                 Ok(db) => db,
                 Err(e) => {
-                    log::error!("Failed to open DB for save: {}", e);
+                    tracing::error!("Failed to open DB for save: {}", e);
                     continue;
                 }
             };
             let state = state_for_save.lock().unwrap();
             if state.take_dirty() {
                 if let Err(e) = persistence::save_state(&state, &db) {
-                    log::error!("Failed to save state: {}", e);
+                    tracing::error!("Failed to save state: {}", e);
                 } else {
-                    log::debug!("State saved (periodic)");
+                    tracing::debug!("State saved (periodic)");
                 }
             }
         }
@@ -177,7 +200,7 @@ async fn main() -> Result<()> {
     let result = app.run().await;
 
     // Graceful shutdown
-    log::info!("Shutting down...");
+    tracing::info!("Shutting down...");
 
     // Cancel persistence task
     persistence_handle.abort();
@@ -188,9 +211,9 @@ async fn main() -> Result<()> {
         let db_path = persistence::db::default_db_path();
         if let Ok(db) = Db::new(&db_path) {
             if let Err(e) = persistence::save_state(&state, &db) {
-                log::error!("Failed to save state on shutdown: {}", e);
+                tracing::error!("Failed to save state on shutdown: {}", e);
             } else {
-                log::info!("State saved on shutdown");
+                tracing::info!("State saved on shutdown");
             }
         }
     }
@@ -201,9 +224,9 @@ async fn main() -> Result<()> {
         let db_path = persistence::db::default_db_path();
         if let Ok(db) = Db::new(&db_path) {
             if let Err(e) = persistence::save_state(&state, &db) {
-                log::error!("Failed to save state on shutdown: {}", e);
+                tracing::error!("Failed to save state on shutdown: {}", e);
             } else {
-                log::info!("State saved on shutdown");
+                tracing::info!("State saved on shutdown");
             }
         }
     }
@@ -215,7 +238,7 @@ async fn main() -> Result<()> {
     app.teardown()?;
 
     result?;
-    log::info!("cortex2 exited cleanly");
+    tracing::info!("cortex2 exited cleanly");
     Ok(())
 }
 
