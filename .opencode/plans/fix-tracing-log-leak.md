@@ -24,10 +24,10 @@ graph TD
 - [x] **W1C:** Rename `_guard` to `_log_flush_guard` with a doc comment about its lifetime; remove the duplicate "Force-save state before exit" block (lines 224–235 in main.rs are an exact copy of lines 211–222)
 
 ### Wave 2 — Fix secondary issues (init order, stderr, pipes, shutdown)
-- [-] **W2A:** Replace `#[tokio::main]` with a manual `tokio::runtime::Builder::new_multi_thread().enable_all().build()?` so that tracing init, log dir creation, and stderr redirect all happen **before** the async runtime is created. Move the runtime creation to just before the first `.await` (the server startup loop). Also move `App::setup_terminal()` to after tracing init but before runtime creation.
-- [-] **W2B:** Redirect stderr to the log file during TUI operation — use `std::fs::File` + `unsafe { libc::dup2() }` on the stderr fd after log dir is confirmed writable, before entering alternate screen. Also install a custom `std::panic::set_hook()` that writes to the log file instead of stderr. Note: add `libc` to `Cargo.toml` as a dependency (or use a portable `std::fs::File` approach via `dup2` from the `libc` crate, gated behind `#[cfg(unix)]`). Fallback for non-unix: just ensure tracing captures panics.
-- [-] **W2C:** Fix child process pipe deadlock in `server.rs` — the `Stdio::piped()` for stdout/stderr creates pipes that are never read, which can deadlock when the pipe buffer fills. Change to `Stdio::null()` for stdout, and for stderr either `Stdio::null()` or spawn a drain task that writes stderr to the log via `tracing::warn!`.
-- [-] **W2D:** Abort SSE handles during shutdown — before `server_manager.stop_all()`, abort all `sse_handles` with `.abort()`, then `await` them (or just abort and drop).
+- [x] **W2A:** Replace `#[tokio::main]` with a manual `tokio::runtime::Builder::new_multi_thread().enable_all().build()?` so that tracing init, log dir creation, and stderr redirect all happen **before** the async runtime is created. Move the runtime creation to just before the first `.await` (the server startup loop). Also move `App::setup_terminal()` to after tracing init but before runtime creation.
+- [x] **W2B:** Redirect stderr to the log file during TUI operation — use `std::fs::File` + `unsafe { libc::dup2() }` on the stderr fd after log dir is confirmed writable, before entering alternate screen. Also install a custom `std::panic::set_hook()` that writes to the log file instead of stderr. Note: add `libc` to `Cargo.toml` as a dependency (or use a portable `std::fs::File` approach via `dup2` from the `libc` crate, gated behind `#[cfg(unix)]`). Fallback for non-unix: just ensure tracing captures panics.
+- [x] **W2C:** Fix child process pipe deadlock in `server.rs` — the `Stdio::piped()` for stdout/stderr creates pipes that are never read, which can deadlock when the pipe buffer fills. Change to `Stdio::null()` for stdout, and for stderr either `Stdio::null()` or spawn a drain task that writes stderr to the log via `tracing::warn!`.
+- [x] **W2D:** Abort SSE handles during shutdown — before `server_manager.stop_all()`, abort all `sse_handles` with `.abort()`, then `await` them (or just abort and drop).
 
 ## Detailed Specifications
 
@@ -257,4 +257,27 @@ tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
 ## Outcomes & Retrospective
 
-_To be completed during execution._
+**Status: ✅ All 7 tasks completed successfully.**
+
+### Commits
+1. `973f1a2` — `fix: fix tracing pipeline — handle errors, rename guard, remove duplicate shutdown` (Wave 1: W1A, W1B, W1C)
+2. `04a1bdf` — `fix: redirect stderr, manual runtime, fix pipe deadlock, abort SSE handles` (Wave 2: W2A, W2B, W2C, W2D)
+
+### Files Modified
+- `src/main.rs` — W1A (error handling), W1B (LogTracer), W1C (guard rename + dedup), W2A (manual runtime), W2B (stderr redirect + panic hook), W2D (SSE abort)
+- `src/opencode/server.rs` — W2C (Stdio::null())
+- `Cargo.toml` — W2B (libc dependency)
+
+### Key Changes
+- `create_dir_all` now fails with context instead of silently swallowing errors
+- `LogTracer::init()` now logs a warning on failure instead of `.ok()`
+- `_log_flush_guard` renamed with doc comment about critical lifetime
+- Duplicate shutdown block removed
+- `#[tokio::main]` replaced with manual runtime builder — tracing init, stderr redirect, and terminal setup all happen synchronously before runtime creation
+- stderr redirected to `~/.local/share/cortex/logs/cortex-stderr.log` via `libc::dup2` (Unix only)
+- Custom panic hook writes to cortex.log instead of stderr
+- Child process stdout/stderr changed from `Stdio::piped()` to `Stdio::null()` to prevent pipe deadlock
+- SSE handles aborted during shutdown before server stop
+
+### Verification
+- `cargo check` passes after both waves (no new warnings)
