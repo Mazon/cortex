@@ -37,3 +37,6 @@ tracing-log = "0.2"
 log = "0.4"  # kept for tracing-log bridge (downstream crates use `log`)
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

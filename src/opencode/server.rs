@@ -87,8 +87,8 @@ impl OpenCodeServer {
             .arg(format!("--port={}", port))
             .env("OPENCODE_CONFIG_CONTENT", config_json)
             .current_dir(working_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .context("Failed to spawn 'opencode serve'. Is it installed?")?;
 

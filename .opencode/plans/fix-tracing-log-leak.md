@@ -19,15 +19,15 @@ graph TD
 ## Progress
 
 ### Wave 1 — Fix the core logging pipeline (root cause)
-- [-] **W1A:** Fix `create_dir_all` — replace `.ok()` with `?`, and verify the log file is writable by writing a test entry immediately after creating the appender
-- [-] **W1B:** Fix `LogTracer::init()` — replace `.ok()` with proper error handling (log a warning if it fails, but don't crash — use `if let Err`)
-- [-] **W1C:** Rename `_guard` to `_log_flush_guard` with a doc comment about its lifetime; remove the duplicate "Force-save state before exit" block (lines 224–235 in main.rs are an exact copy of lines 211–222)
+- [x] **W1A:** Fix `create_dir_all` — replace `.ok()` with `?`, and verify the log file is writable by writing a test entry immediately after creating the appender
+- [x] **W1B:** Fix `LogTracer::init()` — replace `.ok()` with proper error handling (log a warning if it fails, but don't crash — use `if let Err`)
+- [x] **W1C:** Rename `_guard` to `_log_flush_guard` with a doc comment about its lifetime; remove the duplicate "Force-save state before exit" block (lines 224–235 in main.rs are an exact copy of lines 211–222)
 
 ### Wave 2 — Fix secondary issues (init order, stderr, pipes, shutdown)
-- [ ] **W2A:** Replace `#[tokio::main]` with a manual `tokio::runtime::Builder::new_multi_thread().enable_all().build()?` so that tracing init, log dir creation, and stderr redirect all happen **before** the async runtime is created. Move the runtime creation to just before the first `.await` (the server startup loop). Also move `App::setup_terminal()` to after tracing init but before runtime creation.
-- [ ] **W2B:** Redirect stderr to the log file during TUI operation — use `std::fs::File` + `unsafe { libc::dup2() }` on the stderr fd after log dir is confirmed writable, before entering alternate screen. Also install a custom `std::panic::set_hook()` that writes to the log file instead of stderr. Note: add `libc` to `Cargo.toml` as a dependency (or use a portable `std::fs::File` approach via `dup2` from the `libc` crate, gated behind `#[cfg(unix)]`). Fallback for non-unix: just ensure tracing captures panics.
-- [ ] **W2C:** Fix child process pipe deadlock in `server.rs` — the `Stdio::piped()` for stdout/stderr creates pipes that are never read, which can deadlock when the pipe buffer fills. Change to `Stdio::null()` for stdout, and for stderr either `Stdio::null()` or spawn a drain task that writes stderr to the log via `tracing::warn!`.
-- [ ] **W2D:** Abort SSE handles during shutdown — before `server_manager.stop_all()`, abort all `sse_handles` with `.abort()`, then `await` them (or just abort and drop).
+- [-] **W2A:** Replace `#[tokio::main]` with a manual `tokio::runtime::Builder::new_multi_thread().enable_all().build()?` so that tracing init, log dir creation, and stderr redirect all happen **before** the async runtime is created. Move the runtime creation to just before the first `.await` (the server startup loop). Also move `App::setup_terminal()` to after tracing init but before runtime creation.
+- [-] **W2B:** Redirect stderr to the log file during TUI operation — use `std::fs::File` + `unsafe { libc::dup2() }` on the stderr fd after log dir is confirmed writable, before entering alternate screen. Also install a custom `std::panic::set_hook()` that writes to the log file instead of stderr. Note: add `libc` to `Cargo.toml` as a dependency (or use a portable `std::fs::File` approach via `dup2` from the `libc` crate, gated behind `#[cfg(unix)]`). Fallback for non-unix: just ensure tracing captures panics.
+- [-] **W2C:** Fix child process pipe deadlock in `server.rs` — the `Stdio::piped()` for stdout/stderr creates pipes that are never read, which can deadlock when the pipe buffer fills. Change to `Stdio::null()` for stdout, and for stderr either `Stdio::null()` or spawn a drain task that writes stderr to the log via `tracing::warn!`.
+- [-] **W2D:** Abort SSE handles during shutdown — before `server_manager.stop_all()`, abort all `sse_handles` with `.abort()`, then `await` them (or just abort and drop).
 
 ## Detailed Specifications
 

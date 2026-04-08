@@ -394,6 +394,7 @@ dependencies = [
  "clap",
  "crossterm",
  "futures",
+ "libc",
  "log",
  "opencode-sdk-rs",
  "ratatui",
