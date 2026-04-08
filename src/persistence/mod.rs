@@ -15,13 +15,14 @@ pub fn save_state(state: &AppState, db: &Db) -> AppResult<()> {
         db.save_project(project)?;
     }
 
-    // Save all tasks and kanban order
-    for (column_id, task_ids) in &state.kanban.columns {
-        db.save_kanban_order(&KanbanColumn(column_id.clone()), task_ids)?;
-    }
-
+    // Save all tasks (depends on projects — saved above)
     for task in state.tasks.values() {
         db.save_task(task)?;
+    }
+
+    // Save kanban order (depends on tasks — saved above)
+    for (column_id, task_ids) in &state.kanban.columns {
+        db.save_kanban_order(&KanbanColumn(column_id.clone()), task_ids)?;
     }
 
     // Save active project
