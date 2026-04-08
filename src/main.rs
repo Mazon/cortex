@@ -81,6 +81,9 @@ async fn main() -> Result<()> {
     tracing::debug!("Logging to {}/cortex.log", log_dir.display());
     tracing::info!("Starting cortex2...");
 
+    // Enter alternate screen early to hide any residual startup output
+    App::setup_terminal()?;
+
     // Handle --reset flag
     let db_path = persistence::db::default_db_path();
     if cli.reset {

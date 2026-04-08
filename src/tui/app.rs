@@ -16,12 +16,18 @@ pub struct App {
 }
 
 impl App {
-    /// Create a new App instance.
-    pub fn new(state: Arc<Mutex<AppState>>, config: CortexConfig) -> anyhow::Result<Self> {
-        // Setup terminal
+    /// Setup the terminal: enable raw mode and enter alternate screen.
+    ///
+    /// Call this early in `main()` (before server startup) to hide any
+    /// residual log output from the primary terminal buffer.
+    pub fn setup_terminal() -> anyhow::Result<()> {
         crossterm::terminal::enable_raw_mode()?;
         crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+        Ok(())
+    }
 
+    /// Create a new App instance.
+    pub fn new(state: Arc<Mutex<AppState>>, config: CortexConfig) -> anyhow::Result<Self> {
         let backend = CrosstermBackend::new(std::io::stdout());
         let terminal = ratatui::Terminal::new(backend)?;
 
