@@ -323,7 +323,7 @@ impl TaskEditorState {
             description: task.description.clone(),
             focused_field: EditorField::Title,
             cursor_row: 0,
-            cursor_col: task.title.len(),
+            cursor_col: task.title.chars().count(),
             scroll_offset: 0,
             column_id: Some(task.column.0.clone()),
             agent_type: task.agent_type.clone(),
