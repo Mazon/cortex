@@ -216,8 +216,6 @@ impl App {
                     state.kanban.focused_column_index -= 1;
                     if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
                         state.set_focused_column(col_id);
-                        state.ui.focused_column = col_id.to_string();
-                        update_focused_task_id(&mut state, col_id);
                     }
                 }
             }
@@ -228,8 +226,6 @@ impl App {
                     state.kanban.focused_column_index += 1;
                     if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
                         state.set_focused_column(col_id);
-                        state.ui.focused_column = col_id.to_string();
-                        update_focused_task_id(&mut state, col_id);
                     }
                 }
             }
