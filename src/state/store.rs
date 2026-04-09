@@ -161,10 +161,15 @@ impl AppState {
     pub fn set_focused_column(&mut self, column: &str) {
         self.ui.focused_column = column.to_string();
         // Reset focused task index for this column
-        self.kanban
+        let idx = self
+            .kanban
             .focused_task_index
             .entry(column.to_string())
             .or_insert(0);
+        // Sync focused_task_id with the column's focused index
+        if let Some(task_ids) = self.kanban.columns.get(column) {
+            self.ui.focused_task_id = task_ids.get(*idx).cloned();
+        }
     }
 
     pub fn set_focused_task(&mut self, task_id: Option<String>) {
