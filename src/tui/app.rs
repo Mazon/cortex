@@ -133,15 +133,17 @@ impl App {
 
         // Check if we're in task detail view — Escape closes it
         {
-            let state = self.state.lock().unwrap();
-            if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
-                if key.code == KeyCode::Esc {
-                    let mut state = self.state.lock().unwrap();
-                    state.close_task_detail();
-                    return;
-                }
-                // TODO: handle y/n for permission approval here
+            let is_detail_escape = {
+                let state = self.state.lock().unwrap();
+                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail && key.code == KeyCode::Esc
+            };
+            // First lock dropped here
+            if is_detail_escape {
+                let mut state = self.state.lock().unwrap();
+                state.close_task_detail();
+                return;
             }
+            // TODO: handle y/n for permission approval here
         }
 
         use crate::tui::keys::{Action, KeyMatcher};
