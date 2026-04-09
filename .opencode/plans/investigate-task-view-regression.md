@@ -62,10 +62,10 @@ graph TD
 - [x] 1d. Verify `ViewTask` action → `open_task_detail()` → render → Escape → `close_task_detail()` flow works end-to-end
 
 ### Wave 2 — Fix text rendering and selection (Bugs 2 & 3, parallel)
-- [ ] 2a. Replace byte-based truncation in `src/tui/task_card.rs` with Unicode-safe character-width-aware truncation using `.chars()` iterator and `unicode_width` crate (or manual ASCII-aware fallback)
-- [ ] 2b. In `src/state/store.rs` `set_focused_column()`: after setting the index, also update `focused_task_id` by looking up the task at that index in the column
-- [ ] 2c. In `src/state/store.rs` `rebuild_kanban_for_project()`: after rebuilding columns, initialize `focused_task_id` for the default column (first task in first visible column)
-- [ ] 2d. In `src/tui/app.rs` NavLeft/NavRight handlers: call `update_focused_task_id()` after `set_focused_column()` to sync the task ID
+- [x] 2a. Replace byte-based truncation in `src/tui/task_card.rs` with Unicode-safe character-width-aware truncation using `.chars()` iterator and `unicode_width` crate (or manual ASCII-aware fallback)
+- [x] 2b. In `src/state/store.rs` `set_focused_column()`: after setting the index, also update `focused_task_id` by looking up the task at that index in the column
+- [x] 2c. In `src/state/store.rs` `rebuild_kanban_for_project()`: after rebuilding columns, initialize `focused_task_id` for the default column (first task in first visible column)
+- [x] 2d. In `src/tui/app.rs` NavLeft/NavRight handlers: call `update_focused_task_id()` after `set_focused_column()` to sync the task ID
 
 ## Detailed Specifications
 
@@ -182,6 +182,9 @@ fn rebuild_kanban_for_project(&mut self, project_id: &str) {
 - The `task_detail.rs` module (480 lines of well-structured rendering code) was never connected to the build — it's completely orphaned
 - The `status_line` variable in `task_card.rs` (lines 50-57) is dead code — it's built but never used (the actual status rendering at lines 77-83 uses separate spans)
 - The `render()` function in `mod.rs` (lines 21-39) duplicates the dispatch logic from `app.rs` run loop (lines 87-101) — the `render()` function appears unused (app.rs calls render functions directly)
+- Worktree creation failed for all Wave 2 tasks (connectivity issues) — changes were committed directly to main
+- Task 2c fix was already bundled into a prior commit by a parallel subagent
+- Task 2d fix was already bundled into the same prior commit
 
 ## Decision Log
 - **Assumed**: The `render()` function in `mod.rs` is dead code (not called from anywhere). The app.rs run loop does its own dispatch. We'll leave it for now but note it as cleanup.

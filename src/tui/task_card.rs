@@ -78,13 +78,8 @@ pub fn render_task_card(f: &mut Frame, area: Rect, task: &CortexTask, is_selecte
 
         // Line 2 (status) — only if we have enough room
         if inner.height >= 2 {
-            let status_para = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("{} ", status_icon),
-                    Style::default().fg(status_color),
-                ),
-                Span::styled(status_text, Style::default().fg(status_color)),
-            ]));
+            let status_para =
+                Paragraph::new(Span::styled(status_line, Style::default().fg(status_color)));
             f.render_widget(
                 status_para,
                 Rect {

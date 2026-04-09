@@ -56,8 +56,13 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
 
         // Truncate name to fit
         let max_name_len = (inner.width as usize).saturating_sub(4); // icon + space + padding
-        let display_name = if project.name.len() > max_name_len {
-            format!("{}...", &project.name[..max_name_len.saturating_sub(3)])
+        let display_name = if project.name.chars().count() > max_name_len {
+            let truncated: String = project
+                .name
+                .chars()
+                .take(max_name_len.saturating_sub(3))
+                .collect();
+            format!("{}...", truncated)
         } else {
             project.name.clone()
         };
