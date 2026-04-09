@@ -129,6 +129,21 @@ impl App {
 
     /// Handle key events in Normal mode.
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        // Check if we're in task detail view — Escape closes it
+        {
+            let state = self.state.lock().unwrap();
+            if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
+                if key.code == KeyCode::Esc {
+                    let mut state = self.state.lock().unwrap();
+                    state.close_task_detail();
+                    return;
+                }
+                // TODO: handle y/n for permission approval here
+            }
+        }
+
         use crate::tui::keys::{Action, KeyMatcher};
 
         let key_matcher = KeyMatcher::from_config(&self.config.keybindings);
@@ -202,6 +217,7 @@ impl App {
                     if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
                         state.set_focused_column(col_id);
                         state.ui.focused_column = col_id.to_string();
+                        update_focused_task_id(&mut state, col_id);
                     }
                 }
             }
@@ -213,6 +229,7 @@ impl App {
                     if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
                         state.set_focused_column(col_id);
                         state.ui.focused_column = col_id.to_string();
+                        update_focused_task_id(&mut state, col_id);
                     }
                 }
             }

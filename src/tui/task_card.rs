@@ -30,8 +30,12 @@ pub fn render_task_card(f: &mut Frame, area: Rect, task: &CortexTask, is_selecte
     // Line 1: #<number> <title> (truncated)
     let max_title_len = inner.width as usize;
     let title_line = format!("#{} {}", task.number, task.title);
-    let truncated_title = if title_line.len() > max_title_len {
-        format!("{}...", &title_line[..max_title_len.saturating_sub(3)])
+    let truncated_title = if title_line.chars().count() > max_title_len {
+        let truncated: String = title_line
+            .chars()
+            .take(max_title_len.saturating_sub(3))
+            .collect();
+        format!("{}...", truncated)
     } else {
         title_line
     };

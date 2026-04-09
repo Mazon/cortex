@@ -8,9 +8,11 @@ pub mod keys;
 pub mod sidebar;
 pub mod status_bar;
 pub mod task_card;
+pub mod task_detail;
 pub mod task_editor;
 
 use ratatui::prelude::*;
+use crate::state::types::FocusedPanel;
 
 /// Type alias for the terminal backend.
 pub type CrosstermBackend = ratatui::backend::CrosstermBackend<std::io::Stdout>;
@@ -74,6 +76,17 @@ pub fn render_normal(
         .split(h_layout[1]);
 
     sidebar::render_sidebar(f, sidebar_v[0], state, config);
-    kanban::render_kanban(f, kanban_v[0], state, config);
+    match state.ui.focused_panel {
+        FocusedPanel::Kanban => {
+            kanban::render_kanban(f, kanban_v[0], state, config);
+        }
+        FocusedPanel::TaskDetail => {
+            if let Some(ref task_id) = state.ui.viewing_task_id {
+                task_detail::render_task_detail(f, kanban_v[0], state, task_id);
+            } else {
+                kanban::render_kanban(f, kanban_v[0], state, config);
+            }
+        }
+    }
     status_bar::render_status_bar(f, kanban_v[1], state);
 }

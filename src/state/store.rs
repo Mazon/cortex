@@ -491,6 +491,18 @@ impl AppState {
         // Reset focused column to first visible
         self.kanban.focused_column_index = 0;
         self.kanban.focused_task_index.clear();
+
+        // Initialize focused_task_id to first task in first column
+        let first_col = self.kanban.columns.keys().next().cloned();
+        if let Some(ref col) = first_col {
+            self.ui.focused_column = col.clone();
+            self.kanban.focused_task_index.insert(col.clone(), 0);
+            self.ui.focused_task_id = self
+                .kanban
+                .columns
+                .get(col)
+                .and_then(|ids| ids.first().cloned());
+        }
     }
 
     /// Get tasks for the active project in a given column.
