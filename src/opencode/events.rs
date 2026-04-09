@@ -127,8 +127,9 @@ fn process_event(event: &opencode_sdk_rs::resources::event::EventListResponse, s
                     .unwrap_or("?")
                     .to_string();
                 state.update_project_status(&task_id);
+                let preview: String = question.chars().take(50).collect();
                 state.set_notification(
-                    format!("Question pending: {}", &question[..question.len().min(50)]),
+                    format!("Question pending: {}", preview),
                     crate::state::types::NotificationVariant::Warning,
                     10000,
                 );
