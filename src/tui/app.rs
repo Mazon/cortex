@@ -413,7 +413,7 @@ impl App {
 fn update_focused_task_id(state: &mut AppState, col_id: &str) {
     let idx = state.kanban.focused_task_index.get(col_id).copied().unwrap_or(0);
     if let Some(task_ids) = state.kanban.columns.get(col_id) {
-        let task_id = task_ids.get(idx).cloned();
-        state.ui.focused_task_id = task_id;
+        let clamped = idx.min(task_ids.len().saturating_sub(1));
+        state.ui.focused_task_id = task_ids.get(clamped).cloned();
     }
 }

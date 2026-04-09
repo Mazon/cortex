@@ -98,6 +98,9 @@ impl AppState {
             .or_default()
             .push(task_id.to_string());
 
+        // Clamp focused_task_index for source column (may be stale after removal)
+        self.clamp_focused_task_index(&from_column.0);
+
         self.mark_dirty();
         true
     }
@@ -158,6 +161,28 @@ impl AppState {
 
     // ─── Navigation ──────────────────────────────────────────────────────
 
+    pub fn clamp_focused_task_index(&mut self, col_id: &str) {
+        let idx = self
+            .kanban
+            .focused_task_index
+            .get(col_id)
+            .copied()
+            .unwrap_or(0);
+        if let Some(tasks) = self.kanban.columns.get(col_id) {
+            let clamped = if tasks.is_empty() {
+                0
+            } else {
+                idx.min(tasks.len() - 1)
+            };
+            self.kanban
+                .focused_task_index
+                .insert(col_id.to_string(), clamped);
+            self.ui.focused_task_id = tasks.get(clamped).cloned();
+        } else {
+            self.ui.focused_task_id = None;
+        }
+    }
+
     pub fn set_focused_column(&mut self, column: &str) {
         self.ui.focused_column = column.to_string();
         // Reset focused task index for this column
@@ -166,9 +191,10 @@ impl AppState {
             .focused_task_index
             .entry(column.to_string())
             .or_insert(0);
-        // Sync focused_task_id with the column's focused index
+        // Sync focused_task_id with the column's focused index (clamped)
         if let Some(task_ids) = self.kanban.columns.get(column) {
-            self.ui.focused_task_id = task_ids.get(*idx).cloned();
+            let clamped = (*idx).min(task_ids.len().saturating_sub(1));
+            self.ui.focused_task_id = task_ids.get(clamped).cloned();
         }
     }
 
