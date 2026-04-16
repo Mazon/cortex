@@ -49,6 +49,44 @@ impl App {
     pub async fn run(&mut self) -> anyhow::Result<()> {
         let tick_rate = Duration::from_millis(100);
 
+        // Set up graceful shutdown via a background signal-handler task.
+        // Listens for SIGINT (Ctrl+C) and SIGTERM, then notifies the event
+        // loop so `should_quit` is set and the existing shutdown sequence in
+        // main.rs runs cleanly (save state, stop servers, teardown terminal)
+        // instead of leaving the terminal in raw mode / alternate screen.
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                let mut sigterm = match tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("Failed to register SIGTERM handler: {}", e);
+                        let _ = tokio::signal::ctrl_c().await;
+                        tracing::info!("Received SIGINT — shutting down gracefully");
+                        let _ = shutdown_tx.send(()).await;
+                        return;
+                    }
+                };
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("Received SIGINT — shutting down gracefully");
+                    }
+                    _ = sigterm.recv() => {
+                        tracing::info!("Received SIGTERM — shutting down gracefully");
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+                tracing::info!("Received SIGINT — shutting down gracefully");
+            }
+            let _ = shutdown_tx.send(()).await;
+        });
+
         loop {
             if self.should_quit {
                 break;
@@ -71,6 +109,10 @@ impl App {
                         }
                         _ => {} // Timeout or error, just re-render
                     }
+                }
+                // Graceful shutdown on SIGINT / SIGTERM (from signal handler task).
+                _ = shutdown_rx.recv() => {
+                    self.should_quit = true;
                 }
             }
 
