@@ -385,6 +385,38 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
         .scroll((scroll_offset as u16, 0))
         .wrap(Wrap { trim: false });
     f.render_widget(para, inner);
+
+    // ── Scroll indicator ────────────────────────────────────────────
+    // Show a compact "▼ X-Y/Z" indicator at the bottom-right of the
+    // streaming area when content overflows the visible height.
+    if total_lines > visible_height {
+        let first_visible = scroll_offset + 1;
+        let last_visible = (scroll_offset + visible_height).min(total_lines);
+
+        let at_bottom = scroll_offset + visible_height >= total_lines;
+        let scrollbar_char = if at_bottom { "▼" } else { "║" };
+
+        let full_indicator = format!("{} {}-{}", scrollbar_char, first_visible, last_visible);
+        let total_text = format!("/{}", total_lines);
+        let indicator_width = (full_indicator.len() + total_text.len()) as u16;
+
+        if indicator_width <= inner.width {
+            // Render the indicator at the bottom-right of the streaming area
+            let x = inner.x + inner.width - indicator_width;
+            let y = inner.y + inner.height - 1;
+            let area = Rect::new(x, y, indicator_width, 1);
+            let indicator = Paragraph::new(Line::from(vec![
+                Span::styled(full_indicator, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    total_text,
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                ),
+            ]));
+            f.render_widget(indicator, area);
+        }
+    }
 }
 
 /// Render pending permissions and questions.
