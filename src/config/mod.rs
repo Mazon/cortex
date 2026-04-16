@@ -45,12 +45,17 @@ pub fn xdg_data_home() -> PathBuf {
         })
 }
 
-/// Load config from a TOML file. If the file doesn't exist, return defaults.
+/// Load config from a TOML file. If the file doesn't exist, generate a default
+/// config file at the path and return the defaults. This lets users discover and
+/// customize settings without needing to consult documentation.
 /// If the file exists, parse it and deep-merge with defaults for any missing fields.
 pub fn load_config(path: &Path) -> Result<CortexConfig> {
     if !path.exists() {
-        tracing::info!("Config file not found at {:?}, using defaults", path);
-        return Ok(default_config());
+        let config = default_config();
+        save_config(&config, path)
+            .with_context(|| format!("Failed to generate default config at {:?}", path))?;
+        tracing::info!("Generated default config at {:?}", path);
+        return Ok(config);
     }
 
     let content = std::fs::read_to_string(path)
@@ -125,7 +130,6 @@ mod tests {
         assert_eq!(config.columns.definitions[0].id, "todo");
         assert_eq!(config.opencode.port, 11643);
     }
-
 
     #[test]
     fn test_validate_duplicate_column() {

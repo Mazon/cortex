@@ -266,8 +266,6 @@ pub struct OpenCodeMcpServerConfig {
     pub env: Option<HashMap<String, String>>,
 }
 
-
-
 // ─── Keybinding Configuration ───
 
 /// Keybinding definitions. Each value is a comma-separated list of key combos.
