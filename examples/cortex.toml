@@ -1,0 +1,226 @@
+# =============================================================================
+# Cortex Example Configuration
+# =============================================================================
+#
+# Copy this file to your config directory to customize Cortex.
+# Default location: $XDG_CONFIG_HOME/cortex/cortex.toml
+#   (usually ~/.config/cortex/cortex.toml)
+#
+# All fields shown below are OPTIONAL. If omitted, Cortex uses the default
+# values indicated in the comments. You only need to specify the fields you
+# want to change.
+#
+# =============================================================================
+
+# ─── OpenCode Server ────────────────────────────────────────────────────────
+# Connection settings for the OpenCode agent server.
+
+[opencode]
+
+# Hostname or IP address of the OpenCode server.
+# Default: "127.0.0.1"
+# hostname = "127.0.0.1"
+
+# Port number for the OpenCode server.
+# Default: 11643
+# port = 11643
+
+# HTTP request timeout in seconds for API calls.
+# Default: 600 (10 minutes)
+# request_timeout_secs = 600
+
+# ─── Model Configuration ───────────────────────────────────────────────────
+# Default LLM model used by agents unless overridden per-agent.
+
+[opencode.model]
+
+# Model identifier passed to the provider (e.g. "glm-5-turbo", "gpt-4o").
+# Default: "glm-5-turbo"
+# id = "glm-5-turbo"
+
+# Optional provider name. When set, overrides the provider selection.
+# provider = "openai"
+
+# Environment variable name containing the API key.
+# Cortex reads this env var at startup and passes the key to the provider.
+# api_key_env = "OPENAI_API_KEY"
+
+
+# ─── Agent Definitions ─────────────────────────────────────────────────────
+# Named agent configurations. Each [[opencode.agents]] section defines an agent
+# that can be assigned to kanban columns or invoked directly.
+#
+# Key:
+#   - model:        Override the default model for this agent.
+#   - instructions: System prompt / instructions sent to the agent.
+#   - tools:        List of allowed tools (e.g. ["read", "bash", "write"]).
+#   - max_turns:    Maximum number of tool-call turns before the agent stops.
+#   - disable:      Set to true to disable this agent.
+#   - permission:   Tool-specific permission overrides (map of tool -> rule).
+
+# Example: A planning agent with a custom system prompt
+# [opencode.agents.planning]
+# model = "glm-5-turbo"
+# instructions = "You are a planning assistant. Break tasks into subtasks."
+# tools = ["read", "glob", "grep"]
+# max_turns = 20
+
+# Example: A coding agent with write access
+# [opencode.agents.do]
+# model = "glm-5-turbo"
+# instructions = "You are a coding assistant. Implement the requested changes."
+# tools = ["read", "write", "bash", "glob", "grep"]
+# max_turns = 50
+
+# Example: A reviewer agent
+# [opencode.agents.reviewer-alpha]
+# model = "glm-5-turbo"
+# instructions = "Review the code changes and provide feedback."
+# tools = ["read", "glob", "grep"]
+# max_turns = 30
+
+
+# ─── MCP Server Definitions ────────────────────────────────────────────────
+# Model Context Protocol (MCP) servers provide additional tools to agents.
+# Each section defines a command to launch and its configuration.
+
+# Example: A filesystem MCP server
+# [opencode.mcp_servers.filesystem]
+# command = "npx"
+# args = ["-y", "@anthropic/mcp-filesystem", "/path/to/project"]
+# env = {}
+
+# Example: A custom tool server
+# [opencode.mcp_servers.my-tools]
+# command = "/usr/local/bin/my-mcp-server"
+# args = ["--verbose"]
+# env = { API_KEY = "secret-key" }
+
+
+# ─── Kanban Columns ─────────────────────────────────────────────────────────
+# Define the columns on your kanban board. The order of definitions determines
+# the left-to-right layout on screen.
+#
+# Each column has:
+#   - id:               Unique identifier (lowercase, no spaces).
+#   - display_name:     Human-readable name shown in the board header.
+#   - visible:          Whether the column appears on the board (default: true).
+#   - agent:            Agent name from [opencode.agents] to invoke when a task
+#                       enters this column. Set to null to skip agent invocation.
+#   - auto_progress_to: Column ID to automatically move the task to when the
+#                       assigned agent completes its session.
+
+[columns]
+
+[[columns.definitions]]
+id = "todo"
+display_name = "Todo"
+visible = true
+# agent = null
+# auto_progress_to = null
+
+[[columns.definitions]]
+id = "planning"
+display_name = "Plan"
+visible = true
+agent = "planning"
+auto_progress_to = "running"
+
+[[columns.definitions]]
+id = "running"
+display_name = "Run"
+visible = true
+agent = "do"
+# auto_progress_to = null
+
+[[columns.definitions]]
+id = "review"
+display_name = "Review"
+visible = true
+agent = "reviewer-alpha"
+# auto_progress_to = null
+
+[[columns.definitions]]
+id = "done"
+display_name = "Done"
+visible = false
+# agent = null
+# auto_progress_to = null
+
+
+# ─── Keybindings ────────────────────────────────────────────────────────────
+# Override default keyboard shortcuts. Each value accepts a comma-separated
+# list of key combos; the first matching combo triggers the action.
+#
+# Key combo syntax:
+#   - Letters:       "a", "b", "x"
+#   - Special keys:  "enter", "escape", "space", "tab", "backspace", "delete"
+#   - Modifiers:     "ctrl+a", "shift+m", "ctrl+shift+s"
+#   - Arrow keys:    "left", "right", "up", "down"
+
+[keybindings]
+
+# Leader key prefix (used for multi-key combos like "ctrl+a a").
+# Default: "ctrl+a"
+# leader = "ctrl+a"
+
+# Navigation
+# kanban_left = "h, left"
+# kanban_right = "l, right"
+# kanban_up = "k, up"
+# kanban_down = "j, down"
+
+# Task actions
+# kanban_move_forward = "m"            # Move task to next column
+# kanban_move_backward = "shift+m"     # Move task to previous column
+# todo_new = "n"                       # Create a new task
+# todo_edit = "e"                      # Edit selected task title
+# task_delete = "x"                    # Delete selected task
+# task_view = "v"                      # Open task detail view
+
+# Project switching
+# prev_project = "ctrl+k"              # Switch to previous project
+# next_project = "ctrl+j"              # Switch to next project
+# new_project = "ctrl+n"               # Create a new project
+
+# Session
+# abort_session = "ctrl+a a"           # Abort the active agent session
+
+# Other
+# help_toggle = "?"                    # Toggle help overlay
+# quit = "ctrl+q"                      # Quit the application
+
+
+# ─── Theme / Appearance ─────────────────────────────────────────────────────
+# Control the visual layout and colors of the TUI.
+
+[theme]
+
+# Width of the sidebar panel (in character cells).
+# Default: 20
+# sidebar_width = 20
+
+# Minimum width of each kanban column (in character cells).
+# Default: 30
+# column_width = 30
+
+# Status indicator colors (hex color codes without the '#' prefix is also
+# accepted, but '#' prefix is required here for clarity).
+# These colors are used for the task status indicator dots/badges.
+#
+# status_working  = "#2196F3"   # Blue  — agent is actively working
+# status_done     = "#4CAF50"   # Green — agent completed successfully
+# status_question = "#FF9800"   # Orange — agent is waiting for user input
+# status_error    = "#F44336"   # Red   — agent encountered an error
+# status_hung     = "#FF5722"   # Deep orange — agent appears stuck/unresponsive
+
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+# Control application logging verbosity.
+
+[log]
+
+# Log level. One of: "trace", "debug", "info", "warn", "error".
+# Overridden by the RUST_LOG environment variable if set.
+# Default: "info"
+# level = "info"

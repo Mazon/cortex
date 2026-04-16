@@ -97,7 +97,26 @@ fn main() -> Result<()> {
         // stderr_log handle can be dropped — dup2 duplicates the fd
     }
 
-    // Install custom panic hook that writes to the log file instead of stderr
+    // On non-Unix platforms (e.g. Windows), stderr cannot be redirected via dup2.
+    // Create the stderr log file so it exists, and rely on the panic hook below
+    // to capture panic output to both cortex.log and cortex-stderr.log.
+    #[cfg(not(unix))]
+    {
+        let log_file_path = log_dir.join("cortex-stderr.log");
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file_path);
+        tracing::debug!(
+            "stderr redirect not supported on this platform; \
+             panic output will be written to cortex.log and cortex-stderr.log via panic hook"
+        );
+    }
+
+    // Install custom panic hook that writes to the log file instead of stderr.
+    // On Unix, stderr is already redirected to cortex-stderr.log, so the default
+    // panic output also lands there. On non-Unix, we explicitly write to both
+    // cortex.log and cortex-stderr.log since stderr redirect is unavailable.
     let panic_log_dir = log_dir.clone();
     std::panic::set_hook(Box::new(move |info| {
         let msg = format!("PANIC: {:?}", info);
@@ -105,6 +124,14 @@ fn main() -> Result<()> {
         if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_file) {
             use std::io::Write;
             let _ = writeln!(f, "{}", msg);
+        }
+        #[cfg(not(unix))]
+        {
+            let stderr_log = panic_log_dir.join("cortex-stderr.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&stderr_log) {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", msg);
+            }
         }
     }));
 
