@@ -345,7 +345,33 @@ pub fn extract_session_id(event: &EventListResponse) -> Option<String> {
     }
 }
 
-/// Tools that are safe to auto-approve.
+/// Tools that are safe to auto-approve (read-only operations only).
+/// NEVER include "bash", "write", or other mutating tools here —
+/// arbitrary commands and file modifications must require explicit user approval.
 pub fn is_safe_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "read" | "write" | "glob" | "grep" | "list" | "bash")
+    matches!(tool_name, "read" | "glob" | "grep" | "list")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_tools() {
+        assert!(is_safe_tool("read"));
+        assert!(is_safe_tool("glob"));
+        assert!(is_safe_tool("grep"));
+        assert!(is_safe_tool("list"));
+    }
+
+    #[test]
+    fn unsafe_tools() {
+        assert!(!is_safe_tool("write"));
+        assert!(!is_safe_tool("bash"));
+        assert!(!is_safe_tool("sh"));
+        assert!(!is_safe_tool("exec"));
+        assert!(!is_safe_tool("python"));
+        assert!(!is_safe_tool(""));
+        assert!(!is_safe_tool("unknown"));
+    }
 }
