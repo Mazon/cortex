@@ -1,1 +1,11 @@
 /target
+debug.log
+.opencode/
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+cortex.log
+cortex-stderr.log
