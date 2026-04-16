@@ -87,11 +87,30 @@ pub fn save_config(config: &CortexConfig, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Maximum allowed length for column IDs. Very long IDs can cause rendering issues
+/// in the TUI and are almost certainly a user mistake.
+const MAX_COLUMN_ID_LENGTH: usize = 64;
+
 /// Basic config validation.
 fn validate_config(config: &CortexConfig) -> Result<()> {
-    // Validate that column IDs are unique
+    // Validate that column definitions are not empty
+    if config.columns.definitions.is_empty() {
+        anyhow::bail!("columns.definitions must not be empty");
+    }
+
+    // Validate that column IDs are unique and not excessively long
     let mut seen = std::collections::HashSet::new();
     for col in &config.columns.definitions {
+        if col.id.is_empty() {
+            anyhow::bail!("Column ID must not be empty");
+        }
+        if col.id.len() > MAX_COLUMN_ID_LENGTH {
+            anyhow::bail!(
+                "Column ID '{}' exceeds maximum length of {} characters",
+                col.id,
+                MAX_COLUMN_ID_LENGTH
+            );
+        }
         if !seen.insert(&col.id) {
             anyhow::bail!("Duplicate column ID: {}", col.id);
         }
@@ -111,7 +130,7 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
         }
     }
 
-    // Validate port range
+    // Validate port range (port is u16, so max value is 65535; reject 0 as invalid)
     if config.opencode.port == 0 {
         anyhow::bail!("opencode.port must be > 0");
     }
@@ -122,6 +141,26 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use types::{ColumnConfig, CortexConfig, OpenCodeConfig};
+
+    /// Helper to build a minimal valid config with one column.
+    fn minimal_config() -> CortexConfig {
+        CortexConfig {
+            opencode: OpenCodeConfig::default(),
+            columns: types::ColumnsConfig {
+                definitions: vec![ColumnConfig {
+                    id: "todo".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                }],
+            },
+            keybindings: types::KeybindingConfig::default(),
+            theme: types::ThemeConfig::default(),
+            log: types::LogConfig::default(),
+        }
+    }
 
     #[test]
     fn test_default_config() {
@@ -136,13 +175,190 @@ mod tests {
         let mut config = default_config();
         let dup = config.columns.definitions[0].clone();
         config.columns.definitions.push(dup);
-        assert!(validate_config(&config).is_err());
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate column ID: todo"), "got: {}", msg);
     }
 
     #[test]
     fn test_validate_bad_auto_progress() {
         let mut config = default_config();
         config.columns.definitions[0].auto_progress_to = Some("nonexistent".to_string());
-        assert!(validate_config(&config).is_err());
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("non-existent column"), "got: {}", msg);
+    }
+
+    // ─── Empty column definitions ───
+
+    #[test]
+    fn test_validate_empty_column_definitions() {
+        let mut config = minimal_config();
+        config.columns.definitions.clear();
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must not be empty"), "got: {}", msg);
+    }
+
+    // ─── Empty column ID ───
+
+    #[test]
+    fn test_validate_empty_column_id() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = String::new();
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must not be empty"), "got: {}", msg);
+    }
+
+    // ─── Very long column IDs ───
+
+    #[test]
+    fn test_validate_very_long_column_id() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = "a".repeat(65);
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("exceeds maximum length"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_column_id_at_max_length() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = "a".repeat(MAX_COLUMN_ID_LENGTH);
+        // Exactly at the boundary should pass
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_column_id_just_over_max_length() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = "a".repeat(MAX_COLUMN_ID_LENGTH + 1);
+        let result = validate_config(&config);
+        assert!(result.is_err());
+    }
+
+    // ─── Port validation ───
+
+    #[test]
+    fn test_validate_port_zero() {
+        let mut config = minimal_config();
+        config.opencode.port = 0;
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("port must be > 0"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_port_max_value() {
+        let mut config = minimal_config();
+        config.opencode.port = 65535;
+        // Max u16 port should be valid
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_port_one() {
+        let mut config = minimal_config();
+        config.opencode.port = 1;
+        // Port 1 is the minimum valid port
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ─── Duplicate column IDs (extended) ───
+
+    #[test]
+    fn test_validate_multiple_duplicate_columns() {
+        let mut config = minimal_config();
+        config.columns.definitions.push(ColumnConfig {
+            id: "todo".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: None,
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "todo".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: None,
+        });
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        // Should report the first duplicate found
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Duplicate column ID"), "got: {}", msg);
+    }
+
+    // ─── Auto-progress validation (extended) ───
+
+    #[test]
+    fn test_validate_auto_progress_self_reference() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].auto_progress_to = Some("todo".to_string());
+        // Self-reference should be valid — the target column does exist
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_auto_progress_to_valid_column() {
+        let mut config = minimal_config();
+        config.columns.definitions.push(ColumnConfig {
+            id: "done".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: None,
+        });
+        config.columns.definitions[0].auto_progress_to = Some("done".to_string());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ─── Valid configs pass ───
+
+    #[test]
+    fn test_validate_default_config_passes() {
+        let config = default_config();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_minimal_config_passes() {
+        let config = minimal_config();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ─── Column ID edge cases ───
+
+    #[test]
+    fn test_validate_column_id_with_whitespace() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = "  ".to_string();
+        // Whitespace-only IDs are technically not empty strings, so they pass validation.
+        // This test documents the current behavior — trimming could be added later.
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_column_id_with_special_characters() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].id = "my-column_123".to_string();
+        // IDs with hyphens and underscores should be valid
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_display_name_allowed() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].display_name = Some(String::new());
+        // Empty display_name should be fine — it's cosmetic
+        assert!(validate_config(&config).is_ok());
     }
 }
