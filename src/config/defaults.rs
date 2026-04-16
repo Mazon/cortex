@@ -76,7 +76,6 @@ pub fn default_config() -> CortexConfig {
     CortexConfig {
         opencode: OpenCodeConfig::default(),
         columns: ColumnsConfig::default(),
-        orchestration: OrchestrationRulesConfig::default(),
         keybindings: KeybindingConfig::default(),
         theme: ThemeConfig::default(),
         log: LogConfig::default(),

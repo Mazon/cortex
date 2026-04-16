@@ -16,8 +16,6 @@ pub struct CortexConfig {
     #[serde(default)]
     pub columns: ColumnsConfig,
     #[serde(default)]
-    pub orchestration: OrchestrationRulesConfig,
-    #[serde(default)]
     pub keybindings: KeybindingConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
@@ -268,40 +266,7 @@ pub struct OpenCodeMcpServerConfig {
     pub env: Option<HashMap<String, String>>,
 }
 
-// ─── Orchestration Configuration ───
 
-/// Rules for automatic task progression and workflow automation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrchestrationRulesConfig {
-    /// Auto-progression: maps column name → target column name.
-    #[serde(default)]
-    pub ifdone: HashMap<String, String>,
-    /// Auto-start agents when tasks enter columns.
-    #[serde(default)]
-    pub auto_start: HashMap<String, bool>,
-    /// Notify when a column becomes empty.
-    #[serde(default)]
-    pub notify_column_empty: Vec<String>,
-}
-
-impl Default for OrchestrationRulesConfig {
-    fn default() -> Self {
-        let mut auto_start = HashMap::new();
-        auto_start.insert("planning".to_string(), true);
-        auto_start.insert("running".to_string(), true);
-        auto_start.insert("review".to_string(), true);
-
-        Self {
-            ifdone: HashMap::new(),
-            auto_start,
-            notify_column_empty: vec![
-                "planning".to_string(),
-                "running".to_string(),
-                "review".to_string(),
-            ],
-        }
-    }
-}
 
 // ─── Keybinding Configuration ───
 
