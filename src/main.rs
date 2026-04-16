@@ -52,9 +52,7 @@ fn main() -> Result<()> {
     }
 
     // Initialize tracing with file appender
-    let log_dir = config::dirs_or_home()
-        .join(".local")
-        .join("share")
+    let log_dir = config::xdg_data_home()
         .join("cortex")
         .join("logs");
     std::fs::create_dir_all(&log_dir)
