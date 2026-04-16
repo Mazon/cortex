@@ -577,11 +577,7 @@ impl AppState {
 
     /// Get visible column IDs for the current kanban view.
     pub fn get_visible_column_ids(&self, columns_config: &ColumnsConfig) -> Vec<String> {
-        columns_config
-            .visible_column_ids()
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        columns_config.visible_column_ids().to_vec()
     }
 }
 
@@ -903,7 +899,7 @@ mod tests {
         // Set title and description via editor
         if let Some(editor) = state.get_task_editor_mut() {
             editor.title = "New Task".to_string();
-            editor.description = "Some desc".to_string();
+            editor.set_description("Some desc");
         }
 
         let result = state.save_task_editor();

@@ -78,11 +78,15 @@ pub struct ColumnsConfig {
     /// Ordered list of column definitions. Order determines board layout.
     #[serde(default)]
     pub definitions: Vec<ColumnConfig>,
+    /// Pre-computed list of visible column IDs. Populated by `finalize()`.
+    /// Skipped during serialization since it's derived from `definitions`.
+    #[serde(skip, default = "Vec::new")]
+    pub(crate) visible_ids: Vec<String>,
 }
 
 impl Default for ColumnsConfig {
     fn default() -> Self {
-        Self {
+        let mut config = Self {
             definitions: vec![
                 ColumnConfig {
                     id: "todo".to_string(),
@@ -120,7 +124,10 @@ impl Default for ColumnsConfig {
                     auto_progress_to: None,
                 },
             ],
-        }
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        config
     }
 }
 
@@ -150,13 +157,20 @@ impl ColumnsConfig {
             .and_then(|c| c.auto_progress_to.clone())
     }
 
-    /// Returns the visible columns in definition order.
-    pub fn visible_column_ids(&self) -> Vec<&str> {
-        self.definitions
+    /// Populates the cached visible column IDs from the current definitions.
+    /// Must be called after deserialization or any change to `definitions`.
+    pub fn finalize(&mut self) {
+        self.visible_ids = self
+            .definitions
             .iter()
             .filter(|c| c.visible)
-            .map(|c| c.id.as_str())
-            .collect()
+            .map(|c| c.id.clone())
+            .collect();
+    }
+
+    /// Returns the visible columns in definition order (cached, zero-allocation).
+    pub fn visible_column_ids(&self) -> &[String] {
+        &self.visible_ids
     }
 
     /// Returns all column IDs in definition order.

@@ -35,7 +35,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
         let task_count = state
             .kanban
             .columns
-            .get(*col_id)
+            .get(col_id.as_str())
             .map(|v| v.len())
             .unwrap_or(0);
         let header_text = format!(" {} ({}) ", display_name, task_count);
@@ -81,12 +81,12 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
         f.render_widget(task_block, v_layout[1]);
 
         // Render task cards
-        if let Some(task_ids) = state.kanban.columns.get(*col_id) {
+        if let Some(task_ids) = state.kanban.columns.get(col_id.as_str()) {
             let mut card_y = inner.y;
             let focused_idx = state
                 .kanban
                 .focused_task_index
-                .get(*col_id)
+                .get(col_id.as_str())
                 .copied()
                 .unwrap_or(0);
 
