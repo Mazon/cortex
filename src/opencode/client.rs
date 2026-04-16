@@ -355,6 +355,10 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
+    use opencode_sdk_rs::resources::event::EventListResponse;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn safe_tools() {
@@ -373,5 +377,363 @@ mod tests {
         assert!(!is_safe_tool("python"));
         assert!(!is_safe_tool(""));
         assert!(!is_safe_tool("unknown"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Full-pipeline SSE stream tests
+    // -----------------------------------------------------------------------
+    //
+    // These tests spin up a minimal HTTP/1.1 server on localhost, serve SSE
+    // payloads through it, and consume the resulting `SseStream<EventListResponse>`
+    // via the real `OpenCodeClient`.  They exercise the complete pipeline:
+    //
+    //   HTTP response → hpx byte stream → SseStream → SSE decode → JSON parse
+
+    /// Spin up a minimal HTTP/1.1 server that writes `payload` as the SSE
+    /// body, then closes the connection.
+    async fn spawn_sse_server(payload: &str) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let payload = payload.to_owned();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            // Consume the incoming HTTP request.
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+
+            let header = [
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Cache-Control: no-cache\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+            ]
+            .concat();
+
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(payload.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        addr
+    }
+
+    /// Like [`spawn_sse_server`] but writes the payload in two separate TCP
+    /// writes with a short delay, increasing the likelihood that the client
+    /// receives them as distinct byte-stream chunks.
+    async fn spawn_sse_server_split(part1: &str, part2: &str) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (p1, p2) = (part1.to_owned(), part2.to_owned());
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            let mut buf = vec![0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+
+            let header = [
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Cache-Control: no-cache\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+            ]
+            .concat();
+
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(p1.as_bytes()).await.unwrap();
+
+            // Brief pause so the client has a chance to poll the first chunk.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            stream.write_all(p2.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        addr
+    }
+
+    /// Collect all events from the stream into a `Vec`.
+    async fn collect_events(
+        client: &OpenCodeClient,
+    ) -> Vec<Result<EventListResponse, opencode_sdk_rs::OpencodeError>> {
+        let stream = client.subscribe_to_events().await.unwrap();
+        stream.collect().await
+    }
+
+    /// A well-formed SSE stream with a single event should produce exactly one
+    /// typed `EventListResponse`.
+    #[tokio::test]
+    async fn sse_well_formed_single_event() {
+        let payload = "data: {\"type\":\"session.status\",\"properties\":{\"sessionID\":\"sess_001\",\"status\":{\"type\":\"running\"}}}\n\n";
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1, "expected exactly 1 event, got {}", events.len());
+        match &events[0] {
+            Ok(EventListResponse::SessionStatus { properties }) => {
+                assert_eq!(properties.session_id, "sess_001");
+            }
+            other => panic!("expected SessionStatus, got {other:?}"),
+        }
+    }
+
+    /// Multiple SSE events in the same stream should be parsed in order.
+    #[tokio::test]
+    async fn sse_multiple_events_in_sequence() {
+        let payload = concat!(
+            "data: {\"type\":\"session.status\",\"properties\":{\"sessionID\":\"s1\",\"status\":{\"type\":\"running\"}}}\n\n",
+            "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s1\"}}\n\n",
+            "data: {\"type\":\"file.edited\",\"properties\":{\"file\":\"src/main.rs\"}}\n\n",
+        );
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 3);
+
+        match &events[0] {
+            Ok(EventListResponse::SessionStatus { properties }) => {
+                assert_eq!(properties.session_id, "s1");
+            }
+            other => panic!("event 0: expected SessionStatus, got {other:?}"),
+        }
+        match &events[1] {
+            Ok(EventListResponse::SessionIdle { properties }) => {
+                assert_eq!(properties.session_id, "s1");
+            }
+            other => panic!("event 1: expected SessionIdle, got {other:?}"),
+        }
+        match &events[2] {
+            Ok(EventListResponse::FileEdited { properties }) => {
+                assert_eq!(properties.file, "src/main.rs");
+            }
+            other => panic!("event 2: expected FileEdited, got {other:?}"),
+        }
+    }
+
+    /// When an SSE event has multiple `data:` lines, they should be joined
+    /// with `\n` before JSON parsing.  JSON allows whitespace (including
+    /// newlines) between structural tokens, so a multi-line JSON object is
+    /// still valid.
+    #[tokio::test]
+    async fn sse_multiline_data_joined_with_newline() {
+        let payload = concat!(
+            "data: {\"type\":\"session.status\",\n",
+            "data:  \"properties\":{\"sessionID\":\"s_ml\",\"status\":{\"type\":\"running\"}}}\n",
+            "\n",
+        );
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(EventListResponse::SessionStatus { properties }) => {
+                assert_eq!(properties.session_id, "s_ml");
+            }
+            other => panic!("expected SessionStatus, got {other:?}"),
+        }
+    }
+
+    /// An SSE event whose data is split across two TCP writes should still be
+    /// correctly assembled by the internal `SseDecoder` buffer.
+    #[tokio::test]
+    async fn sse_event_split_across_chunks() {
+        let part1 = "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s_split\"}}";
+        let part2 = "\n\n";
+
+        let addr = spawn_sse_server_split(part1, part2).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(
+            events.len(),
+            1,
+            "expected 1 event from split chunks, got {}",
+            events.len()
+        );
+        match &events[0] {
+            Ok(EventListResponse::SessionIdle { properties }) => {
+                assert_eq!(properties.session_id, "s_split");
+            }
+            other => panic!("expected SessionIdle, got {other:?}"),
+        }
+    }
+
+    /// SSE events with empty `data:` fields (heartbeats) should be silently
+    /// skipped by the stream.
+    #[tokio::test]
+    async fn sse_empty_data_events_are_skipped() {
+        let payload = concat!(
+            "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s_skip\"}}\n\n",
+            // Empty data heartbeat
+            "data:\n\n",
+            // Another real event
+            "data: {\"type\":\"file.edited\",\"properties\":{\"file\":\"Cargo.toml\"}}\n\n",
+            // Bare blank line — no fields set, so no event at all
+            "\n",
+            // Third real event
+            "data: {\"type\":\"server.connected\",\"properties\":{}}\n\n",
+        );
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        // Only the 3 real events should surface.
+        assert_eq!(
+            events.len(),
+            3,
+            "expected 3 events (empty skipped), got {}",
+            events.len()
+        );
+        match &events[0] {
+            Ok(EventListResponse::SessionIdle { properties }) => {
+                assert_eq!(properties.session_id, "s_skip");
+            }
+            other => panic!("event 0: expected SessionIdle, got {other:?}"),
+        }
+        match &events[1] {
+            Ok(EventListResponse::FileEdited { properties }) => {
+                assert_eq!(properties.file, "Cargo.toml");
+            }
+            other => panic!("event 1: expected FileEdited, got {other:?}"),
+        }
+        match &events[2] {
+            Ok(EventListResponse::ServerConnected { .. }) => {}
+            other => panic!("event 2: expected ServerConnected, got {other:?}"),
+        }
+    }
+
+    /// SSE comment lines (prefixed with `:`) should be silently ignored.
+    #[tokio::test]
+    async fn sse_comment_lines_are_ignored() {
+        let payload = concat!(
+            ": this is a comment and should be ignored\n",
+            ": another comment\n",
+            "data: {\"type\":\"session.status\",\"properties\":{\"sessionID\":\"s_cmt\",\"status\":{\"type\":\"running\"}}}\n",
+            ": trailing comment\n",
+            "\n",
+        );
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(EventListResponse::SessionStatus { properties }) => {
+                assert_eq!(properties.session_id, "s_cmt");
+            }
+            other => panic!("expected SessionStatus, got {other:?}"),
+        }
+    }
+
+    /// When the server closes the connection the stream should terminate
+    /// cleanly (return `None`) rather than erroring.
+    #[tokio::test]
+    async fn sse_stream_ends_on_connection_close() {
+        let payload = "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s_end\"}}\n\n";
+        let addr = spawn_sse_server(payload).await;
+
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let mut stream = client.subscribe_to_events().await.unwrap();
+
+        let e = stream.next().await.expect("expected event").expect("event should be Ok");
+        match &e {
+            EventListResponse::SessionIdle { properties } => {
+                assert_eq!(properties.session_id, "s_end");
+            }
+            other => panic!("expected SessionIdle, got {other:?}"),
+        }
+
+        assert!(
+            stream.next().await.is_none(),
+            "stream should end after server closes"
+        );
+    }
+
+    /// An SSE event with an `event:` type field and an `id:` field should
+    /// still parse correctly — only the `data:` field is used for JSON
+    /// deserialization.
+    #[tokio::test]
+    async fn sse_event_and_id_fields_ignored_for_parsing() {
+        let payload = concat!(
+            "id: 42\n",
+            "event: custom-event\n",
+            "data: {\"type\":\"file.edited\",\"properties\":{\"file\":\"README.md\"}}\n",
+            "\n",
+        );
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(EventListResponse::FileEdited { properties }) => {
+                assert_eq!(properties.file, "README.md");
+            }
+            other => panic!("expected FileEdited, got {other:?}"),
+        }
+    }
+
+    /// CRLF line endings should be handled correctly (the SSE spec requires
+    /// both LF and CRLF to be treated as line terminators).
+    #[tokio::test]
+    async fn sse_crlf_line_endings() {
+        let payload = "data: {\"type\":\"server.connected\",\"properties\":{}}\r\n\r\n";
+
+        let addr = spawn_sse_server(payload).await;
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            Ok(EventListResponse::ServerConnected { .. })
+        ));
+    }
+
+    /// Invalid JSON in the `data:` field should produce a deserialization
+    /// error rather than panicking or being silently dropped.
+    #[tokio::test]
+    async fn sse_invalid_json_produces_error() {
+        let payload = "data: {not valid json}\n\n";
+        let addr = spawn_sse_server(payload).await;
+
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].is_err(),
+            "expected a deserialization error for invalid JSON, got {:?}",
+            events[0]
+        );
+    }
+
+    /// An empty SSE stream (server sends headers but no events) should
+    /// produce zero events and terminate cleanly.
+    #[tokio::test]
+    async fn sse_empty_stream_no_events() {
+        let payload = "";
+        let addr = spawn_sse_server(payload).await;
+
+        let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
+        let events = collect_events(&client).await;
+
+        assert!(
+            events.is_empty(),
+            "expected no events from empty stream, got {}",
+            events.len()
+        );
     }
 }
