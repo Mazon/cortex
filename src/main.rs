@@ -138,6 +138,21 @@ fn main() -> Result<()> {
     // Enter alternate screen early to hide any residual startup output
     App::setup_terminal()?;
 
+    // Guard: restore terminal if anything fails before the main loop's teardown runs.
+    // Both disable_raw_mode and LeaveAlternateScreen are idempotent, so the double-cleanup
+    // on the happy path (teardown + guard Drop) is safe.
+    struct TerminalGuard;
+    impl Drop for TerminalGuard {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen
+            );
+        }
+    }
+    let _terminal_guard = TerminalGuard;
+
     // === Phase 2: Async runtime ===
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
