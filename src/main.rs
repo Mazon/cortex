@@ -175,6 +175,20 @@ fn main() -> Result<()> {
         // Create app state
         let state = Arc::new(Mutex::new(AppState::default()));
 
+        // === Lock ordering convention ===
+        //
+        // To prevent deadlocks, always acquire locks in this order:
+        //
+        //   1. AppState (`state.lock()`) — the primary application state mutex.
+        //   2. Db — SQLite connections are opened fresh per operation (not wrapped
+        //      in a Mutex), so there is no second lock to contend with. However,
+        //      if a Db were ever shared behind a Mutex, it must always be locked
+        //      *after* AppState.
+        //
+        // Never hold AppState while awaiting an async operation that may
+        // internally need the lock (e.g., SSE event loop dispatches lock
+        // state briefly per event, never across await points).
+
         // Restore persisted state
         {
             let mut state = state.lock().unwrap();
@@ -248,7 +262,9 @@ fn main() -> Result<()> {
             state.lock().unwrap().connected = true;
         }
 
-        // Spawn periodic persistence save task
+        // Spawn periodic persistence save task.
+        // Opens a fresh Db connection each cycle (no lock contention with AppState).
+        // Lock ordering: AppState → Db (Db is opened after state is read).
         let state_for_save = state.clone();
         let db_path_for_save = persistence::db::default_db_path();
         let persistence_handle = tokio::spawn(async move {

@@ -9,7 +9,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Async
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "signal", "net"] }
 futures = "0.3"
 
 # Config
@@ -24,7 +24,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # automatic retries, structured errors.
 opencode-sdk-rs = "0.2"
 
-# HTTP client (server health checks only)
+# reqwest — used for lightweight HTTP health checks against the OpenCode server.
+# Kept separate from the SDK's hpx client because: (1) hpx is designed for SSE
+# streaming with per-chunk read timeouts and is tightly coupled to the SDK's
+# event pipeline, (2) health checks need only a simple GET with a short timeout,
+# and (3) reqwest's default-features = false keeps this dependency minimal.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 # Utilities

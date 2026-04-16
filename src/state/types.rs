@@ -10,10 +10,15 @@ use std::collections::HashMap;
 pub struct KanbanColumn(pub String);
 
 impl KanbanColumn {
+    /// Built-in column identifier for "to-do" tasks.
     pub const TODO: &'static str = "todo";
+    /// Built-in column identifier for tasks being planned.
     pub const PLANNING: &'static str = "planning";
+    /// Built-in column identifier for tasks currently executing.
     pub const RUNNING: &'static str = "running";
+    /// Built-in column identifier for tasks under review.
     pub const REVIEW: &'static str = "review";
+    /// Built-in column identifier for completed tasks.
     pub const DONE: &'static str = "done";
 
     /// Returns the default column set.
@@ -62,6 +67,7 @@ pub enum TaskAgentType {
 }
 
 impl TaskAgentType {
+    /// Parse an agent type from a string slice. Unrecognized values return [`TaskAgentType::None`].
     pub fn from_str_opt(s: &str) -> Self {
         match s {
             "planning" => TaskAgentType::Planning,
@@ -73,6 +79,7 @@ impl TaskAgentType {
         }
     }
 
+    /// Return the string representation of this agent type.
     pub fn as_str(&self) -> &str {
         match self {
             TaskAgentType::None => "none",
@@ -96,6 +103,7 @@ pub enum AgentStatus {
 }
 
 impl AgentStatus {
+    /// Returns a Unicode icon representing the agent status.
     pub fn icon(&self) -> &'static str {
         match self {
             AgentStatus::Pending => "·",
@@ -132,6 +140,7 @@ pub enum ProjectStatus {
 }
 
 impl ProjectStatus {
+    /// Returns a Unicode icon representing the project status.
     pub fn icon(&self) -> &'static str {
         match self {
             ProjectStatus::Disconnected => "○",
@@ -208,32 +217,54 @@ pub enum CursorDirection {
 /// A task in the kanban board.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CortexTask {
+    /// Unique identifier (UUID v4).
     pub id: String,
+    /// Human-readable sequential number within the project.
     pub number: u32,
+    /// Task title.
     pub title: String,
+    /// Task description (may contain newlines).
     pub description: String,
+    /// Current kanban column.
     pub column: KanbanColumn,
+    /// OpenCode session ID, if an agent is currently working on this task.
     pub session_id: Option<String>,
+    /// Which agent type is assigned to this task.
     pub agent_type: TaskAgentType,
+    /// Current execution status of the assigned agent.
     pub agent_status: AgentStatus,
+    /// Unix timestamp (seconds) when the task entered its current column.
     pub entered_column_at: i64,
+    /// Unix timestamp (seconds) of the last agent activity on this task.
     pub last_activity_at: i64,
+    /// Error message from the last failed agent run, if any.
     pub error_message: Option<String>,
+    /// Output from the planning phase, if available.
     pub plan_output: Option<String>,
+    /// Number of pending permission requests awaiting user approval.
     pub pending_permission_count: u32,
+    /// Number of pending questions awaiting user answers.
     pub pending_question_count: u32,
+    /// Unix timestamp (seconds) when the task was created.
     pub created_at: i64,
+    /// Unix timestamp (seconds) when the task was last updated.
     pub updated_at: i64,
+    /// ID of the project this task belongs to.
     pub project_id: String,
 }
 
 /// A project in the sidebar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CortexProject {
+    /// Unique identifier (UUID v4).
     pub id: String,
+    /// Display name shown in the sidebar.
     pub name: String,
+    /// Filesystem working directory for the project.
     pub working_directory: String,
+    /// Aggregate status derived from task states.
     pub status: ProjectStatus,
+    /// Display order position in the sidebar.
     pub position: usize,
 }
 
@@ -251,13 +282,21 @@ pub struct KanbanState {
 /// UI state — tracks the current view mode and focus.
 #[derive(Debug, Clone)]
 pub struct UIState {
+    /// Current application mode (normal, task editor, help overlay).
     pub mode: AppMode,
+    /// Which panel has keyboard focus.
     pub focused_panel: FocusedPanel,
+    /// ID of the currently focused kanban column.
     pub focused_column: String,
+    /// ID of the currently focused task.
     pub focused_task_id: Option<String>,
+    /// ID of the task being viewed in the detail panel.
     pub viewing_task_id: Option<String>,
+    /// Active notification toast, if any.
     pub notification: Option<Notification>,
+    /// Text input buffer (used for prompts).
     pub input_text: String,
+    /// Task editor state when in `AppMode::TaskEditor`.
     pub task_editor: Option<TaskEditorState>,
 }
 
@@ -279,8 +318,11 @@ impl Default for UIState {
 /// A notification toast.
 #[derive(Debug, Clone)]
 pub struct Notification {
+    /// Message text to display.
     pub message: String,
+    /// Visual variant (info, success, warning, error).
     pub variant: NotificationVariant,
+    /// Unix timestamp (milliseconds) when this notification should be dismissed.
     pub expires_at: i64,
 }
 
@@ -293,17 +335,24 @@ pub struct Notification {
 pub struct TaskEditorState {
     /// `None` = creating new task, `Some(id)` = editing existing task.
     pub task_id: Option<String>,
+    /// Title text buffer.
     pub title: String,
     /// Description stored as individual lines for O(1) per-line access.
     /// Always contains at least one element (empty string when description is empty).
-    desc_lines: Vec<String>,
+    pub desc_lines: Vec<String>,
     /// Cached joined text; `None` when lines have been modified since last join.
-    cached_description: Option<String>,
+    pub cached_description: Option<String>,
+    /// Currently focused field (title or description).
     pub focused_field: EditorField,
+    /// Cursor row (0-indexed).
     pub cursor_row: usize,
+    /// Cursor column (0-indexed).
     pub cursor_col: usize,
+    /// Scroll offset for the description textarea.
     pub scroll_offset: usize,
+    /// Target column ID when creating a new task.
     pub column_id: Option<String>,
+    /// Agent type to assign when creating a new task.
     pub agent_type: TaskAgentType,
 }
 
@@ -574,9 +623,13 @@ impl TaskEditorState {
 /// A message in a task's session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskMessage {
+    /// Unique message identifier.
     pub id: String,
+    /// Whether this message is from the user or the assistant.
     pub role: MessageRole,
+    /// Ordered parts within this message (text, tool calls, steps, etc.).
     pub parts: Vec<TaskMessagePart>,
+    /// Creation timestamp string (formatted as `t{unix_seconds}`).
     pub created_at: Option<String>,
 }
 
@@ -617,32 +670,49 @@ pub enum TaskMessagePart {
 /// A permission request from an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequest {
+    /// Unique permission request identifier.
     pub id: String,
+    /// ID of the session that requested permission.
     pub session_id: String,
+    /// Name of the tool being requested (e.g., "bash", "write").
     pub tool_name: String,
+    /// Human-readable description of the tool invocation.
     pub description: String,
+    /// Current status ("pending", "approved", "rejected").
     pub status: String,
+    /// Optional additional details about the request.
     pub details: Option<String>,
 }
 
 /// A question request from an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuestionRequest {
+    /// Unique question identifier.
     pub id: String,
+    /// ID of the session that asked the question.
     pub session_id: String,
+    /// The question text.
     pub question: String,
+    /// Possible answer choices.
     pub answers: Vec<String>,
+    /// Current status ("pending", "answered").
     pub status: String,
 }
 
 /// Session data for a task (messages, streaming state).
 #[derive(Debug, Clone, Default)]
 pub struct TaskDetailSession {
+    /// ID of the task this session belongs to.
     pub task_id: String,
+    /// OpenCode session ID, if a session has been started.
     pub session_id: Option<String>,
+    /// Complete message history for this session.
     pub messages: Vec<TaskMessage>,
+    /// Partial text being streamed from the assistant (appended incrementally).
     pub streaming_text: Option<String>,
+    /// Outstanding permission requests awaiting user approval.
     pub pending_permissions: Vec<PermissionRequest>,
+    /// Outstanding questions awaiting user answers.
     pub pending_questions: Vec<QuestionRequest>,
 }
 
@@ -651,18 +721,25 @@ pub struct TaskDetailSession {
 /// The single source of truth for all application state.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// All registered projects.
     pub projects: Vec<CortexProject>,
+    /// All tasks keyed by task ID.
     pub tasks: HashMap<String, CortexTask>,
+    /// Kanban board layout — column ordering and task placement.
     pub kanban: KanbanState,
+    /// UI state — current mode, focus, notifications.
     pub ui: UIState,
+    /// Whether at least one OpenCode client is connected.
     pub connected: bool,
+    /// ID of the currently active project.
     pub active_project_id: Option<String>,
+    /// Per-project auto-incrementing task number counters.
     pub task_number_counters: HashMap<String, u32>,
     /// Reverse index: session_id → task_id for O(1) lookup.
     pub session_to_task: HashMap<String, String>,
-    /// Session data for task detail view.
+    /// Session data for task detail view, keyed by task_id.
     pub task_sessions: HashMap<String, TaskDetailSession>,
-    /// Dirty flag for persistence.
+    /// Dirty flag for persistence — set when state changes need to be saved.
     pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Dirty flag for render optimization — set when state changes,
     /// checked by the TUI event loop to skip unnecessary full re-renders.

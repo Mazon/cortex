@@ -7,11 +7,14 @@ use std::collections::HashMap;
 impl AppState {
     // ─── Project Methods ─────────────────────────────────────────────────
 
+    /// Register a new project. Marks state dirty.
     pub fn add_project(&mut self, project: CortexProject) {
         self.projects.push(project);
         self.mark_dirty();
     }
 
+    /// Remove a project and all its tasks. If this was the active project,
+    /// falls back to the first remaining project. Marks state dirty.
     pub fn remove_project(&mut self, project_id: &str) {
         self.projects.retain(|p| p.id != project_id);
         self.tasks.retain(|_, t| t.project_id != project_id);
@@ -21,6 +24,7 @@ impl AppState {
         self.mark_dirty();
     }
 
+    /// Set the active project and rebuild the kanban board for it.
     pub fn select_project(&mut self, project_id: &str) {
         self.active_project_id = Some(project_id.to_string());
         // Rebuild kanban for selected project
@@ -29,6 +33,8 @@ impl AppState {
 
     // ─── Task Methods ────────────────────────────────────────────────────
 
+    /// Create a new task in the "todo" column. Returns the created task.
+    /// Increments the project's task number counter. Marks state dirty.
     pub fn create_todo(
         &mut self,
         title: String,
@@ -75,6 +81,9 @@ impl AppState {
         task
     }
 
+    /// Move a task to a different column. Updates `entered_column_at` and
+    /// `last_activity_at` timestamps. Returns `false` if the task doesn't exist.
+    /// Marks state dirty.
     pub fn move_task(&mut self, task_id: &str, to_column: KanbanColumn) -> bool {
         let task = match self.tasks.get_mut(task_id) {
             Some(t) => t,
@@ -105,6 +114,8 @@ impl AppState {
         true
     }
 
+    /// Delete a task by ID. Removes it from the kanban board and session index.
+    /// Returns `false` if the task doesn't exist. Marks state dirty.
     pub fn delete_task(&mut self, task_id: &str) -> bool {
         if let Some(task) = self.tasks.remove(task_id) {
             // Remove from kanban
@@ -122,6 +133,7 @@ impl AppState {
         }
     }
 
+    /// Update a task's agent status and bump `last_activity_at`. Marks state dirty.
     pub fn update_task_agent_status(&mut self, task_id: &str, status: AgentStatus) {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.agent_status = status;
@@ -130,6 +142,8 @@ impl AppState {
         }
     }
 
+    /// Set or clear a task's OpenCode session ID. Maintains the
+    /// `session_to_task` reverse index. Marks state dirty.
     pub fn set_task_session_id(&mut self, task_id: &str, session_id: Option<String>) {
         if let Some(task) = self.tasks.get_mut(task_id) {
             // Remove old mapping
@@ -146,6 +160,8 @@ impl AppState {
         }
     }
 
+    /// Record an error on a task and set its agent status to [`AgentStatus::Error`].
+    /// Marks state dirty.
     pub fn set_task_error(&mut self, task_id: &str, error: String) {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.error_message = Some(error);
@@ -155,12 +171,15 @@ impl AppState {
         }
     }
 
+    /// Look up the task ID associated with a given OpenCode session ID.
     pub fn get_task_id_by_session(&self, session_id: &str) -> Option<&str> {
         self.session_to_task.get(session_id).map(|s| s.as_str())
     }
 
     // ─── Navigation ──────────────────────────────────────────────────────
 
+    /// Clamp the focused task index for a column so it stays within bounds.
+    /// Syncs `ui.focused_task_id` with the clamped index.
     pub fn clamp_focused_task_index(&mut self, col_id: &str) {
         let idx = self
             .kanban
@@ -183,6 +202,7 @@ impl AppState {
         }
     }
 
+    /// Set the focused column and sync the focused task ID.
     pub fn set_focused_column(&mut self, column: &str) {
         self.ui.focused_column = column.to_string();
         // Reset focused task index for this column
@@ -198,15 +218,18 @@ impl AppState {
         }
     }
 
+    /// Set the focused task ID directly.
     pub fn set_focused_task(&mut self, task_id: Option<String>) {
         self.ui.focused_task_id = task_id;
     }
 
+    /// Open the task detail panel for a given task.
     pub fn open_task_detail(&mut self, task_id: &str) {
         self.ui.viewing_task_id = Some(task_id.to_string());
         self.ui.focused_panel = FocusedPanel::TaskDetail;
     }
 
+    /// Close the task detail panel and return focus to the kanban board.
     pub fn close_task_detail(&mut self) {
         self.ui.viewing_task_id = None;
         self.ui.focused_panel = FocusedPanel::Kanban;
@@ -214,11 +237,14 @@ impl AppState {
 
     // ─── Task Editor Mode ────────────────────────────────────────────────
 
+    /// Open the task editor in "create" mode.
     pub fn open_task_editor_create(&mut self, default_column: &str) {
         self.ui.task_editor = Some(TaskEditorState::new_for_create(default_column));
         self.ui.mode = AppMode::TaskEditor;
     }
 
+    /// Open the task editor in "edit" mode for an existing task.
+    /// Does nothing if the task doesn't exist.
     pub fn open_task_editor_edit(&mut self, task_id: &str) {
         if let Some(task) = self.tasks.get(task_id) {
             self.ui.task_editor = Some(TaskEditorState::new_for_edit(task));
@@ -226,6 +252,8 @@ impl AppState {
         }
     }
 
+    /// Save the current task editor contents. Creates a new task or updates
+    /// an existing one. Returns the task ID on success.
     pub fn save_task_editor(&mut self) -> anyhow::Result<String> {
         let editor = match &self.ui.task_editor {
             Some(e) => e.clone(),
@@ -270,21 +298,26 @@ impl AppState {
         }
     }
 
+    /// Close the task editor and return to normal mode, discarding changes.
     pub fn cancel_task_editor(&mut self) {
         self.ui.task_editor = None;
         self.ui.mode = AppMode::Normal;
     }
 
+    /// Get an immutable reference to the current task editor state, if open.
     pub fn get_task_editor(&self) -> Option<&TaskEditorState> {
         self.ui.task_editor.as_ref()
     }
 
+    /// Get a mutable reference to the current task editor state, if open.
     pub fn get_task_editor_mut(&mut self) -> Option<&mut TaskEditorState> {
         self.ui.task_editor.as_mut()
     }
 
     // ─── Notifications ───────────────────────────────────────────────────
 
+    /// Display a notification toast with the given message, variant, and duration.
+    /// Replaces any existing notification.
     pub fn set_notification(
         &mut self,
         message: String,
@@ -313,6 +346,7 @@ impl AppState {
 
     // ─── Session Data ────────────────────────────────────────────────────
 
+    /// Replace the message history for a task's session.
     pub fn update_session_messages(&mut self, task_id: &str, messages: Vec<TaskMessage>) {
         let session = self
             .task_sessions
@@ -324,6 +358,7 @@ impl AppState {
         session.messages = messages;
     }
 
+    /// Set or clear the streaming text buffer for a task's session.
     pub fn update_streaming_text(&mut self, task_id: &str, text: Option<String>) {
         let session = self
             .task_sessions
@@ -335,6 +370,8 @@ impl AppState {
         session.streaming_text = text;
     }
 
+    /// Add a pending permission request to a task's session.
+    /// Updates the task's `pending_permission_count`.
     pub fn add_permission_request(&mut self, task_id: &str, request: PermissionRequest) {
         let session = self
             .task_sessions
@@ -349,6 +386,8 @@ impl AppState {
         }
     }
 
+    /// Resolve (dismiss) a permission request from a task's session.
+    /// Updates the task's `pending_permission_count`.
     pub fn resolve_permission_request(
         &mut self,
         task_id: &str,
@@ -372,6 +411,8 @@ impl AppState {
 
     // ─── SSE Processing Helpers ──────────────────────────────────────────
 
+    /// Handle a `SessionStatus` SSE event — map the status string to
+    /// [`AgentStatus`] and update the corresponding task.
     pub fn process_session_status(&mut self, session_id: &str, status: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
@@ -386,6 +427,8 @@ impl AppState {
         }
     }
 
+    /// Handle a `SessionIdle` SSE event — mark the task as complete
+    /// and show a success notification.
     pub fn process_session_idle(&mut self, session_id: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
@@ -400,6 +443,7 @@ impl AppState {
         }
     }
 
+    /// Handle a `SessionError` SSE event — record the error on the task.
     pub fn process_session_error(&mut self, session_id: &str, error: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
@@ -409,6 +453,8 @@ impl AppState {
         }
     }
 
+    /// Handle a `MessagePartDelta` SSE event — append text to the
+    /// streaming buffer for the corresponding task's session.
     pub fn process_message_part_delta(&mut self, session_id: &str, delta: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
@@ -430,6 +476,8 @@ impl AppState {
         }
     }
 
+    /// Handle a `PermissionAsked` SSE event — create a pending permission
+    /// request for the task.
     pub fn process_permission_asked(
         &mut self,
         session_id: &str,
@@ -455,10 +503,13 @@ impl AppState {
 
     // ─── Dirty Flag ──────────────────────────────────────────────────────
 
+    /// Set the persistence dirty flag.
     pub fn mark_dirty(&self) {
         self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Atomically take (clear) the persistence dirty flag.
+    /// Returns `true` if the flag was set, `false` otherwise.
     pub fn take_dirty(&self) -> bool {
         self.dirty
             .compare_exchange(
@@ -491,6 +542,8 @@ impl AppState {
 
     // ─── Persistence Restore ─────────────────────────────────────────────
 
+    /// Bulk-restore state from persistence (projects, tasks, kanban order,
+    /// active project, and task number counters).
     pub fn restore_state(
         &mut self,
         projects: Vec<CortexProject>,

@@ -1,0 +1,4 @@
+max_width = 100
+imports_granularity = "Crate"
+reorder_imports = true
+reorder_modules = true
