@@ -920,7 +920,7 @@ mod tests {
         // Set title and description via editor
         if let Some(editor) = state.get_task_editor_mut() {
             editor.title = "New Task".to_string();
-            editor.description = "Some desc".to_string();
+            editor.set_description("Some desc");
         }
 
         let result = state.save_task_editor();

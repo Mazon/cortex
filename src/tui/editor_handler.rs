@@ -210,11 +210,11 @@ mod tests {
     fn enter_splits_line_at_cursor() {
         let mut editor = new_editor();
         editor.focused_field = EditorField::Description;
-        editor.description = "line1".to_string();
+        editor.set_description("line1");
         // Cursor at position 3 (between "lin" and "e1")
         editor.cursor_col = 3;
         handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(editor.description, "lin\ne1");
+        assert_eq!(editor.description(), "lin\ne1");
         assert_eq!(editor.cursor_row, 1);
         assert_eq!(editor.cursor_col, 0);
     }
@@ -236,7 +236,7 @@ mod tests {
         editor.focused_field = EditorField::Description;
         handle_editor_input(&mut editor, char_key('A'));
         handle_editor_input(&mut editor, char_key('B'));
-        assert_eq!(editor.description, "AB");
+        assert_eq!(editor.description(), "AB");
         assert_eq!(editor.cursor_col, 2);
     }
 
@@ -280,11 +280,11 @@ mod tests {
     fn backspace_deletes_in_description() {
         let mut editor = new_editor();
         editor.focused_field = EditorField::Description;
-        editor.description = "hello".to_string();
+        editor.set_description("hello");
         editor.cursor_row = 0;
         editor.cursor_col = 3;
         handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(editor.description, "helo");
+        assert_eq!(editor.description(), "helo");
         assert_eq!(editor.cursor_col, 2);
     }
 
@@ -368,7 +368,7 @@ mod tests {
     fn up_down_in_description() {
         let mut editor = new_editor();
         editor.focused_field = EditorField::Description;
-        editor.description = "line0\nline1\nline2".to_string();
+        editor.set_description("line0\nline1\nline2");
         editor.cursor_row = 2;
         editor.cursor_col = 3;
 
@@ -464,7 +464,7 @@ mod tests {
         for ch in "Do something".chars() {
             handle_editor_input(&mut editor, char_key(ch));
         }
-        assert_eq!(editor.description, "Do something");
+        assert_eq!(editor.description(), "Do something");
 
         // Tab back to title
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));

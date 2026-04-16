@@ -238,6 +238,7 @@ mod tests {
             },
             task_sessions: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
 
         // ── Save ──
