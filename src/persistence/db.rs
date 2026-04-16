@@ -24,6 +24,22 @@ impl Db {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(MIGRATIONS)?;
 
+        // Migration: add entered_column_at and last_activity_at to existing databases.
+        // These columns exist in the CREATE TABLE above for new databases, but
+        // existing databases need ALTER TABLE. SQLite has no ADD COLUMN IF NOT EXISTS,
+        // so we ignore "duplicate column" errors.
+        for sql in &[
+            "ALTER TABLE tasks ADD COLUMN entered_column_at INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+        ] {
+            if let Err(e) = conn.execute(sql, []) {
+                // Ignore "duplicate column name" error (SQLite error code 1, "duplicate column name: ...")
+                if !e.to_string().contains("duplicate column") {
+                    return Err(e.into());
+                }
+            }
+        }
+
         tracing::info!("Database opened: {:?}", path);
         Ok(Self { conn })
     }
@@ -32,8 +48,8 @@ impl Db {
 
     pub fn save_task(&self, task: &CortexTask) -> AppResult<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 task.id,
                 task.number,
@@ -50,6 +66,8 @@ impl Db {
                 task.project_id,
                 task.created_at,
                 task.updated_at,
+                task.entered_column_at,
+                task.last_activity_at,
             ],
         )?;
         Ok(())
@@ -57,7 +75,7 @@ impl Db {
 
     pub fn load_tasks(&self, project_id: &str) -> AppResult<Vec<CortexTask>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at FROM tasks WHERE project_id = ?1 ORDER BY number",
+            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at FROM tasks WHERE project_id = ?1 ORDER BY number",
         )?;
 
         let tasks = stmt
@@ -78,8 +96,8 @@ impl Db {
                     project_id: row.get(12)?,
                     created_at: row.get(13)?,
                     updated_at: row.get(14)?,
-                    entered_column_at: row.get(13)?,
-                    last_activity_at: row.get(14)?,
+                    entered_column_at: row.get(15)?,
+                    last_activity_at: row.get(16)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -236,7 +254,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     pending_question_count INTEGER DEFAULT 0,
     project_id TEXT NOT NULL REFERENCES projects(id),
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    entered_column_at INTEGER NOT NULL DEFAULT 0,
+    last_activity_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS kanban_order (
