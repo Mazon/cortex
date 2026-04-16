@@ -9,18 +9,40 @@ use std::path::{Path, PathBuf};
 use defaults::default_config;
 use types::CortexConfig;
 
-/// Returns the default config path: `~/.config/cortex/cortex.toml`.
+/// Returns the default config path: `$XDG_CONFIG_HOME/cortex/cortex.toml`.
+///
+/// Respects the `XDG_CONFIG_HOME` environment variable, falling back to
+/// `$HOME/.config` when it is not set.
 pub fn default_config_path() -> PathBuf {
-    dirs_or_home()
-        .join(".config")
-        .join("cortex")
-        .join("cortex.toml")
+    xdg_config_home().join("cortex").join("cortex.toml")
 }
 
-pub fn dirs_or_home() -> PathBuf {
-    std::env::var("HOME")
+/// Returns the XDG config home directory.
+///
+/// Respects the `XDG_CONFIG_HOME` environment variable, falling back to
+/// `$HOME/.config` when it is not set. As a last resort, returns `/tmp`.
+pub fn xdg_config_home() -> PathBuf {
+    std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".config"))
+                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        })
+}
+
+/// Returns the XDG data home directory.
+///
+/// Respects the `XDG_DATA_HOME` environment variable, falling back to
+/// `$HOME/.local/share` when it is not set. As a last resort, returns `/tmp`.
+pub fn xdg_data_home() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".local").join("share"))
+                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        })
 }
 
 /// Load config from a TOML file. If the file doesn't exist, return defaults.
