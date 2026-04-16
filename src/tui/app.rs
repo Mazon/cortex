@@ -122,21 +122,23 @@ impl App {
                 state.clear_expired_notifications();
             }
 
-            // Render
+            // Render — clone state before drawing to minimise lock contention.
+            // The lock is held only for the clone (~microseconds) instead of
+            // the entire render cycle (~10-50 ms), unblocking SSE event
+            // processing, persistence saves, and other async operations.
             {
-                let state = &self.state;
+                let state_snapshot = self.state.lock().unwrap().clone();
                 let config = &self.config;
                 self.terminal.draw(|f| {
-                    let locked = state.lock().unwrap();
-                    match locked.ui.mode {
+                    match state_snapshot.ui.mode {
                         crate::state::types::AppMode::Normal => {
-                            crate::tui::render_normal(f, &locked, config);
+                            crate::tui::render_normal(f, &state_snapshot, config);
                         }
                         crate::state::types::AppMode::TaskEditor => {
-                            crate::tui::task_editor::render_task_editor(f, &locked);
+                            crate::tui::task_editor::render_task_editor(f, &state_snapshot);
                         }
                         crate::state::types::AppMode::Help => {
-                            crate::tui::render_normal(f, &locked, config);
+                            crate::tui::render_normal(f, &state_snapshot, config);
                             crate::tui::help::render_help_overlay(f);
                         }
                     }
