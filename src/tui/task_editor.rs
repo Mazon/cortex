@@ -132,25 +132,24 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     let desc_inner = desc_block.inner(v_layout[5]);
     f.render_widget(desc_block, v_layout[5]);
 
-    // Render description text with scroll
+    // Render description text with scroll (uses pre-computed lines, no split per frame)
     let visible_height = desc_inner.height as usize;
-    let lines: Vec<Line> = editor
-        .description
-        .split('\n')
+    let desc_lines = editor.desc_lines();
+    let lines: Vec<Line> = desc_lines
+        .iter()
         .skip(editor.scroll_offset)
         .take(visible_height)
-        .map(|s| Line::from(s.to_string()))
+        .map(|s| Line::from(s.as_str()))
         .collect();
 
     // Add cursor character if focused
     let display_lines = if desc_focused {
         let cursor_row = editor.cursor_row;
-        let _visible_row = cursor_row - editor.cursor_row; // This is always 0 relative
         let actual_visible_row = cursor_row.saturating_sub(editor.scroll_offset);
 
         let mut result = lines;
         if actual_visible_row < result.len() {
-            let line = &editor.description.split('\n').nth(cursor_row).unwrap_or("");
+            let line = desc_lines.get(cursor_row).map_or("", |l| l.as_str());
             let col = editor.cursor_col.min(line.len());
             let mut chars: Vec<char> = line.chars().collect();
             chars.insert(col, '▊');
@@ -169,11 +168,7 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
 
     // Set cursor position for description field
     if desc_focused {
-        let line = editor
-            .description
-            .split('\n')
-            .nth(editor.cursor_row)
-            .unwrap_or("");
+        let line = desc_lines.get(editor.cursor_row).map_or("", |l| l.as_str());
         let cursor_x = desc_inner.x + editor.cursor_col.min(line.len()) as u16;
         let cursor_y = desc_inner.y + (editor.cursor_row - editor.scroll_offset) as u16;
         if cursor_y < desc_inner.y + desc_inner.height {

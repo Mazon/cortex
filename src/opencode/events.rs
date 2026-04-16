@@ -68,6 +68,9 @@ pub async fn sse_event_loop(
 
 /// Process a single SSE event, updating state directly.
 fn process_event(event: &opencode_sdk_rs::resources::event::EventListResponse, state: &mut AppState, client: &OpenCodeClient) {
+    // Any incoming SSE event potentially changes the UI — mark for re-render.
+    state.mark_render_dirty();
+
     use opencode_sdk_rs::resources::event::EventListResponse;
 
     match event {

@@ -285,12 +285,20 @@ pub struct Notification {
 }
 
 /// Fullscreen task editor state.
+///
+/// Description text is stored as a `Vec<String>` of individual lines for O(1)
+/// per-line access during cursor movement and rendering. The joined text is
+/// cached and only recomputed when lines change.
 #[derive(Debug, Clone)]
 pub struct TaskEditorState {
     /// `None` = creating new task, `Some(id)` = editing existing task.
     pub task_id: Option<String>,
     pub title: String,
-    pub description: String,
+    /// Description stored as individual lines for O(1) per-line access.
+    /// Always contains at least one element (empty string when description is empty).
+    desc_lines: Vec<String>,
+    /// Cached joined text; `None` when lines have been modified since last join.
+    cached_description: Option<String>,
     pub focused_field: EditorField,
     pub cursor_row: usize,
     pub cursor_col: usize,
@@ -305,7 +313,8 @@ impl TaskEditorState {
         Self {
             task_id: None,
             title: String::new(),
-            description: String::new(),
+            desc_lines: vec![String::new()],
+            cached_description: None,
             focused_field: EditorField::Title,
             cursor_row: 0,
             cursor_col: 0,
@@ -317,10 +326,21 @@ impl TaskEditorState {
 
     /// Pre-populates from an existing task for editing.
     pub fn new_for_edit(task: &CortexTask) -> Self {
+        let lines: Vec<String> = if task.description.is_empty() {
+            vec![String::new()]
+        } else {
+            task.description.split('\n').map(String::from).collect()
+        };
+        let cached = if task.description.is_empty() {
+            None
+        } else {
+            Some(task.description.clone())
+        };
         Self {
             task_id: Some(task.id.clone()),
             title: task.title.clone(),
-            description: task.description.clone(),
+            desc_lines: lines,
+            cached_description: cached,
             focused_field: EditorField::Title,
             cursor_row: 0,
             cursor_col: task.title.len(),
@@ -330,20 +350,47 @@ impl TaskEditorState {
         }
     }
 
-    /// Returns the lines of the description (split by '\n').
-    fn desc_lines(&self) -> Vec<&str> {
-        self.description.split('\n').collect()
+    /// Returns the description text as a single string.
+    ///
+    /// The result is cached; the join is only recomputed when lines have
+    /// changed since the last call.
+    pub fn description(&self) -> String {
+        match &self.cached_description {
+            Some(cached) => cached.clone(),
+            None => self.desc_lines.join("\n"),
+        }
+    }
+
+    /// Sets the description from a flat string (used by tests and initialization).
+    pub fn set_description(&mut self, text: &str) {
+        if text.is_empty() {
+            self.desc_lines = vec![String::new()];
+            self.cached_description = None;
+        } else {
+            self.desc_lines = text.split('\n').map(String::from).collect();
+            self.cached_description = Some(text.to_string());
+        }
+    }
+
+    /// Returns a reference to the description lines slice.
+    pub fn desc_lines(&self) -> &[String] {
+        &self.desc_lines
     }
 
     /// Returns the text of the line the cursor is on.
     pub fn current_line(&self) -> &str {
         match self.focused_field {
             EditorField::Title => &self.title,
-            EditorField::Description => {
-                let lines = self.desc_lines();
-                lines.get(self.cursor_row).copied().unwrap_or("")
-            }
+            EditorField::Description => self
+                .desc_lines
+                .get(self.cursor_row)
+                .map_or("", |l| l.as_str()),
         }
+    }
+
+    /// Invalidates the cached description text.
+    fn invalidate_cache(&mut self) {
+        self.cached_description = None;
     }
 
     /// Inserts a character at cursor position in the focused field.
@@ -354,21 +401,16 @@ impl TaskEditorState {
                 self.cursor_col = (self.cursor_col + 1).min(self.title.len());
             }
             EditorField::Description => {
-                let lines: Vec<&str> = self.description.split('\n').collect();
-                let row = self.cursor_row.min(lines.len().saturating_sub(1));
-                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
-                if let Some(line) = lines.get(row) {
-                    let mut new_line = line.to_string();
-                    new_line.insert(col, ch);
-                    // Rebuild description
-                    let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-                    if row < new_lines.len() {
-                        new_lines[row] = new_line;
-                    }
-                    self.description = new_lines.join("\n");
+                let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
+                let col = self
+                    .cursor_col
+                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
+                if let Some(line) = self.desc_lines.get_mut(row) {
+                    line.insert(col, ch);
                     self.cursor_col = col + 1;
                     self.cursor_row = row;
                 }
+                self.invalidate_cache();
             }
         }
     }
@@ -383,25 +425,25 @@ impl TaskEditorState {
                 }
             }
             EditorField::Description => {
-                let lines: Vec<&str> = self.description.split('\n').collect();
-                let row = self.cursor_row.min(lines.len().saturating_sub(1));
-                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+                let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
+                let col = self
+                    .cursor_col
+                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
 
-                let mut new_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-                if let Some(line) = new_lines.get_mut(row) {
-                    if col > 0 {
+                if col > 0 {
+                    if let Some(line) = self.desc_lines.get_mut(row) {
                         line.remove(col - 1);
                         self.cursor_col = col - 1;
-                    } else if row > 0 {
-                        // Merge with previous line
-                        let prev_len = new_lines[row - 1].len();
-                        let current = new_lines.remove(row);
-                        new_lines[row - 1].push_str(&current);
-                        self.cursor_row = row - 1;
-                        self.cursor_col = prev_len;
                     }
+                } else if row > 0 {
+                    // Merge with previous line
+                    let prev_len = self.desc_lines[row - 1].len();
+                    let current = self.desc_lines.remove(row);
+                    self.desc_lines[row - 1].push_str(&current);
+                    self.cursor_row = row - 1;
+                    self.cursor_col = prev_len;
                 }
-                self.description = new_lines.join("\n");
+                self.invalidate_cache();
             }
         }
     }
@@ -415,21 +457,21 @@ impl TaskEditorState {
                 }
             }
             EditorField::Description => {
-                let lines: Vec<String> = self.description.split('\n').map(String::from).collect();
-                let row = self.cursor_row.min(lines.len().saturating_sub(1));
-                let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+                let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
+                let col = self
+                    .cursor_col
+                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
 
-                let mut new_lines = lines;
-                if row < new_lines.len() {
-                    if col < new_lines[row].len() {
-                        new_lines[row].remove(col);
-                    } else if row + 1 < new_lines.len() {
+                if row < self.desc_lines.len() {
+                    if col < self.desc_lines[row].len() {
+                        self.desc_lines[row].remove(col);
+                    } else if row + 1 < self.desc_lines.len() {
                         // Merge with next line
-                        let next = new_lines.remove(row + 1);
-                        new_lines[row].push_str(&next);
+                        let next = self.desc_lines.remove(row + 1);
+                        self.desc_lines[row].push_str(&next);
                     }
                 }
-                self.description = new_lines.join("\n");
+                self.invalidate_cache();
             }
         }
     }
@@ -439,18 +481,18 @@ impl TaskEditorState {
         if self.focused_field != EditorField::Description {
             return;
         }
-        let lines: Vec<String> = self.description.split('\n').map(String::from).collect();
-        let row = self.cursor_row.min(lines.len().saturating_sub(1));
-        let col = self.cursor_col.min(lines.get(row).map_or(0, |l| l.len()));
+        let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
+        let col = self
+            .cursor_col
+            .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
 
-        let mut new_lines = lines;
-        if row < new_lines.len() {
-            let rest = new_lines[row].split_off(col);
-            new_lines.insert(row + 1, rest);
+        if row < self.desc_lines.len() {
+            let rest = self.desc_lines[row].split_off(col);
+            self.desc_lines.insert(row + 1, rest);
         }
-        self.description = new_lines.join("\n");
         self.cursor_row = row + 1;
         self.cursor_col = 0;
+        self.invalidate_cache();
     }
 
     /// Moves cursor in the given direction, clamped to valid positions.
@@ -472,27 +514,23 @@ impl TaskEditorState {
                 _ => {}
             },
             EditorField::Description => {
-                let num_lines = self.description.split('\n').count();
+                let num_lines = self.desc_lines.len();
                 let max_row = num_lines.saturating_sub(1);
 
                 match direction {
                     CursorDirection::Up => {
                         if self.cursor_row > 0 {
                             self.cursor_row -= 1;
-                            let line_len = self
-                                .desc_lines()
-                                .get(self.cursor_row)
-                                .map_or(0, |l| l.len());
+                            let line_len =
+                                self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
                             self.cursor_col = self.cursor_col.min(line_len);
                         }
                     }
                     CursorDirection::Down => {
                         if self.cursor_row < max_row {
                             self.cursor_row += 1;
-                            let line_len = self
-                                .desc_lines()
-                                .get(self.cursor_row)
-                                .map_or(0, |l| l.len());
+                            let line_len =
+                                self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
                             self.cursor_col = self.cursor_col.min(line_len);
                         }
                     }
@@ -500,20 +538,14 @@ impl TaskEditorState {
                         self.cursor_col = self.cursor_col.saturating_sub(1);
                     }
                     CursorDirection::Right => {
-                        let line_len = self
-                            .desc_lines()
-                            .get(self.cursor_row)
-                            .map_or(0, |l| l.len());
+                        let line_len = self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
                         self.cursor_col = (self.cursor_col + 1).min(line_len);
                     }
                     CursorDirection::Home => {
                         self.cursor_col = 0;
                     }
                     CursorDirection::End => {
-                        let line_len = self
-                            .desc_lines()
-                            .get(self.cursor_row)
-                            .map_or(0, |l| l.len());
+                        let line_len = self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
                         self.cursor_col = line_len;
                     }
                 }
@@ -535,7 +567,7 @@ impl TaskEditorState {
 
     /// Returns (title, description) for saving.
     pub fn to_task_fields(&self) -> (String, String) {
-        (self.title.clone(), self.description.clone())
+        (self.title.clone(), self.description())
     }
 }
 

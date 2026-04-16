@@ -125,17 +125,19 @@ impl App {
                 }
             }
 
-            // Clear expired notifications
+            // Clear expired notifications (may dirty the render state)
             {
                 let mut state = self.state.lock().unwrap();
-                state.clear_expired_notifications();
+                if state.clear_expired_notifications() {
+                    state.mark_render_dirty();
+                }
             }
 
-            // Render — clone state before drawing to minimise lock contention.
-            // The lock is held only for the clone (~microseconds) instead of
-            // the entire render cycle (~10-50 ms), unblocking SSE event
-            // processing, persistence saves, and other async operations.
-            {
+            // Render — only if the state has changed since the last frame.
+            // This avoids expensive full UI re-renders every 100 ms tick when
+            // nothing has changed.
+            let needs_render = self.state.lock().unwrap().take_render_dirty();
+            if needs_render {
                 let state_snapshot = self.state.lock().unwrap().clone();
                 let config = &self.config;
                 self.terminal.draw(|f| {
@@ -160,6 +162,9 @@ impl App {
 
     /// Handle a key event based on current mode.
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
+        // Any key press potentially changes state — mark for re-render.
+        self.state.lock().unwrap().mark_render_dirty();
+
         let mode = {
             let state = self.state.lock().unwrap();
             state.ui.mode.clone()
@@ -336,7 +341,7 @@ impl App {
                 };
                 if let Some(tid) = task_id {
                     if current_col_idx + 1 < visible.len() {
-                        let target_col = visible[current_col_idx + 1];
+                        let target_col = visible[current_col_idx + 1].clone();
                         let mut state = self.state.lock().unwrap();
                         state.move_task(&tid, crate::state::types::KanbanColumn(target_col.to_string()));
                     }
@@ -352,7 +357,7 @@ impl App {
                 };
                 if let Some(tid) = task_id {
                     if current_col_idx > 0 {
-                        let target_col = visible[current_col_idx - 1];
+                        let target_col = visible[current_col_idx - 1].clone();
                         let mut state = self.state.lock().unwrap();
                         state.move_task(
                             &tid,
@@ -434,6 +439,7 @@ impl App {
                                 crate::state::types::NotificationVariant::Warning,
                                 3000,
                             );
+                            state.mark_render_dirty();
                         });
                     } else {
                         tracing::warn!(

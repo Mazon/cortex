@@ -61,11 +61,14 @@ pub fn load_config(path: &Path) -> Result<CortexConfig> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {:?}", path))?;
 
-    let user_config: CortexConfig = toml::from_str(&content)
+    let mut user_config: CortexConfig = toml::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {:?}", path))?;
 
     // Validate
     validate_config(&user_config)?;
+
+    // Populate derived caches (e.g. visible column IDs)
+    user_config.columns.finalize();
 
     tracing::info!("Loaded config from {:?}", path);
     Ok(user_config)
@@ -155,6 +158,7 @@ mod tests {
                     agent: None,
                     auto_progress_to: None,
                 }],
+                visible_ids: vec!["todo".to_string()],
             },
             keybindings: types::KeybindingConfig::default(),
             theme: types::ThemeConfig::default(),

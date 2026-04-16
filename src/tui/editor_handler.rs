@@ -197,11 +197,11 @@ mod tests {
     fn enter_inserts_newline_in_description() {
         let mut editor = new_editor();
         editor.focused_field = EditorField::Description;
-        editor.description = "line1".to_string();
+        editor.set_description("line1");
         // Cursor at end of "line1" (col=5)
         editor.cursor_col = 5;
         handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(editor.description, "line1\n");
+        assert_eq!(editor.description(), "line1\n");
         assert_eq!(editor.cursor_row, 1);
         assert_eq!(editor.cursor_col, 0);
     }

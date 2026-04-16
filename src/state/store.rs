@@ -299,14 +299,16 @@ impl AppState {
         });
     }
 
-    /// Clear expired notifications.
-    pub fn clear_expired_notifications(&mut self) {
+    /// Clear expired notifications. Returns `true` if a notification was removed.
+    pub fn clear_expired_notifications(&mut self) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         if let Some(ref n) = self.ui.notification {
             if n.expires_at <= now {
                 self.ui.notification = None;
+                return true;
             }
         }
+        false
     }
 
     // ─── Session Data ────────────────────────────────────────────────────
@@ -468,6 +470,25 @@ impl AppState {
             .is_ok()
     }
 
+    /// Mark that the state has changed and a re-render is needed.
+    pub fn mark_render_dirty(&self) {
+        self.render_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Atomically take the render-dirty flag (returns `true` and resets to
+    /// `false` if the flag was set; returns `false` otherwise).
+    pub fn take_render_dirty(&self) -> bool {
+        self.render_dirty
+            .compare_exchange(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+    }
+
     // ─── Persistence Restore ─────────────────────────────────────────────
 
     pub fn restore_state(
@@ -577,11 +598,7 @@ impl AppState {
 
     /// Get visible column IDs for the current kanban view.
     pub fn get_visible_column_ids(&self, columns_config: &ColumnsConfig) -> Vec<String> {
-        columns_config
-            .visible_column_ids()
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+        columns_config.visible_column_ids().to_vec()
     }
 }
 
