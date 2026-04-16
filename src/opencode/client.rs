@@ -271,11 +271,15 @@ pub fn convert_sdk_part(part: &Part) -> TaskMessagePart {
                     None, Some(error_state.error.clone()),
                 ),
             };
+            let cached_summary = input.as_ref().map(|i| {
+                crate::state::types::extract_tool_summary(&tool_part.tool, i)
+            });
             TaskMessagePart::Tool {
                 id: tool_part.id.clone(),
                 tool: tool_part.tool.clone(),
                 state: cortex_state,
                 input, output, error,
+                cached_summary,
             }
         }
         Part::StepStart(s) => TaskMessagePart::StepStart { id: s.id.clone() },

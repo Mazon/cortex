@@ -278,7 +278,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
                 TaskMessagePart::Tool {
                     tool,
                     state: tool_state,
-                    input,
+                    cached_summary,
                     error,
                     ..
                 } => {
@@ -295,10 +295,8 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
                         ToolState::Error => Color::Red,
                     };
 
-                    // Tool invocation line
-                    let tool_label = if let Some(input_str) = input {
-                        // Try to extract a short summary from input JSON
-                        let summary = extract_tool_summary(tool, input_str);
+                    // Tool invocation line — use pre-computed summary
+                    let tool_label = if let Some(ref summary) = cached_summary {
                         format!("{} {}({})", state_icon, tool, summary)
                     } else {
                         format!("{} {}", state_icon, tool)
@@ -441,40 +439,4 @@ fn render_footer(f: &mut Frame, area: Rect) {
     let hints = "Esc: back  y: approve  n: reject";
     let para = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     f.render_widget(para, area);
-}
-
-/// Try to extract a short summary from tool input JSON.
-fn extract_tool_summary(tool_name: &str, input: &str) -> String {
-    // Try to parse as JSON and extract a meaningful summary
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(input) {
-        match tool_name {
-            "read" | "Read" => {
-                // Extract file path
-                val.get("file_path")
-                    .or_else(|| val.get("filePath"))
-                    .or_else(|| val.get("path"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| {
-                        // Show just the filename for brevity
-                        s.rsplit('/').next().unwrap_or(s).to_string()
-                    })
-                    .unwrap_or_else(|| "...".to_string())
-            }
-            "write" | "Write" => val
-                .get("file_path")
-                .or_else(|| val.get("filePath"))
-                .or_else(|| val.get("path"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.rsplit('/').next().unwrap_or(s).to_string())
-                .unwrap_or_else(|| "...".to_string()),
-            "grep" | "Grep" | "glob" | "Glob" => val
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("...")
-                .to_string(),
-            _ => "...".to_string(),
-        }
-    } else {
-        "...".to_string()
-    }
 }

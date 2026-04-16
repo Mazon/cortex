@@ -561,6 +561,10 @@ pub enum TaskMessagePart {
         input: Option<String>,
         output: Option<String>,
         error: Option<String>,
+        /// Pre-computed short summary extracted from the tool input JSON.
+        /// Populated once when the message is received, so the render path
+        /// can display it without re-parsing JSON on every frame.
+        cached_summary: Option<String>,
     },
     StepStart {
         id: String,
@@ -628,6 +632,9 @@ pub struct AppState {
     pub task_sessions: HashMap<String, TaskDetailSession>,
     /// Dirty flag for persistence.
     pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Dirty flag for render optimization — set when state changes,
+    /// checked by the TUI event loop to skip unnecessary full re-renders.
+    pub render_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for AppState {
@@ -643,6 +650,40 @@ impl Default for AppState {
             session_to_task: HashMap::new(),
             task_sessions: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
+    }
+}
+
+/// Try to extract a short summary from tool input JSON.
+///
+/// This is called once when a `TaskMessagePart::Tool` is created (in
+/// `convert_sdk_part`), so the render path never has to re-parse JSON.
+pub fn extract_tool_summary(tool_name: &str, input: &str) -> String {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(input) {
+        match tool_name {
+            "read" | "Read" => val
+                .get("file_path")
+                .or_else(|| val.get("filePath"))
+                .or_else(|| val.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.rsplit('/').next().unwrap_or(s).to_string())
+                .unwrap_or_else(|| "...".to_string()),
+            "write" | "Write" => val
+                .get("file_path")
+                .or_else(|| val.get("filePath"))
+                .or_else(|| val.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.rsplit('/').next().unwrap_or(s).to_string())
+                .unwrap_or_else(|| "...".to_string()),
+            "grep" | "Grep" | "glob" | "Glob" => val
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("...")
+                .to_string(),
+            _ => "...".to_string(),
+        }
+    } else {
+        "...".to_string()
     }
 }
