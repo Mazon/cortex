@@ -110,9 +110,23 @@ impl App {
                     match result {
                         Ok(Ok(true)) => {
                             // Event available, read it
-                            if let Ok(Event::Key(key)) = event::read() {
-                                if key.kind == KeyEventKind::Press {
-                                    self.handle_key_event(key);
+                            if let Ok(event) = event::read() {
+                                match event {
+                                    Event::Key(key) => {
+                                        if key.kind == KeyEventKind::Press {
+                                            self.handle_key_event(key);
+                                        }
+                                    }
+                                    Event::Resize(_width, _height) => {
+                                        // Terminal was resized — force a full
+                                        // redraw so layout adapts to the new
+                                        // dimensions.
+                                        self.state
+                                            .lock()
+                                            .unwrap()
+                                            .mark_render_dirty();
+                                    }
+                                    _ => {} // Ignore mouse / paste events
                                 }
                             }
                         }

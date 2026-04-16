@@ -83,15 +83,19 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     f.render_widget(title_block, v_layout[2]);
 
     // Render title text with cursor
-    let title_display = if title_focused && !editor.title.is_empty() {
+    let title_para = if title_focused && !editor.title.is_empty() {
         let col = editor.cursor_col.min(editor.title.len());
-        format!("{}▊", editor.title)
+        Paragraph::new(format!("{}▊", editor.title))
     } else if title_focused {
-        "▊".to_string()
+        Paragraph::new("▊")
+    } else if editor.title.is_empty() {
+        Paragraph::new(Span::styled(
+            "Enter title...",
+            Style::default().fg(Color::DarkGray),
+        ))
     } else {
-        editor.title.clone()
+        Paragraph::new(editor.title.clone())
     };
-    let title_para = Paragraph::new(title_display);
     f.render_widget(title_para, title_inner);
 
     // Set cursor position for title field
@@ -135,12 +139,19 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     // Render description text with scroll (uses pre-computed lines, no split per frame)
     let visible_height = desc_inner.height as usize;
     let desc_lines = editor.desc_lines();
-    let lines: Vec<Line> = desc_lines
-        .iter()
-        .skip(editor.scroll_offset)
-        .take(visible_height)
-        .map(|s| Line::from(s.as_str()))
-        .collect();
+    let lines: Vec<Line> = if desc_lines.is_empty() && !desc_focused {
+        vec![Line::from(Span::styled(
+            "Enter description...",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        desc_lines
+            .iter()
+            .skip(editor.scroll_offset)
+            .take(visible_height)
+            .map(|s| Line::from(s.as_str()))
+            .collect()
+    };
 
     // Add cursor character if focused
     let display_lines = if desc_focused {
