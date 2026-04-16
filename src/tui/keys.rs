@@ -174,4 +174,227 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
         assert_eq!(matcher.match_key(key), Some(Action::NavLeft));
     }
+
+    // ── Default keybinding action matching ──────────────────────────────
+
+    #[test]
+    fn all_default_actions_match_expected_keys() {
+        let config = KeybindingConfig::default();
+        let matcher = KeyMatcher::from_config(&config);
+
+        // Quit: ctrl+q
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+            Some(Action::Quit)
+        );
+
+        // NavLeft: h or Left
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Some(Action::NavLeft)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            Some(Action::NavLeft)
+        );
+
+        // NavRight: l or Right
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
+            Some(Action::NavRight)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            Some(Action::NavRight)
+        );
+
+        // NavUp: k or Up
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
+            Some(Action::NavUp)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            Some(Action::NavUp)
+        );
+
+        // NavDown: j or Down
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+            Some(Action::NavDown)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Some(Action::NavDown)
+        );
+
+        // CreateTask: n
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
+            Some(Action::CreateTask)
+        );
+
+        // EditTask: e
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            Some(Action::EditTask)
+        );
+
+        // MoveForward: m
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
+            Some(Action::MoveForward)
+        );
+
+        // MoveBackward: shift+m
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT)),
+            Some(Action::MoveBackward)
+        );
+
+        // DeleteTask: x
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(Action::DeleteTask)
+        );
+
+        // ViewTask: v
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            Some(Action::ViewTask)
+        );
+
+        // HelpToggle: ?
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+            Some(Action::HelpToggle)
+        );
+
+        // PrevProject: ctrl+k
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL)),
+            Some(Action::PrevProject)
+        );
+
+        // NextProject: ctrl+j
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(Action::NextProject)
+        );
+
+        // NewProject: ctrl+n
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+            Some(Action::NewProject)
+        );
+    }
+
+    #[test]
+    fn unmatched_key_returns_none() {
+        let config = KeybindingConfig::default();
+        let matcher = KeyMatcher::from_config(&config);
+
+        // 'z' has no binding
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+            None
+        );
+
+        // F1 has no binding
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+            None
+        );
+
+        // ctrl+z has no binding
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            None
+        );
+    }
+
+    #[test]
+    fn case_insensitive_matching_without_shift() {
+        let config = KeybindingConfig::default();
+        let matcher = KeyMatcher::from_config(&config);
+
+        // 'N' (uppercase without explicit shift) should still match
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::NONE)),
+            Some(Action::CreateTask)
+        );
+    }
+
+    #[test]
+    fn shift_modifier_requires_exact_case() {
+        let config = KeybindingConfig::default();
+        let matcher = KeyMatcher::from_config(&config);
+
+        // shift+m matches MoveBackward (binding is "shift+m" → Char('m') + SHIFT)
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT)),
+            Some(Action::MoveBackward)
+        );
+
+        // When shift is held, matching is case-EXACT, so 'M' + SHIFT does NOT
+        // match the 'm' + SHIFT binding.
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT)),
+            None
+        );
+    }
+
+    #[test]
+    fn modifiers_must_match_exactly() {
+        let config = KeybindingConfig::default();
+        let matcher = KeyMatcher::from_config(&config);
+
+        // ctrl+h should NOT match NavLeft (which is just 'h' with no modifiers)
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+            None
+        );
+
+        // alt+h should NOT match NavLeft
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT)),
+            None
+        );
+    }
+
+    // ── Parse edge cases ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_key_combo_with_spaces_returns_none() {
+        // The parser splits on '+' without trimming, so "ctrl + q" won't parse.
+        // "ctrl " and " q" don't match known keys.
+        assert!(parse_key_combo("ctrl + q").is_none());
+    }
+
+    #[test]
+    fn parse_key_combo_unknown_returns_none() {
+        assert!(parse_key_combo("frodo").is_none());
+        assert!(parse_key_combo("").is_none());
+    }
+
+    #[test]
+    fn parse_key_combo_space_key() {
+        let key = parse_key_combo("space").unwrap();
+        assert_eq!(key.code, KeyCode::Char(' '));
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn parse_key_combo_special_keys() {
+        assert!(parse_key_combo("enter").is_some());
+        assert!(parse_key_combo("tab").is_some());
+        assert!(parse_key_combo("escape").is_some());
+        assert!(parse_key_combo("esc").is_some());
+        assert!(parse_key_combo("backspace").is_some());
+        assert!(parse_key_combo("delete").is_some());
+        assert!(parse_key_combo("home").is_some());
+        assert!(parse_key_combo("end").is_some());
+        assert!(parse_key_combo("pageup").is_some());
+        assert!(parse_key_combo("pagedown").is_some());
+    }
 }

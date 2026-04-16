@@ -584,3 +584,634 @@ impl AppState {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::types::*;
+
+    /// Helper to create a minimal AppState with a default project and some tasks.
+    fn make_state_with_tasks() -> AppState {
+        let mut state = AppState::default();
+
+        // Add a project
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "Test Project".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        state.add_project(project);
+        state.active_project_id = Some("proj-1".to_string());
+
+        // Add tasks to columns
+        for i in 0..3 {
+            let task = CortexTask {
+                id: format!("task-{}", i),
+                number: (i + 1) as u32,
+                title: format!("Task {}", i),
+                description: String::new(),
+                column: KanbanColumn("todo".to_string()),
+                session_id: None,
+                agent_type: TaskAgentType::None,
+                agent_status: AgentStatus::Pending,
+                entered_column_at: 1000,
+                last_activity_at: 1000,
+                error_message: None,
+                plan_output: None,
+                pending_permission_count: 0,
+                pending_question_count: 0,
+                created_at: 1000,
+                updated_at: 1000,
+                project_id: "proj-1".to_string(),
+            };
+            state.tasks.insert(task.id.clone(), task.clone());
+            state
+                .kanban
+                .columns
+                .entry("todo".to_string())
+                .or_default()
+                .push(task.id);
+        }
+
+        // Set initial focus
+        state.ui.focused_column = "todo".to_string();
+        state.kanban.focused_column_index = 0;
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 0);
+        state.ui.focused_task_id = Some("task-0".to_string());
+
+        state
+    }
+
+    // ── Detail mode (Escape from detail view) ───────────────────────────
+
+    #[test]
+    fn open_task_detail_sets_panel_and_viewing_id() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.focused_panel, FocusedPanel::Kanban);
+        assert_eq!(state.ui.viewing_task_id, None);
+
+        state.open_task_detail("task-1");
+        assert_eq!(state.ui.focused_panel, FocusedPanel::TaskDetail);
+        assert_eq!(state.ui.viewing_task_id, Some("task-1".to_string()));
+    }
+
+    #[test]
+    fn close_task_detail_resets_to_kanban() {
+        let mut state = make_state_with_tasks();
+        state.open_task_detail("task-1");
+        assert_eq!(state.ui.focused_panel, FocusedPanel::TaskDetail);
+
+        state.close_task_detail();
+        assert_eq!(state.ui.focused_panel, FocusedPanel::Kanban);
+        assert_eq!(state.ui.viewing_task_id, None);
+    }
+
+    #[test]
+    fn open_nonexistent_task_detail_still_sets_panel() {
+        let mut state = make_state_with_tasks();
+        // open_task_detail doesn't check if the task exists
+        state.open_task_detail("nonexistent");
+        assert_eq!(state.ui.focused_panel, FocusedPanel::TaskDetail);
+        assert_eq!(state.ui.viewing_task_id, Some("nonexistent".to_string()));
+    }
+
+    // ── Navigation: column focusing ─────────────────────────────────────
+
+    #[test]
+    fn set_focused_column_updates_column_and_syncs_task_id() {
+        let mut state = make_state_with_tasks();
+        // Add tasks to another column
+        state
+            .kanban
+            .columns
+            .entry("planning".to_string())
+            .or_default()
+            .push("task-1".to_string());
+
+        state.set_focused_column("planning");
+        assert_eq!(state.ui.focused_column, "planning");
+        assert_eq!(state.ui.focused_task_id, Some("task-1".to_string()));
+    }
+
+    #[test]
+    fn set_focused_column_empty_column_keeps_existing_task_id() {
+        let mut state = make_state_with_tasks();
+        // Focusing a column that doesn't exist in kanban.columns
+        // does NOT clear focused_task_id (the column must exist in kanban)
+        state.set_focused_column("empty-column");
+        assert_eq!(state.ui.focused_column, "empty-column");
+        // focused_task_id is NOT cleared because the column isn't in kanban.columns
+        assert_eq!(state.ui.focused_task_id, Some("task-0".to_string()));
+    }
+
+    #[test]
+    fn clamp_focused_task_index_clamps_to_column_length() {
+        let mut state = make_state_with_tasks();
+        // "todo" has 3 tasks (indices 0-2)
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 99);
+
+        state.clamp_focused_task_index("todo");
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&2));
+        assert_eq!(state.ui.focused_task_id, Some("task-2".to_string()));
+    }
+
+    #[test]
+    fn clamp_focused_task_index_empty_column_resets_to_zero() {
+        let mut state = make_state_with_tasks();
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 5);
+        // Remove all tasks from todo
+        state.kanban.columns.get_mut("todo").unwrap().clear();
+
+        state.clamp_focused_task_index("todo");
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&0));
+        assert_eq!(state.ui.focused_task_id, None);
+    }
+
+    // ── Navigation: task index movement (simulates NavUp/NavDown) ───────
+
+    #[test]
+    fn nav_up_decreases_task_index() {
+        let mut state = make_state_with_tasks();
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 2);
+
+        let col_id = state.ui.focused_column.clone();
+        let current = state
+            .kanban
+            .focused_task_index
+            .get(&col_id)
+            .copied()
+            .unwrap_or(0);
+        if current > 0 {
+            state
+                .kanban
+                .focused_task_index
+                .insert(col_id.clone(), current - 1);
+        }
+
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&1));
+    }
+
+    #[test]
+    fn nav_up_does_not_go_below_zero() {
+        let mut state = make_state_with_tasks();
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 0);
+
+        let col_id = state.ui.focused_column.clone();
+        let current = state
+            .kanban
+            .focused_task_index
+            .get(&col_id)
+            .copied()
+            .unwrap_or(0);
+        if current > 0 {
+            state
+                .kanban
+                .focused_task_index
+                .insert(col_id.clone(), current - 1);
+        }
+
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&0));
+    }
+
+    #[test]
+    fn nav_down_increases_task_index_within_bounds() {
+        let mut state = make_state_with_tasks();
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 0);
+
+        let col_id = state.ui.focused_column.clone();
+        let task_count = state
+            .kanban
+            .columns
+            .get(&col_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let current = state
+            .kanban
+            .focused_task_index
+            .get(&col_id)
+            .copied()
+            .unwrap_or(0);
+        if current + 1 < task_count {
+            state
+                .kanban
+                .focused_task_index
+                .insert(col_id.clone(), current + 1);
+        }
+
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&1));
+    }
+
+    #[test]
+    fn nav_down_does_not_exceed_column_length() {
+        let mut state = make_state_with_tasks();
+        // 3 tasks, index at last (2)
+        state
+            .kanban
+            .focused_task_index
+            .insert("todo".to_string(), 2);
+
+        let col_id = state.ui.focused_column.clone();
+        let task_count = state
+            .kanban
+            .columns
+            .get(&col_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let current = state
+            .kanban
+            .focused_task_index
+            .get(&col_id)
+            .copied()
+            .unwrap_or(0);
+        if current + 1 < task_count {
+            state
+                .kanban
+                .focused_task_index
+                .insert(col_id.clone(), current + 1);
+        }
+
+        // Should remain at 2
+        assert_eq!(state.kanban.focused_task_index.get("todo"), Some(&2));
+    }
+
+    // ── Task editor: open/create ────────────────────────────────────────
+
+    #[test]
+    fn open_task_editor_create_sets_mode_and_editor() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert!(state.ui.task_editor.is_none());
+
+        state.open_task_editor_create("todo");
+        assert_eq!(state.ui.mode, AppMode::TaskEditor);
+        assert!(state.ui.task_editor.is_some());
+
+        let editor = state.get_task_editor().unwrap();
+        assert_eq!(editor.task_id, None); // creating new
+        assert_eq!(editor.column_id, Some("todo".to_string()));
+        assert_eq!(editor.focused_field, EditorField::Title);
+    }
+
+    #[test]
+    fn open_task_editor_edit_populates_from_existing_task() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_edit("task-1");
+
+        assert_eq!(state.ui.mode, AppMode::TaskEditor);
+        let editor = state.get_task_editor().unwrap();
+        assert_eq!(editor.task_id, Some("task-1".to_string()));
+        assert_eq!(editor.title, "Task 1");
+        assert_eq!(editor.focused_field, EditorField::Title);
+    }
+
+    #[test]
+    fn open_task_editor_edit_nonexistent_does_nothing() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_edit("nonexistent");
+
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert!(state.ui.task_editor.is_none());
+    }
+
+    // ── Task editor: save ───────────────────────────────────────────────
+
+    #[test]
+    fn save_task_editor_create_new_task() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_create("todo");
+
+        // Set title and description via editor
+        if let Some(editor) = state.get_task_editor_mut() {
+            editor.title = "New Task".to_string();
+            editor.description = "Some desc".to_string();
+        }
+
+        let result = state.save_task_editor();
+        assert!(result.is_ok());
+        let task_id = result.unwrap();
+
+        // Mode should be back to normal (save doesn't change mode, but the
+        // App handle_editor_key method does that after save)
+        // Verify task was created
+        assert!(state.tasks.contains_key(&task_id));
+        let task = state.tasks.get(&task_id).unwrap();
+        assert_eq!(task.title, "New Task");
+        assert_eq!(task.description, "Some desc");
+    }
+
+    #[test]
+    fn save_task_editor_empty_title_fails() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_create("todo");
+
+        // Leave title empty
+        let result = state.save_task_editor();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn save_task_editor_edit_existing() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_edit("task-1");
+
+        if let Some(editor) = state.get_task_editor_mut() {
+            editor.title = "Updated Title".to_string();
+        }
+
+        let result = state.save_task_editor();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "task-1");
+
+        let task = state.tasks.get("task-1").unwrap();
+        assert_eq!(task.title, "Updated Title");
+    }
+
+    #[test]
+    fn save_task_editor_no_editor_open_fails() {
+        let mut state = make_state_with_tasks();
+        let result = state.save_task_editor();
+        assert!(result.is_err());
+    }
+
+    // ── Task editor: cancel ─────────────────────────────────────────────
+
+    #[test]
+    fn cancel_task_editor_resets_mode() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_create("todo");
+        assert_eq!(state.ui.mode, AppMode::TaskEditor);
+
+        state.cancel_task_editor();
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert!(state.ui.task_editor.is_none());
+    }
+
+    #[test]
+    fn cancel_task_editor_discards_changes() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_create("todo");
+
+        if let Some(editor) = state.get_task_editor_mut() {
+            editor.title = "Discard Me".to_string();
+        }
+
+        state.cancel_task_editor();
+        // The task should NOT have been created
+        assert!(!state.tasks.values().any(|t| t.title == "Discard Me"));
+    }
+
+    // ── Task operations: delete ─────────────────────────────────────────
+
+    #[test]
+    fn delete_task_removes_from_state_and_kanban() {
+        let mut state = make_state_with_tasks();
+        assert!(state.tasks.contains_key("task-1"));
+
+        let deleted = state.delete_task("task-1");
+        assert!(deleted);
+        assert!(!state.tasks.contains_key("task-1"));
+        assert!(!state
+            .kanban
+            .columns
+            .get("todo")
+            .unwrap()
+            .contains(&"task-1".to_string()));
+    }
+
+    #[test]
+    fn delete_nonexistent_task_returns_false() {
+        let mut state = make_state_with_tasks();
+        let deleted = state.delete_task("nonexistent");
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn delete_task_clears_session_mapping() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-1").unwrap().session_id = Some("session-abc".to_string());
+        state
+            .session_to_task
+            .insert("session-abc".to_string(), "task-1".to_string());
+
+        state.delete_task("task-1");
+        assert!(!state.session_to_task.contains_key("session-abc"));
+    }
+
+    // ── Task operations: move ───────────────────────────────────────────
+
+    #[test]
+    fn move_task_between_columns() {
+        let mut state = make_state_with_tasks();
+        // Add a planning column
+        state
+            .kanban
+            .columns
+            .entry("planning".to_string())
+            .or_default();
+
+        let moved = state.move_task("task-0", KanbanColumn("planning".to_string()));
+        assert!(moved);
+
+        // Task column updated
+        assert_eq!(state.tasks.get("task-0").unwrap().column.0, "planning");
+        // Removed from todo
+        assert!(!state
+            .kanban
+            .columns
+            .get("todo")
+            .unwrap()
+            .contains(&"task-0".to_string()));
+        // Added to planning
+        assert!(state
+            .kanban
+            .columns
+            .get("planning")
+            .unwrap()
+            .contains(&"task-0".to_string()));
+    }
+
+    #[test]
+    fn move_nonexistent_task_returns_false() {
+        let mut state = make_state_with_tasks();
+        let moved = state.move_task("nonexistent", KanbanColumn("planning".to_string()));
+        assert!(!moved);
+    }
+
+    #[test]
+    fn move_task_updates_entered_column_at() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().entered_column_at = 1000;
+
+        state.move_task("task-0", KanbanColumn("todo".to_string()));
+        // Should be updated to current time (much larger than 1000)
+        assert!(state.tasks.get("task-0").unwrap().entered_column_at > 1000);
+    }
+
+    // ── Notifications ───────────────────────────────────────────────────
+
+    #[test]
+    fn set_notification_stores_message_and_variant() {
+        let mut state = AppState::default();
+        state.set_notification("Hello world".to_string(), NotificationVariant::Info, 5000);
+
+        let notif = state.ui.notification.as_ref().unwrap();
+        assert_eq!(notif.message, "Hello world");
+        assert_eq!(notif.variant, NotificationVariant::Info);
+    }
+
+    #[test]
+    fn set_notification_overwrites_previous() {
+        let mut state = AppState::default();
+        state.set_notification("First".to_string(), NotificationVariant::Info, 5000);
+        state.set_notification("Second".to_string(), NotificationVariant::Warning, 5000);
+
+        let notif = state.ui.notification.as_ref().unwrap();
+        assert_eq!(notif.message, "Second");
+        assert_eq!(notif.variant, NotificationVariant::Warning);
+    }
+
+    #[test]
+    fn clear_expired_notifications_removes_old() {
+        let mut state = AppState::default();
+        // Set notification that expired 1 second ago
+        let expires_at = chrono::Utc::now().timestamp_millis() - 1000;
+        state.ui.notification = Some(Notification {
+            message: "Old".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at,
+        });
+
+        state.clear_expired_notifications();
+        assert!(state.ui.notification.is_none());
+    }
+
+    #[test]
+    fn clear_expired_notifications_keeps_fresh() {
+        let mut state = AppState::default();
+        // Set notification that expires far in the future
+        let expires_at = chrono::Utc::now().timestamp_millis() + 60_000;
+        state.ui.notification = Some(Notification {
+            message: "Fresh".to_string(),
+            variant: NotificationVariant::Success,
+            expires_at,
+        });
+
+        state.clear_expired_notifications();
+        assert!(state.ui.notification.is_some());
+        assert_eq!(state.ui.notification.as_ref().unwrap().message, "Fresh");
+    }
+
+    // ── Project selection ───────────────────────────────────────────────
+
+    #[test]
+    fn select_project_updates_active_id() {
+        let mut state = AppState::default();
+        let p1 = CortexProject {
+            id: "p1".to_string(),
+            name: "Project 1".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let p2 = CortexProject {
+            id: "p2".to_string(),
+            name: "Project 2".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+        };
+        state.add_project(p1);
+        state.add_project(p2);
+
+        state.select_project("p2");
+        assert_eq!(state.active_project_id, Some("p2".to_string()));
+    }
+
+    // ── Dirty flag ──────────────────────────────────────────────────────
+
+    #[test]
+    fn mark_dirty_sets_flag() {
+        let state = AppState::default();
+        assert!(!state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+        state.mark_dirty();
+        assert!(state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn take_dirty_clears_flag() {
+        let state = AppState::default();
+        state.mark_dirty();
+        assert!(state.take_dirty()); // returns true, clears flag
+        assert!(!state.take_dirty()); // returns false
+    }
+
+    // ── Focused task helpers ────────────────────────────────────────────
+
+    #[test]
+    fn get_focused_task_returns_correct_task() {
+        let mut state = make_state_with_tasks();
+        state.ui.focused_task_id = Some("task-1".to_string());
+        let task = state.get_focused_task().unwrap();
+        assert_eq!(task.id, "task-1");
+    }
+
+    #[test]
+    fn get_focused_task_returns_none_when_unset() {
+        let mut state = make_state_with_tasks();
+        state.ui.focused_task_id = None;
+        assert!(state.get_focused_task().is_none());
+    }
+
+    #[test]
+    fn set_focused_task_updates_id() {
+        let mut state = make_state_with_tasks();
+        state.set_focused_task(Some("task-2".to_string()));
+        assert_eq!(state.ui.focused_task_id, Some("task-2".to_string()));
+
+        state.set_focused_task(None);
+        assert_eq!(state.ui.focused_task_id, None);
+    }
+
+    // ── Task editor: get_task_editor_mut ────────────────────────────────
+
+    #[test]
+    fn get_task_editor_mut_allows_mutation() {
+        let mut state = make_state_with_tasks();
+        state.open_task_editor_create("todo");
+
+        if let Some(editor) = state.get_task_editor_mut() {
+            editor.title = "Mutated".to_string();
+            editor.cursor_col = 7;
+        }
+
+        assert_eq!(state.get_task_editor().unwrap().title, "Mutated");
+        assert_eq!(state.get_task_editor().unwrap().cursor_col, 7);
+    }
+
+    #[test]
+    fn get_task_editor_mut_returns_none_when_closed() {
+        let mut state = make_state_with_tasks();
+        assert!(state.get_task_editor_mut().is_none());
+    }
+}
