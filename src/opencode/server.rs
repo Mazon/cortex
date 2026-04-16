@@ -181,6 +181,7 @@ impl Default for OpenCodeServer {
 pub struct ServerManager {
     servers: HashMap<String, OpenCodeServer>,
     base_port: u16,
+    next_port_counter: u16,
 }
 
 impl ServerManager {
@@ -188,6 +189,7 @@ impl ServerManager {
         Self {
             servers: HashMap::new(),
             base_port,
+            next_port_counter: 0,
         }
     }
 
@@ -231,8 +233,10 @@ impl ServerManager {
         self.servers.get(project_id).map(|s| s.url().to_string())
     }
 
-    fn next_port(&self, project_id: &str) -> u16 {
-        self.base_port + self.servers.len() as u16
+    fn next_port(&mut self, _project_id: &str) -> u16 {
+        let port = self.base_port + self.next_port_counter;
+        self.next_port_counter += 1;
+        port
     }
 }
 
