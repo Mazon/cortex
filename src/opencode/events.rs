@@ -17,6 +17,7 @@ pub async fn sse_event_loop(
     state: Arc<Mutex<AppState>>,
 ) {
     let mut backoff_ms: u64 = 2000;
+    let mut reconnect_count: u64 = 0;
 
     loop {
         debug!("Subscribing to SSE events from {}", client.base_url());
@@ -24,7 +25,15 @@ pub async fn sse_event_loop(
         match client.subscribe_to_events().await {
             Ok(stream) => {
                 backoff_ms = 2000; // Reset backoff on successful connection
+                reconnect_count += 1;
                 let mut stream = stream;
+
+                if reconnect_count > 1 {
+                    debug!(
+                        "SSE reconnected successfully (reconnect #{})",
+                        reconnect_count - 1,
+                    );
+                }
 
                 while let Some(event_result) = stream.next().await {
                     let event = match event_result {
