@@ -1,9 +1,11 @@
 //! TUI App struct and event loop.
 
 use crate::config::types::CortexConfig;
+use crate::opencode::client::OpenCodeClient;
 use crate::state::types::AppState;
 use crate::tui::{CrosstermBackend, Terminal};
 use crossterm::event::{self, Event, KeyEventKind};
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +16,8 @@ pub struct App {
     pub config: CortexConfig,
     pub terminal: Terminal,
     pub should_quit: bool,
+    /// OpenCode clients keyed by project ID, used for API calls from the TUI.
+    pub opencode_clients: HashMap<String, OpenCodeClient>,
 }
 
 impl App {
@@ -33,7 +37,11 @@ impl App {
     }
 
     /// Create a new App instance.
-    pub fn new(state: Arc<Mutex<AppState>>, config: CortexConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        state: Arc<Mutex<AppState>>,
+        config: CortexConfig,
+        opencode_clients: HashMap<String, OpenCodeClient>,
+    ) -> anyhow::Result<Self> {
         let backend = CrosstermBackend::new(std::io::stdout());
         let terminal = ratatui::Terminal::new(backend)?;
 
@@ -42,6 +50,7 @@ impl App {
             config,
             terminal,
             should_quit: false,
+            opencode_clients,
         })
     }
 
@@ -389,12 +398,55 @@ impl App {
                 };
                 if let Some(sid) = session_id {
                     tracing::info!("Abort session requested: {}", sid);
-                    let mut state = self.state.lock().unwrap();
-                    state.set_notification(
-                        "Session abort requested".to_string(),
-                        crate::state::types::NotificationVariant::Warning,
-                        3000,
-                    );
+
+                    // Find the client for the active project and spawn an abort task.
+                    let client = {
+                        let state = self.state.lock().unwrap();
+                        state
+                            .active_project_id
+                            .as_ref()
+                            .and_then(|pid| self.opencode_clients.get(pid))
+                            .cloned()
+                    };
+
+                    if let Some(client) = client {
+                        let state = self.state.clone();
+                        tokio::spawn(async move {
+                            match client.abort_session(&sid).await {
+                                Ok(aborted) => {
+                                    if aborted {
+                                        tracing::info!("Session {} aborted successfully", sid);
+                                    } else {
+                                        tracing::warn!(
+                                            "Session {} abort returned false (may already be done)",
+                                            sid
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to abort session {}: {}", sid, e);
+                                }
+                            }
+                            // Update notification after attempt
+                            let mut state = state.lock().unwrap();
+                            state.set_notification(
+                                format!("Session abort requested: {}", sid),
+                                crate::state::types::NotificationVariant::Warning,
+                                3000,
+                            );
+                        });
+                    } else {
+                        tracing::warn!(
+                            "No OpenCode client available for aborting session {}",
+                            sid
+                        );
+                        let mut state = self.state.lock().unwrap();
+                        state.set_notification(
+                            "No client available to abort session".to_string(),
+                            crate::state::types::NotificationVariant::Error,
+                            3000,
+                        );
+                    }
                 }
             }
             None => {} // Unmatched key, ignore
