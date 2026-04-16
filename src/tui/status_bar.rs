@@ -32,7 +32,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     };
 
     // Key hints (right)
-    let hints = "?:help  n:new  e:edit  m:move  x:del  ^j/^k:proj  ^q:quit";
+    let hints = "?:help  n:new  e:edit  m:move  x:del  r:rename  d:dir  ^j/^k:proj  ^q:quit";
 
     // Build the status bar using a horizontal layout
     let h_layout = Layout::default()

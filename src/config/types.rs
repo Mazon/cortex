@@ -313,6 +313,10 @@ pub struct KeybindingConfig {
     pub next_project: String,
     #[serde(default = "default_new_project")]
     pub new_project: String,
+    #[serde(default = "default_rename_project")]
+    pub rename_project: String,
+    #[serde(default = "default_set_working_directory")]
+    pub set_working_directory: String,
     #[serde(default = "default_abort_session")]
     pub abort_session: String,
     #[serde(default = "default_help_toggle")]
@@ -364,6 +368,12 @@ fn default_next_project() -> String {
 fn default_new_project() -> String {
     "ctrl+n".to_string()
 }
+fn default_rename_project() -> String {
+    "r".to_string()
+}
+fn default_set_working_directory() -> String {
+    "d".to_string()
+}
 fn default_abort_session() -> String {
     "ctrl+a a".to_string()
 }
@@ -391,6 +401,8 @@ impl Default for KeybindingConfig {
             prev_project: default_prev_project(),
             next_project: default_next_project(),
             new_project: default_new_project(),
+            rename_project: default_rename_project(),
+            set_working_directory: default_set_working_directory(),
             abort_session: default_abort_session(),
             help_toggle: default_help_toggle(),
             quit: default_quit(),

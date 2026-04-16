@@ -5,6 +5,7 @@ pub mod editor_handler;
 pub mod help;
 pub mod kanban;
 pub mod keys;
+pub mod prompt;
 pub mod sidebar;
 pub mod status_bar;
 pub mod task_card;
@@ -36,6 +37,14 @@ pub fn render(
         crate::state::types::AppMode::Help => {
             render_normal(f, &state, config);
             help::render_help_overlay(f);
+        }
+        crate::state::types::AppMode::ProjectRename => {
+            render_normal(f, &state, config);
+            prompt::render_input_prompt(f, &state);
+        }
+        crate::state::types::AppMode::InputPrompt => {
+            render_normal(f, &state, config);
+            prompt::render_input_prompt(f, &state);
         }
     }
 }

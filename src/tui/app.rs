@@ -152,6 +152,14 @@ impl App {
                             crate::tui::render_normal(f, &state_snapshot, config);
                             crate::tui::help::render_help_overlay(f);
                         }
+                        crate::state::types::AppMode::ProjectRename => {
+                            crate::tui::render_normal(f, &state_snapshot, config);
+                            crate::tui::prompt::render_input_prompt(f, &state_snapshot);
+                        }
+                        crate::state::types::AppMode::InputPrompt => {
+                            crate::tui::render_normal(f, &state_snapshot, config);
+                            crate::tui::prompt::render_input_prompt(f, &state_snapshot);
+                        }
                     }
                 })?;
             }
@@ -181,6 +189,12 @@ impl App {
                 // Any key dismisses help
                 let mut state = self.state.lock().unwrap();
                 state.ui.mode = crate::state::types::AppMode::Normal;
+            }
+            crate::state::types::AppMode::ProjectRename => {
+                self.handle_rename_key(key);
+            }
+            crate::state::types::AppMode::InputPrompt => {
+                self.handle_input_prompt_key(key);
             }
         }
     }
@@ -268,6 +282,14 @@ impl App {
                     crate::state::types::NotificationVariant::Success,
                     3000,
                 );
+            }
+            Some(Action::RenameProject) => {
+                let mut state = self.state.lock().unwrap();
+                state.open_project_rename();
+            }
+            Some(Action::SetWorkingDirectory) => {
+                let mut state = self.state.lock().unwrap();
+                state.open_set_working_directory();
             }
             Some(Action::NavLeft) => {
                 let visible = self.config.columns.visible_column_ids();
@@ -470,6 +492,147 @@ impl App {
                 }
             }
             None => {} // Unmatched key, ignore
+        }
+    }
+
+    /// Handle key events in ProjectRename mode.
+    ///
+    /// Supports basic text editing: character insertion, backspace, delete,
+    /// cursor movement, Enter to confirm, and Escape to cancel.
+    fn handle_rename_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Enter => {
+                let mut state = self.state.lock().unwrap();
+                match state.submit_project_rename() {
+                    Some((_old, new)) => {
+                        state.set_notification(
+                            format!("Project renamed to \"{}\"", new),
+                            crate::state::types::NotificationVariant::Success,
+                            3000,
+                        );
+                    }
+                    None => {
+                        // Empty name — show warning and stay in rename mode
+                        state.set_notification(
+                            "Project name cannot be empty".to_string(),
+                            crate::state::types::NotificationVariant::Warning,
+                            2000,
+                        );
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                let mut state = self.state.lock().unwrap();
+                state.cancel_project_rename();
+            }
+            KeyCode::Char(c) => {
+                let mut state = self.state.lock().unwrap();
+                let pos = state.ui.input_cursor.min(state.ui.input_text.len());
+                state.ui.input_text.insert(pos, c);
+                state.ui.input_cursor = pos + 1;
+            }
+            KeyCode::Backspace => {
+                let mut state = self.state.lock().unwrap();
+                if state.ui.input_cursor > 0 {
+                    state.ui.input_cursor -= 1;
+                    let pos = state.ui.input_cursor;
+                    state.ui.input_text.remove(pos);
+                }
+            }
+            KeyCode::Delete => {
+                let mut state = self.state.lock().unwrap();
+                let pos = state.ui.input_cursor;
+                if pos < state.ui.input_text.len() {
+                    state.ui.input_text.remove(pos);
+                }
+            }
+            KeyCode::Left => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = state.ui.input_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                let mut state = self.state.lock().unwrap();
+                let new_pos = state.ui.input_cursor + 1;
+                state.ui.input_cursor = new_pos.min(state.ui.input_text.len());
+            }
+            KeyCode::Home => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = 0;
+            }
+            KeyCode::End => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = state.ui.input_text.len();
+            }
+            _ => {} // Ignore other keys
+        }
+    }
+
+    /// Handle key events in InputPrompt mode (used for working directory).
+    fn handle_input_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Enter => {
+                let mut state = self.state.lock().unwrap();
+                if state.submit_working_directory() {
+                    state.set_notification(
+                        "Working directory updated".to_string(),
+                        crate::state::types::NotificationVariant::Success,
+                        3000,
+                    );
+                } else {
+                    state.set_notification(
+                        "Working directory cannot be empty".to_string(),
+                        crate::state::types::NotificationVariant::Warning,
+                        2000,
+                    );
+                }
+            }
+            KeyCode::Esc => {
+                let mut state = self.state.lock().unwrap();
+                state.cancel_working_directory();
+            }
+            KeyCode::Char(c) => {
+                let mut state = self.state.lock().unwrap();
+                let pos = state.ui.input_cursor.min(state.ui.input_text.len());
+                state.ui.input_text.insert(pos, c);
+                state.ui.input_cursor = pos + 1;
+            }
+            KeyCode::Backspace => {
+                let mut state = self.state.lock().unwrap();
+                if state.ui.input_cursor > 0 {
+                    state.ui.input_cursor -= 1;
+                    let pos = state.ui.input_cursor;
+                    state.ui.input_text.remove(pos);
+                }
+            }
+            KeyCode::Delete => {
+                let mut state = self.state.lock().unwrap();
+                let pos = state.ui.input_cursor;
+                if pos < state.ui.input_text.len() {
+                    state.ui.input_text.remove(pos);
+                }
+            }
+            KeyCode::Left => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = state.ui.input_cursor.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                let mut state = self.state.lock().unwrap();
+                let new_pos = state.ui.input_cursor + 1;
+                state.ui.input_cursor = new_pos.min(state.ui.input_text.len());
+            }
+            KeyCode::Home => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = 0;
+            }
+            KeyCode::End => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.input_cursor = state.ui.input_text.len();
+            }
+            _ => {}
         }
     }
 

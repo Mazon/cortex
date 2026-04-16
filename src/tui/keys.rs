@@ -12,6 +12,7 @@ pub enum Action {
     PrevProject,
     NextProject,
     NewProject,
+    RenameProject,
     // Kanban navigation
     NavLeft,
     NavRight,
@@ -25,6 +26,8 @@ pub enum Action {
     DeleteTask,
     ViewTask,
     AbortSession,
+    // Project operations
+    SetWorkingDirectory,
 }
 
 /// Matches crossterm KeyEvents to Actions based on config.
@@ -43,6 +46,7 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.prev_project, Action::PrevProject);
         parse_and_add(&mut bindings, &config.next_project, Action::NextProject);
         parse_and_add(&mut bindings, &config.new_project, Action::NewProject);
+        parse_and_add(&mut bindings, &config.rename_project, Action::RenameProject);
         parse_and_add(&mut bindings, &config.kanban_left, Action::NavLeft);
         parse_and_add(&mut bindings, &config.kanban_right, Action::NavRight);
         parse_and_add(&mut bindings, &config.kanban_up, Action::NavUp);
@@ -62,6 +66,11 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
+        parse_and_add(
+            &mut bindings,
+            &config.set_working_directory,
+            Action::SetWorkingDirectory,
+        );
 
         Self { bindings }
     }

@@ -169,6 +169,10 @@ pub enum AppMode {
     Normal,
     TaskEditor,
     Help,
+    /// Inline text input prompt (e.g., set working directory).
+    InputPrompt,
+    /// Project rename prompt.
+    ProjectRename,
 }
 
 /// Which field is focused in the task editor.
@@ -294,8 +298,15 @@ pub struct UIState {
     pub viewing_task_id: Option<String>,
     /// Active notification toast, if any.
     pub notification: Option<Notification>,
-    /// Text input buffer (used for prompts).
+    /// Text input buffer (used for prompts like project rename).
     pub input_text: String,
+    /// Cursor position within `input_text` (byte offset).
+    pub input_cursor: usize,
+    /// Label displayed above the input prompt (e.g., "Rename project:").
+    pub prompt_label: String,
+    /// Context string identifying what action to perform on submit
+    /// (e.g., `"rename_project"`).
+    pub prompt_context: Option<String>,
     /// Task editor state when in `AppMode::TaskEditor`.
     pub task_editor: Option<TaskEditorState>,
 }
@@ -310,6 +321,9 @@ impl Default for UIState {
             viewing_task_id: None,
             notification: None,
             input_text: String::new(),
+            input_cursor: 0,
+            prompt_label: String::new(),
+            prompt_context: None,
             task_editor: None,
         }
     }

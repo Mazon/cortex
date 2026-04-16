@@ -32,6 +32,7 @@ pub fn render_help_overlay(f: &mut Frame) {
    ?             Toggle this help overlay
    Ctrl+J / K    Next / Previous project
    Ctrl+N        New project
+   R             Rename active project
 
  Kanban Keys
  ─────────────────────────────────────────
@@ -45,6 +46,8 @@ pub fn render_help_overlay(f: &mut Frame) {
    Shift+M       Move task backward (← column)
    X             Delete selected task
    V             View task detail
+   R             Rename project
+   D             Set working directory
    Ctrl+A A      Abort running session
 
  Task Editor Keys (fixed, not configurable)
@@ -60,7 +63,7 @@ pub fn render_help_overlay(f: &mut Frame) {
    Delete        Delete character at cursor
 
  Press any key to close this overlay.
-"#;
+ "#;
 
     let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
     f.render_widget(help_para, inner);

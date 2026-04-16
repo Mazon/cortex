@@ -31,6 +31,76 @@ impl AppState {
         self.rebuild_kanban_for_project(project_id);
     }
 
+    /// Open the project rename prompt, pre-populating the input with the
+    /// current project name. No-op if no project is active.
+    pub fn open_project_rename(&mut self) {
+        let current_name = match self.active_project_id.as_ref() {
+            Some(pid) => self
+                .projects
+                .iter()
+                .find(|p| &p.id == pid)
+                .map(|p| p.name.clone()),
+            None => None,
+        };
+
+        match current_name {
+            Some(name) => {
+                self.ui.input_text = name;
+                self.ui.input_cursor = self.ui.input_text.len();
+                self.ui.prompt_label = "Rename project to:".to_string();
+                self.ui.prompt_context = Some("rename_project".to_string());
+                self.ui.mode = AppMode::ProjectRename;
+            }
+            None => {
+                self.set_notification(
+                    "No active project to rename".to_string(),
+                    NotificationVariant::Warning,
+                    3000,
+                );
+            }
+        }
+    }
+
+    /// Submit the project rename. Applies the new name to the active project.
+    /// Returns the old and new names, or `None` if no project is active.
+    pub fn submit_project_rename(&mut self) -> Option<(String, String)> {
+        let new_name = if self.ui.input_text.trim().is_empty() {
+            return None;
+        } else {
+            self.ui.input_text.trim().to_string()
+        };
+
+        let project_id = self.active_project_id.clone()?;
+        let old_name = self
+            .projects
+            .iter_mut()
+            .find(|p| p.id == project_id)
+            .map(|p| {
+                let old = p.name.clone();
+                p.name = new_name.clone();
+                old
+            })?;
+
+        // Reset prompt state and return to normal mode
+        self.ui.input_text.clear();
+        self.ui.input_cursor = 0;
+        self.ui.prompt_label.clear();
+        self.ui.prompt_context = None;
+        self.ui.mode = AppMode::Normal;
+        self.mark_dirty();
+        self.mark_render_dirty();
+        Some((old_name, new_name))
+    }
+
+    /// Cancel the project rename prompt, discarding changes.
+    pub fn cancel_project_rename(&mut self) {
+        self.ui.input_text.clear();
+        self.ui.input_cursor = 0;
+        self.ui.prompt_label.clear();
+        self.ui.prompt_context = None;
+        self.ui.mode = AppMode::Normal;
+    }
+
     // ─── Task Methods ────────────────────────────────────────────────────
 
     /// Create a new task in the "todo" column. Returns the created task.
@@ -312,6 +382,79 @@ impl AppState {
     /// Get a mutable reference to the current task editor state, if open.
     pub fn get_task_editor_mut(&mut self) -> Option<&mut TaskEditorState> {
         self.ui.task_editor.as_mut()
+    }
+
+    // ─── Working Directory ────────────────────────────────────────────────
+
+    /// Open an input prompt to set the active project's working directory.
+    /// Pre-populates the input with the current working directory.
+    /// No-op if no project is active.
+    pub fn open_set_working_directory(&mut self) {
+        let current_dir = match self.active_project_id.as_ref() {
+            Some(pid) => self
+                .projects
+                .iter()
+                .find(|p| &p.id == pid)
+                .map(|p| p.working_directory.clone()),
+            None => None,
+        };
+
+        match current_dir {
+            Some(dir) => {
+                self.ui.input_text = dir;
+                self.ui.input_cursor = self.ui.input_text.len();
+                self.ui.prompt_label = "Set working directory:".to_string();
+                self.ui.prompt_context = Some("set_working_directory".to_string());
+                self.ui.mode = AppMode::InputPrompt;
+            }
+            None => {
+                self.set_notification(
+                    "No active project".to_string(),
+                    NotificationVariant::Warning,
+                    3000,
+                );
+            }
+        }
+    }
+
+    /// Submit the working directory change. Applies the entered path to the
+    /// active project. Returns `false` if the path is empty or no project is
+    /// active.
+    pub fn submit_working_directory(&mut self) -> bool {
+        let dir = if self.ui.input_text.trim().is_empty() {
+            return false;
+        } else {
+            self.ui.input_text.trim().to_string()
+        };
+
+        let project_id = match self.active_project_id.clone() {
+            Some(id) => id,
+            None => return false,
+        };
+
+        if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            project.working_directory = dir;
+            // Reset prompt state and return to normal mode
+            self.ui.input_text.clear();
+            self.ui.input_cursor = 0;
+            self.ui.prompt_label.clear();
+            self.ui.prompt_context = None;
+            self.ui.mode = AppMode::Normal;
+            self.mark_dirty();
+            self.mark_render_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Cancel the working directory prompt, discarding changes.
+    pub fn cancel_working_directory(&mut self) {
+        self.ui.input_text.clear();
+        self.ui.input_cursor = 0;
+        self.ui.prompt_label.clear();
+        self.ui.prompt_context = None;
+        self.ui.mode = AppMode::Normal;
     }
 
     // ─── Notifications ───────────────────────────────────────────────────
