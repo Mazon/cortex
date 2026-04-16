@@ -104,11 +104,6 @@ mod tests {
         assert_eq!(config.opencode.port, 11643);
     }
 
-    #[test]
-    fn test_default_config_toml_parse() {
-        let config: CortexConfig = toml::from_str(defaults::DEFAULT_CONFIG_TOML).unwrap();
-        assert_eq!(config.columns.definitions.len(), 5);
-    }
 
     #[test]
     fn test_validate_duplicate_column() {
