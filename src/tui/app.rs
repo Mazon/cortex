@@ -344,6 +344,13 @@ impl App {
                         let target_col = visible[current_col_idx + 1].clone();
                         let mut state = self.state.lock().unwrap();
                         state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
+                    } else {
+                        let mut state = self.state.lock().unwrap();
+                        state.set_notification(
+                            "Already at the last column".to_string(),
+                            crate::state::types::NotificationVariant::Info,
+                            2000,
+                        );
                     }
                 }
             }
@@ -362,6 +369,13 @@ impl App {
                         state.move_task(
                             &tid,
                             crate::state::types::KanbanColumn(target_col),
+                        );
+                    } else {
+                        let mut state = self.state.lock().unwrap();
+                        state.set_notification(
+                            "Already at the first column".to_string(),
+                            crate::state::types::NotificationVariant::Info,
+                            2000,
                         );
                     }
                 }
