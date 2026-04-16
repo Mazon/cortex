@@ -48,6 +48,7 @@ impl OpenCodeClient {
         Ok(Self { sdk })
     }
 
+    /// Create a new OpenCode session.
     pub async fn create_session(&self) -> Result<Session> {
         debug!("Creating new session");
         let session = self
@@ -60,6 +61,8 @@ impl OpenCodeClient {
         Ok(session)
     }
 
+    /// Send a chat prompt to an existing session. Optionally specify an agent
+    /// name and/or model override.
     pub async fn send_prompt(
         &self,
         session_id: &str,
@@ -102,6 +105,7 @@ impl OpenCodeClient {
         Ok(result)
     }
 
+    /// Abort an active session. Returns `true` if the abort was acknowledged.
     pub async fn abort_session(&self, session_id: &str) -> Result<bool> {
         debug!("Aborting session: {}", session_id);
         let result = self
@@ -113,6 +117,7 @@ impl OpenCodeClient {
         Ok(result)
     }
 
+    /// Fetch all messages for a session.
     pub async fn get_messages(&self, session_id: &str) -> Result<SessionMessagesResponse> {
         debug!("Fetching messages for session: {}", session_id);
         let messages = self
@@ -124,6 +129,7 @@ impl OpenCodeClient {
         Ok(messages)
     }
 
+    /// Delete a session. Returns `true` if the deletion was acknowledged.
     pub async fn delete_session(&self, session_id: &str) -> Result<bool> {
         debug!("Deleting session: {}", session_id);
         let result = self
@@ -135,6 +141,7 @@ impl OpenCodeClient {
         Ok(result)
     }
 
+    /// List all sessions.
     pub async fn list_sessions(&self) -> Result<SessionListResponse> {
         debug!("Listing sessions");
         let sessions = self
@@ -146,6 +153,7 @@ impl OpenCodeClient {
         Ok(sessions)
     }
 
+    /// Resolve a permission request (approve or reject).
     pub async fn resolve_permission(
         &self,
         session_id: &str,
@@ -164,6 +172,7 @@ impl OpenCodeClient {
         Ok(())
     }
 
+    /// Answer a question from an agent.
     pub async fn resolve_question(
         &self,
         session_id: &str,
@@ -180,6 +189,8 @@ impl OpenCodeClient {
         Ok(())
     }
 
+    /// Subscribe to the OpenCode SSE event stream. Returns a stream of
+    /// [`EventListResponse`] items that yields events as they arrive.
     pub async fn subscribe_to_events(&self) -> Result<SseStream<EventListResponse>> {
         debug!("Subscribing to SSE events");
         let stream = self
@@ -191,6 +202,7 @@ impl OpenCodeClient {
         Ok(stream)
     }
 
+    /// Fetch OpenCode app info (version, status, etc.).
     pub async fn get_app_info(&self) -> Result<App> {
         debug!("Fetching app info");
         let app = self
@@ -202,6 +214,8 @@ impl OpenCodeClient {
         Ok(app)
     }
 
+    /// Build a prompt string for an agent working on a task.
+    /// Includes the task number, title, description, plan output, and optional context.
     pub fn build_prompt_for_agent(task: &CortexTask, agent: &str, context: Option<&str>) -> String {
         let mut parts = Vec::new();
         parts.push(format!("[{}] Working on task #{}: {}", agent, task.number, task.title));
@@ -221,10 +235,12 @@ impl OpenCodeClient {
         parts.join("\n")
     }
 
+    /// Get a reference to the underlying SDK client.
     pub fn sdk(&self) -> &opencode_sdk_rs::Opencode {
         &self.sdk
     }
 
+    /// Get the base URL this client is connected to.
     pub fn base_url(&self) -> &str {
         self.sdk.base_url()
     }
