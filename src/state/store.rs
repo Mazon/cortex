@@ -407,10 +407,6 @@ impl AppState {
         }
     }
 
-    pub fn process_message_updated(&mut self, _session_id: &str, _message: TaskMessage) {
-        // Store message in task session data — placeholder
-    }
-
     pub fn process_message_part_delta(&mut self, session_id: &str, delta: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
