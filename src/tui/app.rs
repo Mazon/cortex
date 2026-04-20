@@ -10,6 +10,14 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Identifies which input prompt is active, so `handle_text_input` can
+/// dispatch submit/cancel to the correct state method.
+#[derive(Clone, Copy)]
+enum InputPrompt {
+    RenameProject,
+    WorkingDirectory,
+}
+
 /// The main TUI application.
 pub struct App {
     pub state: Arc<Mutex<AppState>>,
@@ -488,57 +496,64 @@ impl App {
         }
     }
 
-    // ── Shared helpers ──
-
-    /// Switch to the previous/next project by an offset (-1 or +1).
-    /// Wraps around at the boundaries.
-    fn switch_project_offset(&mut self, direction: i32) {
-        let mut state = self.state.lock().unwrap();
-        let len = state.projects.len();
-        if len <= 1 {
-            return;
-        }
-        let current_idx = state
-            .active_project_id
-            .as_ref()
-            .and_then(|id| state.projects.iter().position(|p| &p.id == id))
-            .unwrap_or(0);
-        let new_idx = (current_idx as i32 + direction).rem_euclid(len as i32) as usize;
-        let new_id = state.projects[new_idx].id.clone();
-        state.select_project(&new_id);
-    }
-
-    /// Handle key events in ProjectRename mode.
+    /// Shared text-input key handler for single-line input prompts.
     ///
-    /// Supports basic text editing: character insertion, backspace, delete,
-    /// cursor movement, Enter to confirm, and Escape to cancel.
-    fn handle_rename_key(&mut self, key: crossterm::event::KeyEvent) {
+    /// Used by both the project-rename and working-directory prompts.
+    /// Handles character insertion, backspace, delete, cursor movement,
+    /// Home/End, Enter (submit), and Escape (cancel).
+    fn handle_text_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        prompt: InputPrompt,
+    ) {
         use crossterm::event::KeyCode;
 
         match key.code {
             KeyCode::Enter => {
                 let mut state = self.state.lock().unwrap();
-                match state.submit_project_rename() {
-                    Some((_old, new)) => {
-                        state.set_notification(
-                            format!("Project renamed to \"{}\"", new),
-                            crate::state::types::NotificationVariant::Success,
-                            3000,
-                        );
+                match prompt {
+                    InputPrompt::RenameProject => {
+                        match state.submit_project_rename() {
+                            Some((_old, new)) => {
+                                state.set_notification(
+                                    format!("Project renamed to \"{}\"", new),
+                                    crate::state::types::NotificationVariant::Success,
+                                    3000,
+                                );
+                            }
+                            None => {
+                                // Empty name — show warning and stay in rename mode
+                                state.set_notification(
+                                    "Project name cannot be empty".to_string(),
+                                    crate::state::types::NotificationVariant::Warning,
+                                    2000,
+                                );
+                            }
+                        }
                     }
-                    None => {
-                        // Empty name — show warning and stay in rename mode
-                        state.set_notification(
-                            "Project name cannot be empty".to_string(),
-                            crate::state::types::NotificationVariant::Warning,
-                            2000,
-                        );
+                    InputPrompt::WorkingDirectory => {
+                        if state.submit_working_directory() {
+                            state.set_notification(
+                                "Working directory updated".to_string(),
+                                crate::state::types::NotificationVariant::Success,
+                                3000,
+                            );
+                        } else {
+                            state.set_notification(
+                                "Working directory cannot be empty".to_string(),
+                                crate::state::types::NotificationVariant::Warning,
+                                2000,
+                            );
+                        }
                     }
                 }
             }
             KeyCode::Esc => {
                 let mut state = self.state.lock().unwrap();
-                state.cancel_project_rename();
+                match prompt {
+                    InputPrompt::RenameProject => state.cancel_project_rename(),
+                    InputPrompt::WorkingDirectory => state.cancel_working_directory(),
+                }
             }
             KeyCode::Char(c) => {
                 let mut state = self.state.lock().unwrap();
@@ -582,71 +597,14 @@ impl App {
         }
     }
 
+    /// Handle key events in ProjectRename mode.
+    fn handle_rename_key(&mut self, key: crossterm::event::KeyEvent) {
+        self.handle_text_input(key, InputPrompt::RenameProject);
+    }
+
     /// Handle key events in InputPrompt mode (used for working directory).
     fn handle_input_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        match key.code {
-            KeyCode::Enter => {
-                let mut state = self.state.lock().unwrap();
-                if state.submit_working_directory() {
-                    state.set_notification(
-                        "Working directory updated".to_string(),
-                        crate::state::types::NotificationVariant::Success,
-                        3000,
-                    );
-                } else {
-                    state.set_notification(
-                        "Working directory cannot be empty".to_string(),
-                        crate::state::types::NotificationVariant::Warning,
-                        2000,
-                    );
-                }
-            }
-            KeyCode::Esc => {
-                let mut state = self.state.lock().unwrap();
-                state.cancel_working_directory();
-            }
-            KeyCode::Char(c) => {
-                let mut state = self.state.lock().unwrap();
-                let pos = state.ui.input_cursor.min(state.ui.input_text.len());
-                state.ui.input_text.insert(pos, c);
-                state.ui.input_cursor = pos + 1;
-            }
-            KeyCode::Backspace => {
-                let mut state = self.state.lock().unwrap();
-                if state.ui.input_cursor > 0 {
-                    state.ui.input_cursor -= 1;
-                    let pos = state.ui.input_cursor;
-                    state.ui.input_text.remove(pos);
-                }
-            }
-            KeyCode::Delete => {
-                let mut state = self.state.lock().unwrap();
-                let pos = state.ui.input_cursor;
-                if pos < state.ui.input_text.len() {
-                    state.ui.input_text.remove(pos);
-                }
-            }
-            KeyCode::Left => {
-                let mut state = self.state.lock().unwrap();
-                state.ui.input_cursor = state.ui.input_cursor.saturating_sub(1);
-            }
-            KeyCode::Right => {
-                let mut state = self.state.lock().unwrap();
-                let new_pos = state.ui.input_cursor + 1;
-                state.ui.input_cursor = new_pos.min(state.ui.input_text.len());
-            }
-            KeyCode::Home => {
-                let mut state = self.state.lock().unwrap();
-                state.ui.input_cursor = 0;
-            }
-            KeyCode::End => {
-                let mut state = self.state.lock().unwrap();
-                state.ui.input_cursor = state.ui.input_text.len();
-            }
-            _ => {}
-        }
+        self.handle_text_input(key, InputPrompt::WorkingDirectory);
     }
 
     /// Handle key events in TaskEditor mode.

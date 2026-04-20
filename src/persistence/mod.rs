@@ -82,16 +82,6 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> AppResult<()> {
     Ok(())
 }
 
-/// Check dirty flag and save if needed. Returns true if saved.
-pub fn save_if_dirty(state: &AppState, db: &Db) -> AppResult<bool> {
-    if state.take_dirty() {
-        save_state(state, db)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
