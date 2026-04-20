@@ -40,5 +40,24 @@ build-release:
 audit:
     cargo audit
 
+# Run clippy with warnings as errors (alias for clippy)
+lint: clippy
+
+# Watch for file changes and auto-check + test (requires: cargo install cargo-watch)
+watch:
+    cargo watch -x check -x test
+
+# Update all dependencies
+upgrade:
+    cargo update
+
+# Build and open documentation (without dependencies)
+docs:
+    cargo doc --no-deps --open
+
+# Clean build artifacts
+clean:
+    cargo clean
+
 # Run full CI pipeline locally (fmt-check + clippy + test)
 ci: fmt-check clippy test
