@@ -9,7 +9,7 @@ use std::collections::HashMap;
 // ─── Top-Level Config ───
 
 /// Root Cortex configuration, matching the structure of `cortex.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CortexConfig {
     #[serde(default)]
     pub opencode: OpenCodeConfig,
