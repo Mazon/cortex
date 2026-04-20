@@ -12,35 +12,6 @@ pub struct KanbanColumn(pub String);
 impl KanbanColumn {
     /// Built-in column identifier for "to-do" tasks.
     pub const TODO: &'static str = "todo";
-    /// Built-in column identifier for tasks being planned.
-    pub const PLANNING: &'static str = "planning";
-    /// Built-in column identifier for tasks currently executing.
-    pub const RUNNING: &'static str = "running";
-    /// Built-in column identifier for tasks under review.
-    pub const REVIEW: &'static str = "review";
-    /// Built-in column identifier for completed tasks.
-    pub const DONE: &'static str = "done";
-
-    /// Returns the default column set.
-    pub fn default_columns() -> Vec<KanbanColumn> {
-        vec![
-            KanbanColumn(Self::TODO.to_string()),
-            KanbanColumn(Self::PLANNING.to_string()),
-            KanbanColumn(Self::RUNNING.to_string()),
-            KanbanColumn(Self::REVIEW.to_string()),
-            KanbanColumn(Self::DONE.to_string()),
-        ]
-    }
-
-    /// Returns default visible columns.
-    pub fn default_visible_columns() -> Vec<KanbanColumn> {
-        vec![
-            KanbanColumn(Self::TODO.to_string()),
-            KanbanColumn(Self::PLANNING.to_string()),
-            KanbanColumn(Self::RUNNING.to_string()),
-            KanbanColumn(Self::REVIEW.to_string()),
-        ]
-    }
 }
 
 impl std::fmt::Display for KanbanColumn {

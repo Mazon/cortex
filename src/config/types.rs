@@ -238,8 +238,6 @@ pub struct OpenCodeAgentConfig {
     pub tools: Option<Vec<String>>,
     pub max_turns: Option<u32>,
     pub disable: Option<bool>,
-    #[serde(default)]
-    pub permission: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Model configuration specifying which LLM to use.

@@ -345,26 +345,6 @@ pub fn extract_permission_fields(
     Some((id, session_id, tool_name, description, details))
 }
 
-/// Extract session_id from an EventListResponse variant.
-#[allow(dead_code)]
-pub fn extract_session_id(event: &EventListResponse) -> Option<String> {
-    match event {
-        EventListResponse::SessionStatus { properties } => Some(properties.session_id.clone()),
-        EventListResponse::SessionIdle { properties } => Some(properties.session_id.clone()),
-        EventListResponse::SessionError { properties } => properties.session_id.clone(),
-        EventListResponse::MessagePartDelta { properties } => Some(properties.session_id.clone()),
-        EventListResponse::MessageUpdated { properties } => match &properties.info {
-            Message::User(u) => Some(u.session_id.clone()),
-            Message::Assistant(a) => Some(a.session_id.clone()),
-        },
-        EventListResponse::PermissionAsked { properties } => properties.get("sessionID").and_then(|v| v.as_str()).map(String::from),
-        EventListResponse::PermissionReplied { properties } => Some(properties.session_id.clone()),
-        EventListResponse::QuestionAsked { properties } => properties.get("sessionID").and_then(|v| v.as_str()).map(String::from),
-        EventListResponse::QuestionReplied { properties } => Some(properties.session_id.clone()),
-        _ => None,
-    }
-}
-
 /// Tools that are safe to auto-approve (read-only operations only).
 /// NEVER include "bash", "write", or other mutating tools here —
 /// arbitrary commands and file modifications must require explicit user approval.

@@ -171,12 +171,6 @@ impl OpenCodeServer {
     }
 }
 
-impl Default for OpenCodeServer {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default OpenCodeServer")
-    }
-}
-
 /// Manages OpenCode servers for multiple projects.
 pub struct ServerManager {
     servers: HashMap<String, OpenCodeServer>,
@@ -402,7 +396,7 @@ mod tests {
             tools: Some(vec!["read".to_string(), "bash".to_string()]),
             max_turns: Some(10),
             disable: Some(false),
-            permission: None,
+
         });
         agents.insert("reviewer".to_string(), OpenCodeAgentConfig {
             model: Some("anthropic/claude-3".to_string()),
@@ -410,7 +404,7 @@ mod tests {
             tools: Some(vec!["read".to_string(), "grep".to_string()]),
             max_turns: Some(5),
             disable: Some(false),
-            permission: None,
+
         });
         agents.insert("disabled-agent".to_string(), OpenCodeAgentConfig {
             model: None,
@@ -418,7 +412,7 @@ mod tests {
             tools: None,
             max_turns: None,
             disable: Some(true),
-            permission: None,
+
         });
         config.agents = agents;
 
@@ -464,7 +458,7 @@ mod tests {
             tools: None,
             max_turns: Some(10),
             disable: Some(false),
-            permission: None,
+
         });
         config.agents = agents;
 
@@ -492,7 +486,7 @@ mod tests {
             tools: Some(vec!["read".to_string(), "grep".to_string()]),
             max_turns: None,
             disable: Some(false),
-            permission: None,
+
         });
         config.agents = agents;
 
@@ -517,7 +511,7 @@ mod tests {
             tools: None,
             max_turns: None,
             disable: Some(false),
-            permission: None,
+
         });
         config.agents = agents;
 
@@ -550,7 +544,7 @@ mod tests {
             ]),
             max_turns: Some(50),
             disable: Some(false),
-            permission: None,
+
         });
         config.agents = agents;
 
@@ -769,7 +763,7 @@ mod tests {
             tools: Some(vec!["read".to_string(), "write".to_string(), "bash".to_string()]),
             max_turns: Some(20),
             disable: Some(false),
-            permission: None,
+
         });
         config.agents = agents;
 

@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 use std::sync::{Arc, Mutex};
 
 use crate::opencode::client::{
-    convert_session_error, extract_permission_fields, extract_session_id, is_safe_tool,
+    convert_session_error, extract_permission_fields, is_safe_tool,
     OpenCodeClient,
 };
 use crate::state::types::AppState;

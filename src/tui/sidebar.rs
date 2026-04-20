@@ -67,8 +67,6 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
             project.name.clone()
         };
 
-        let line = format!("{} {}", icon, display_name);
-
         let text = Paragraph::new(Line::from(vec![
             Span::styled(icon, Style::default().fg(icon_color)),
             Span::styled(format!(" {}", display_name), name_style),
