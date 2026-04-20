@@ -4,22 +4,36 @@ use futures::StreamExt;
 use tracing::{debug, warn};
 use std::sync::{Arc, Mutex};
 
+use crate::config::types::ColumnsConfig;
 use crate::opencode::client::{
     convert_session_error, extract_permission_fields, is_safe_tool,
     OpenCodeClient,
 };
+use crate::orchestration::engine::on_agent_completed;
 use crate::state::types::AppState;
 
 /// Run the SSE event loop for a single project's OpenCode client.
 /// This is spawned as a tokio task per active project.
+///
+/// The `shutdown` receiver is watched so the loop can exit cleanly when the
+/// app is shutting down, instead of relying solely on task cancellation via
+/// `abort()`.
 pub async fn sse_event_loop(
     client: OpenCodeClient,
     state: Arc<Mutex<AppState>>,
+    columns_config: ColumnsConfig,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut backoff_ms: u64 = 2000;
     let mut reconnect_count: u64 = 0;
 
     loop {
+        // Check shutdown before each connection attempt.
+        if *shutdown.borrow() {
+            debug!("SSE event loop shutting down (received signal)");
+            return;
+        }
+
         debug!("Subscribing to SSE events from {}", client.base_url());
 
         match client.subscribe_to_events().await {
@@ -35,39 +49,66 @@ pub async fn sse_event_loop(
                     );
                 }
 
-                while let Some(event_result) = stream.next().await {
-                    let event = match event_result {
-                        Ok(e) => e,
-                        Err(e) => {
-                            let msg = e.to_string();
-                            if msg.contains("unknown variant") {
-                                debug!("SSE unknown event type: {}", msg);
-                            } else {
-                                warn!("SSE event error: {}", msg);
-                            }
-                            continue;
+                loop {
+                    tokio::select! {
+                        event_result = stream.next() => {
+                            let Some(event_result) = event_result else {
+                                // Stream closed by the server.
+                                warn!("SSE stream ended, reconnecting...");
+                                break;
+                            };
+
+                            let event = match event_result {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    let msg = e.to_string();
+                                    if msg.contains("unknown variant") {
+                                        debug!("SSE unknown event type: {}", msg);
+                                    } else {
+                                        warn!("SSE event error: {}", msg);
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            let mut state = state.lock().unwrap();
+                            process_event(&event, &mut state, &client, &columns_config);
                         }
-                    };
-
-                    let mut state = state.lock().unwrap();
-                    process_event(&event, &mut state, &client);
+                        _ = shutdown.changed() => {
+                            if *shutdown.borrow() {
+                                debug!("SSE event loop shutting down (received signal during stream)");
+                                return;
+                            }
+                        }
+                    }
                 }
-
-                warn!("SSE stream ended, reconnecting...");
             }
             Err(e) => {
                 warn!("Failed to subscribe to SSE events: {}", e);
             }
         }
 
-        // Exponential backoff with max 30s
-        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        // Exponential backoff with max 30s, but also break on shutdown.
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() {
+                    debug!("SSE event loop shutting down during backoff");
+                    return;
+                }
+            }
+        }
         backoff_ms = (backoff_ms * 2).min(30_000);
     }
 }
 
 /// Process a single SSE event, updating state directly.
-fn process_event(event: &opencode_sdk_rs::resources::event::EventListResponse, state: &mut AppState, client: &OpenCodeClient) {
+fn process_event(
+    event: &opencode_sdk_rs::resources::event::EventListResponse,
+    state: &mut AppState,
+    client: &OpenCodeClient,
+    columns_config: &ColumnsConfig,
+) {
     // Any incoming SSE event potentially changes the UI — mark for re-render.
     state.mark_render_dirty();
 
@@ -84,7 +125,10 @@ fn process_event(event: &opencode_sdk_rs::resources::event::EventListResponse, s
         }
 
         EventListResponse::SessionIdle { properties } => {
-            state.process_session_idle(&properties.session_id);
+            if let Some(task_id) = state.process_session_idle(&properties.session_id) {
+                // Trigger auto-progression if configured for this column
+                on_agent_completed(&task_id, state, columns_config);
+            }
         }
 
         EventListResponse::SessionError { properties } => {

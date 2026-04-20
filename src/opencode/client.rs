@@ -302,7 +302,10 @@ pub fn convert_sdk_part(part: &Part) -> TaskMessagePart {
         Part::StepFinish(s) => TaskMessagePart::StepFinish { id: s.id.clone() },
         Part::Agent(a) => TaskMessagePart::Agent { id: a.id.clone(), agent: a.name.clone() },
         Part::Reasoning(r) => TaskMessagePart::Reasoning { text: r.text.clone() },
-        _ => TaskMessagePart::Unknown,
+        _ => {
+            tracing::debug!("Unknown message part type: {:?}", part);
+            TaskMessagePart::Unknown
+        }
     }
 }
 

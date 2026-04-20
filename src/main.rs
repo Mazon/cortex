@@ -46,11 +46,6 @@ fn main() -> Result<()> {
 
     let mut config = config::load_config(&config_path)?;
 
-    // Ensure config directory exists
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     // Initialize tracing with file appender
     let log_dir = config::xdg_data_home()
         .join("cortex")
@@ -91,6 +86,10 @@ fn main() -> Result<()> {
             .with_context(|| format!("Failed to open stderr log: {}", log_file_path.display()))?;
         use std::os::unix::io::AsRawFd;
         let fd = stderr_log.as_raw_fd();
+        // SAFETY: dup2 duplicates `fd` onto stderr (fd 2). This is safe because:
+        // 1. `fd` is a valid, open file descriptor obtained from OpenOptions above.
+        // 2. fd 2 (stderr) is a valid file descriptor.
+        // 3. We are in single-threaded startup code with no concurrent access to fd.
         unsafe {
             libc::dup2(fd, 2); // fd 2 = stderr
         }
@@ -245,14 +244,21 @@ fn main() -> Result<()> {
         }
 
         // Spawn SSE event loops for active clients
+        // Create a shared shutdown watch channel for SSE event loops.
+        // All loops share the same receiver; sending `true` on the sender
+        // causes every loop to break out cleanly.
+        let (sse_shutdown_tx, sse_shutdown_rx) = tokio::sync::watch::channel(false);
+
         let mut sse_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         for (project_id, client) in &opencode_clients {
             let client = client.clone();
             let state = state.clone();
             let pid = project_id.clone();
+            let columns_config = config.columns.clone();
+            let shutdown_rx = sse_shutdown_rx.clone();
             let handle = tokio::spawn(async move {
                 tracing::info!("Starting SSE event loop for project {}", pid);
-                opencode::events::sse_event_loop(client, state).await;
+                opencode::events::sse_event_loop(client, state, columns_config, shutdown_rx).await;
             });
             sse_handles.push(handle);
         }
@@ -301,11 +307,14 @@ fn main() -> Result<()> {
         persistence_handle.abort();
 
         // Abort SSE event loops
-        for handle in sse_handles {
-            handle.abort();
-        }
-        // Give them a moment to clean up
+        // Signal graceful shutdown first, then fall back to abort after a timeout.
+        let _ = sse_shutdown_tx.send(true);
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        for handle in sse_handles {
+            if !handle.is_finished() {
+                handle.abort();
+            }
+        }
 
         // Force-save state before exit
         {

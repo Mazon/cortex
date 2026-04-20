@@ -775,6 +775,17 @@ pub fn extract_tool_summary(tool_name: &str, input: &str) -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("...")
                 .to_string(),
+            "bash" | "Bash" => val
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    if s.len() > 60 {
+                        format!("{}...", &s[..57])
+                    } else {
+                        s.to_string()
+                    }
+                })
+                .unwrap_or_else(|| "...".to_string()),
             _ => "...".to_string(),
         }
     } else {

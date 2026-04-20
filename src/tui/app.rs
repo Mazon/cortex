@@ -228,7 +228,7 @@ impl App {
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
-        // Check if we're in task detail view — Escape closes it
+        // Check if we're in task detail view — Escape closes it, y/n approve/reject permissions
         {
             let is_detail_escape = {
                 let state = self.state.lock().unwrap();
@@ -240,7 +240,64 @@ impl App {
                 state.close_task_detail();
                 return;
             }
-            // TODO: handle y/n for permission approval here
+
+            // Handle y/n for permission approval when in task detail view
+            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('n')) {
+                let approve = key.code == KeyCode::Char('y');
+                let (pending_perm, task_id) = {
+                    let state = self.state.lock().unwrap();
+                    if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+                        (None, None)
+                    } else if let Some(ref tid) = state.ui.viewing_task_id {
+                        let perm = state
+                            .task_sessions
+                            .get(tid)
+                            .and_then(|s| s.pending_permissions.first().cloned());
+                        (perm, Some(tid.clone()))
+                    } else {
+                        (None, None)
+                    }
+                };
+
+                if let (Some(perm), Some(tid)) = (pending_perm, task_id) {
+                    let client = {
+                        let state = self.state.lock().unwrap();
+                        state
+                            .active_project_id
+                            .as_ref()
+                            .and_then(|pid| self.opencode_clients.get(pid))
+                            .cloned()
+                    };
+
+                    if let Some(client) = client {
+                        let state = self.state.clone();
+                        let perm_id = perm.id.clone();
+                        let session_id = perm.session_id.clone();
+                        let tool_name = perm.tool_name.clone();
+                        tokio::spawn(async move {
+                            match client.resolve_permission(&session_id, &perm_id, approve).await {
+                                Ok(()) => {
+                                    let action_word = if approve { "approved" } else { "rejected" };
+                                    tracing::info!(
+                                        "Permission {} {} for tool {}",
+                                        perm_id, action_word, tool_name
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to resolve permission {}: {}",
+                                        perm_id, e
+                                    );
+                                }
+                            }
+                            // Remove from pending list regardless of API success/failure
+                            let mut s = state.lock().unwrap();
+                            s.resolve_permission_request(&tid, &perm_id, approve);
+                            s.mark_render_dirty();
+                        });
+                    }
+                }
+            }
         }
 
         use crate::tui::keys::{Action, KeyMatcher};

@@ -27,7 +27,10 @@ pub fn xdg_config_home() -> PathBuf {
         .unwrap_or_else(|_| {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".config"))
-                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+                .unwrap_or_else(|_| {
+                    tracing::warn!("Falling back to /tmp for config directory — neither $XDG_CONFIG_HOME nor $HOME is set");
+                    PathBuf::from("/tmp")
+                })
         })
 }
 
@@ -41,7 +44,10 @@ pub fn xdg_data_home() -> PathBuf {
         .unwrap_or_else(|_| {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".local").join("share"))
-                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+                .unwrap_or_else(|_| {
+                    tracing::warn!("Falling back to /tmp for data directory — neither $XDG_DATA_HOME nor $HOME is set");
+                    PathBuf::from("/tmp")
+                })
         })
 }
 

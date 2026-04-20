@@ -194,7 +194,7 @@ impl ServerManager {
         config: &mut OpenCodeConfig,
         working_dir: &str,
     ) -> Result<String> {
-        let port = self.next_port(project_id);
+        let port = self.next_port(project_id)?;
         config.port = port;
 
         let mut server = OpenCodeServer::new()?;
@@ -227,10 +227,13 @@ impl ServerManager {
         self.servers.get(project_id).map(|s| s.url().to_string())
     }
 
-    fn next_port(&mut self, _project_id: &str) -> u16 {
-        let port = self.base_port + self.next_port_counter;
+    fn next_port(&mut self, _project_id: &str) -> Result<u16> {
+        let port = self
+            .base_port
+            .checked_add(self.next_port_counter)
+            .ok_or_else(|| anyhow::anyhow!("Port overflow: base_port ({}) + counter ({}) exceeds u16::MAX", self.base_port, self.next_port_counter))?;
         self.next_port_counter += 1;
-        port
+        Ok(port)
     }
 }
 
@@ -303,6 +306,9 @@ fn build_opencode_config_json(config: &OpenCodeConfig) -> String {
     }
 
     // API key → provider config
+    // WARNING: The `server_config` JSON built here may contain API keys in the
+    // `provider.<name>.options.apiKey` field. Never log the full output of this
+    // function (or `server_config`) at any level — it would leak secrets.
     if let Some(ref api_key_env) = config.model.api_key_env {
         let raw = api_key_env.as_str();
         let api_key = if raw.starts_with(|c: char| c.is_ascii_uppercase()) && raw.contains('_') {

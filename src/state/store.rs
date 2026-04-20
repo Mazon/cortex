@@ -572,18 +572,19 @@ impl AppState {
 
     /// Handle a `SessionIdle` SSE event — mark the task as complete
     /// and show a success notification.
-    pub fn process_session_idle(&mut self, session_id: &str) {
-        if let Some(task_id) = self
-            .get_task_id_by_session(session_id)
+    /// Returns the task ID if a task was found and marked complete, `None` otherwise.
+    pub fn process_session_idle(&mut self, session_id: &str) -> Option<String> {
+        self.get_task_id_by_session(session_id)
             .map(|s| s.to_string())
-        {
-            self.update_task_agent_status(&task_id, AgentStatus::Complete);
-            self.set_notification(
-                format!("Task agent completed"),
-                NotificationVariant::Success,
-                5000,
-            );
-        }
+            .map(|task_id| {
+                self.update_task_agent_status(&task_id, AgentStatus::Complete);
+                self.set_notification(
+                    format!("Task agent completed"),
+                    NotificationVariant::Success,
+                    5000,
+                );
+                task_id
+            })
     }
 
     /// Handle a `SessionError` SSE event — record the error on the task.
