@@ -20,35 +20,6 @@ pub type CrosstermBackend = ratatui::backend::CrosstermBackend<std::io::Stdout>;
 /// Type alias for the terminal.
 pub type Terminal = ratatui::Terminal<CrosstermBackend>;
 
-/// Render the entire application based on current mode.
-pub fn render(
-    f: &mut ratatui::Frame,
-    state: &std::sync::Mutex<crate::state::types::AppState>,
-    config: &crate::config::types::CortexConfig,
-) {
-    let state = state.lock().unwrap();
-    match state.ui.mode {
-        crate::state::types::AppMode::Normal => {
-            render_normal(f, &state, config);
-        }
-        crate::state::types::AppMode::TaskEditor => {
-            task_editor::render_task_editor(f, &state);
-        }
-        crate::state::types::AppMode::Help => {
-            render_normal(f, &state, config);
-            help::render_help_overlay(f);
-        }
-        crate::state::types::AppMode::ProjectRename => {
-            render_normal(f, &state, config);
-            prompt::render_input_prompt(f, &state);
-        }
-        crate::state::types::AppMode::InputPrompt => {
-            render_normal(f, &state, config);
-            prompt::render_input_prompt(f, &state);
-        }
-    }
-}
-
 /// Render the normal mode layout: sidebar + kanban + status bar.
 pub fn render_normal(
     f: &mut ratatui::Frame,

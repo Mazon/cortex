@@ -9,7 +9,7 @@ use std::collections::HashMap;
 // ─── Top-Level Config ───
 
 /// Root Cortex configuration, matching the structure of `cortex.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CortexConfig {
     #[serde(default)]
     pub opencode: OpenCodeConfig,
@@ -427,8 +427,6 @@ pub struct ThemeConfig {
     pub status_question: String,
     #[serde(default = "default_status_error")]
     pub status_error: String,
-    #[serde(default = "default_status_hung")]
-    pub status_hung: String,
 }
 
 fn default_sidebar_width() -> u16 {
@@ -449,9 +447,6 @@ fn default_status_question() -> String {
 fn default_status_error() -> String {
     "#F44336".to_string()
 }
-fn default_status_hung() -> String {
-    "#FF5722".to_string()
-}
 
 impl Default for ThemeConfig {
     fn default() -> Self {
@@ -462,7 +457,6 @@ impl Default for ThemeConfig {
             status_done: default_status_done(),
             status_question: default_status_question(),
             status_error: default_status_error(),
-            status_hung: default_status_hung(),
         }
     }
 }
