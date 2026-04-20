@@ -214,6 +214,9 @@ impl App {
     }
 
     /// Handle key events in Normal mode.
+    ///
+    /// Resolves the key to an [`Action`] via the configured keybindings and
+    /// dispatches to the appropriate handler method.
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
@@ -238,275 +241,271 @@ impl App {
         let action = key_matcher.match_key(key);
 
         match action {
-            Some(Action::Quit) => {
-                self.should_quit = true;
+            Some(Action::Quit) => self.handle_quit(),
+            Some(Action::HelpToggle) => self.handle_help_toggle(),
+            Some(Action::PrevProject) => self.handle_prev_project(),
+            Some(Action::NextProject) => self.handle_next_project(),
+            Some(Action::NewProject) => self.handle_new_project(),
+            Some(Action::RenameProject) => self.handle_rename_project(),
+            Some(Action::SetWorkingDirectory) => self.handle_set_working_directory(),
+            Some(Action::NavLeft) => self.handle_nav_column(-1),
+            Some(Action::NavRight) => self.handle_nav_column(1),
+            Some(Action::NavUp) => self.handle_nav_task(-1),
+            Some(Action::NavDown) => self.handle_nav_task(1),
+            Some(Action::CreateTask) => self.handle_create_task(),
+            Some(Action::EditTask) => self.handle_edit_task(),
+            Some(Action::MoveForward) => self.handle_move_task(1),
+            Some(Action::MoveBackward) => self.handle_move_task(-1),
+            Some(Action::DeleteTask) => self.handle_delete_task(),
+            Some(Action::ViewTask) => self.handle_view_task(),
+            Some(Action::AbortSession) => self.handle_abort_session(),
+            None => {} // Unmatched key, ignore
+        }
+    }
+
+    // ── Individual action handlers (extracted from handle_normal_key) ──
+
+    fn handle_quit(&mut self) {
+        self.should_quit = true;
+    }
+
+    fn handle_help_toggle(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.ui.mode = crate::state::types::AppMode::Help;
+    }
+
+    fn handle_prev_project(&mut self) {
+        self.switch_project_offset(-1);
+    }
+
+    fn handle_next_project(&mut self) {
+        self.switch_project_offset(1);
+    }
+
+    fn handle_new_project(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let pos = state.projects.len();
+        let project = crate::state::types::CortexProject {
+            id: id.clone(),
+            name: format!("Project {}", pos + 1),
+            working_directory: std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
+            status: crate::state::types::ProjectStatus::Idle,
+            position: pos,
+        };
+        state.add_project(project);
+        state.select_project(&id);
+        state.set_notification(
+            format!("Created project {}", pos + 1),
+            crate::state::types::NotificationVariant::Success,
+            3000,
+        );
+    }
+
+    fn handle_rename_project(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.open_project_rename();
+    }
+
+    fn handle_set_working_directory(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.open_set_working_directory();
+    }
+
+    /// Move the focused column left or right by `direction` (-1 or +1).
+    fn handle_nav_column(&mut self, direction: i32) {
+        let visible = self.config.columns.visible_column_ids();
+        let mut state = self.state.lock().unwrap();
+        let new_idx = state.kanban.focused_column_index as i32 + direction;
+        if new_idx >= 0 && (new_idx as usize) < visible.len() {
+            state.kanban.focused_column_index = new_idx as usize;
+            if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
+                state.set_focused_column(col_id);
             }
-            Some(Action::HelpToggle) => {
+        }
+    }
+
+    /// Move the focused task up or down by `direction` (-1 or +1).
+    fn handle_nav_task(&mut self, direction: i32) {
+        let mut state = self.state.lock().unwrap();
+        let col_id = state.ui.focused_column.clone();
+        let task_count = state
+            .kanban
+            .columns
+            .get(&col_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let current = state.kanban.focused_task_index.get(&col_id).copied().unwrap_or(0);
+        let new_idx = current as i32 + direction;
+        if new_idx >= 0 && (new_idx as usize) < task_count {
+            state.kanban.focused_task_index.insert(col_id.clone(), new_idx as usize);
+            update_focused_task_id(&mut state, &col_id);
+        }
+    }
+
+    fn handle_create_task(&mut self) {
+        let col_id = {
+            let state = self.state.lock().unwrap();
+            state.ui.focused_column.clone()
+        };
+        let mut state = self.state.lock().unwrap();
+        state.open_task_editor_create(&col_id);
+    }
+
+    fn handle_edit_task(&mut self) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state.ui.focused_task_id.clone()
+        };
+        if let Some(id) = task_id {
+            let mut state = self.state.lock().unwrap();
+            state.open_task_editor_edit(&id);
+        }
+    }
+
+    /// Move the focused task forward or backward by `direction` columns (+1 or -1).
+    fn handle_move_task(&mut self, direction: i32) {
+        let visible = self.config.columns.visible_column_ids();
+        let (task_id, current_col_idx) = {
+            let state = self.state.lock().unwrap();
+            let tid = state.ui.focused_task_id.clone();
+            let idx = state.kanban.focused_column_index;
+            (tid, idx)
+        };
+        if let Some(tid) = task_id {
+            let target_idx = current_col_idx as i32 + direction;
+            if target_idx >= 0 && (target_idx as usize) < visible.len() {
+                let target_col = visible[target_idx as usize].clone();
                 let mut state = self.state.lock().unwrap();
-                state.ui.mode = crate::state::types::AppMode::Help;
-            }
-            Some(Action::PrevProject) => {
-                let mut state = self.state.lock().unwrap();
-                let len = state.projects.len();
-                if len <= 1 {
-                    return;
-                }
-                let current_idx = state
-                    .active_project_id
-                    .as_ref()
-                    .and_then(|id| state.projects.iter().position(|p| &p.id == id))
-                    .unwrap_or(0);
-                let new_idx = if current_idx == 0 { len - 1 } else { current_idx - 1 };
-                let new_id = state.projects[new_idx].id.clone();
-                state.select_project(&new_id);
-            }
-            Some(Action::NextProject) => {
-                let mut state = self.state.lock().unwrap();
-                let len = state.projects.len();
-                if len <= 1 {
-                    return;
-                }
-                let current_idx = state
-                    .active_project_id
-                    .as_ref()
-                    .and_then(|id| state.projects.iter().position(|p| &p.id == id))
-                    .unwrap_or(0);
-                let new_idx = (current_idx + 1) % len;
-                let new_id = state.projects[new_idx].id.clone();
-                state.select_project(&new_id);
-            }
-            Some(Action::NewProject) => {
-                // For now, create a default project
-                let mut state = self.state.lock().unwrap();
-                let id = uuid::Uuid::new_v4().to_string();
-                let pos = state.projects.len();
-                let project = crate::state::types::CortexProject {
-                    id: id.clone(),
-                    name: format!("Project {}", pos + 1),
-                    working_directory: std::env::current_dir()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| ".".to_string()),
-                    status: crate::state::types::ProjectStatus::Idle,
-                    position: pos,
+                state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
+            } else {
+                let msg = if direction > 0 {
+                    "Already at the last column"
+                } else {
+                    "Already at the first column"
                 };
-                state.add_project(project);
-                state.select_project(&id);
+                let mut state = self.state.lock().unwrap();
                 state.set_notification(
-                    format!("Created project {}", pos + 1),
-                    crate::state::types::NotificationVariant::Success,
+                    msg.to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                );
+            }
+        }
+    }
+
+    fn handle_delete_task(&mut self) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state.ui.focused_task_id.clone()
+        };
+        if let Some(tid) = task_id {
+            let mut state = self.state.lock().unwrap();
+            state.delete_task(&tid);
+            state.set_notification(
+                "Task deleted".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                3000,
+            );
+        }
+    }
+
+    fn handle_view_task(&mut self) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state.ui.focused_task_id.clone()
+        };
+        if let Some(tid) = task_id {
+            let mut state = self.state.lock().unwrap();
+            state.open_task_detail(&tid);
+        }
+    }
+
+    fn handle_abort_session(&mut self) {
+        let session_id = {
+            let state = self.state.lock().unwrap();
+            state
+                .ui
+                .focused_task_id
+                .as_ref()
+                .and_then(|tid| state.tasks.get(tid))
+                .and_then(|t| t.session_id.clone())
+        };
+        if let Some(sid) = session_id {
+            tracing::info!("Abort session requested: {}", sid);
+
+            // Find the client for the active project and spawn an abort task.
+            let client = {
+                let state = self.state.lock().unwrap();
+                state
+                    .active_project_id
+                    .as_ref()
+                    .and_then(|pid| self.opencode_clients.get(pid))
+                    .cloned()
+            };
+
+            if let Some(client) = client {
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    match client.abort_session(&sid).await {
+                        Ok(aborted) => {
+                            if aborted {
+                                tracing::info!("Session {} aborted successfully", sid);
+                            } else {
+                                tracing::warn!(
+                                    "Session {} abort returned false (may already be done)",
+                                    sid
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to abort session {}: {}", sid, e);
+                        }
+                    }
+                    // Update notification after attempt
+                    let mut state = state.lock().unwrap();
+                    state.set_notification(
+                        format!("Session abort requested: {}", sid),
+                        crate::state::types::NotificationVariant::Warning,
+                        3000,
+                    );
+                    state.mark_render_dirty();
+                });
+            } else {
+                tracing::warn!(
+                    "No OpenCode client available for aborting session {}",
+                    sid
+                );
+                let mut state = self.state.lock().unwrap();
+                state.set_notification(
+                    "No client available to abort session".to_string(),
+                    crate::state::types::NotificationVariant::Error,
                     3000,
                 );
             }
-            Some(Action::RenameProject) => {
-                let mut state = self.state.lock().unwrap();
-                state.open_project_rename();
-            }
-            Some(Action::SetWorkingDirectory) => {
-                let mut state = self.state.lock().unwrap();
-                state.open_set_working_directory();
-            }
-            Some(Action::NavLeft) => {
-                let visible = self.config.columns.visible_column_ids();
-                let mut state = self.state.lock().unwrap();
-                if state.kanban.focused_column_index > 0 {
-                    state.kanban.focused_column_index -= 1;
-                    if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
-                        state.set_focused_column(col_id);
-                    }
-                }
-            }
-            Some(Action::NavRight) => {
-                let visible = self.config.columns.visible_column_ids();
-                let mut state = self.state.lock().unwrap();
-                if state.kanban.focused_column_index + 1 < visible.len() {
-                    state.kanban.focused_column_index += 1;
-                    if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
-                        state.set_focused_column(col_id);
-                    }
-                }
-            }
-            Some(Action::NavUp) => {
-                let mut state = self.state.lock().unwrap();
-                let col_id = state.ui.focused_column.clone();
-                let current = state.kanban.focused_task_index.get(&col_id).copied().unwrap_or(0);
-                if current > 0 {
-                    state.kanban.focused_task_index.insert(col_id.clone(), current - 1);
-                    update_focused_task_id(&mut state, &col_id);
-                }
-            }
-            Some(Action::NavDown) => {
-                let mut state = self.state.lock().unwrap();
-                let col_id = state.ui.focused_column.clone();
-                let task_count = state
-                    .kanban
-                    .columns
-                    .get(&col_id)
-                    .map(|v| v.len())
-                    .unwrap_or(0);
-                let current = state.kanban.focused_task_index.get(&col_id).copied().unwrap_or(0);
-                if current + 1 < task_count {
-                    state.kanban.focused_task_index.insert(col_id.clone(), current + 1);
-                    update_focused_task_id(&mut state, &col_id);
-                }
-            }
-            Some(Action::CreateTask) => {
-                let col_id = {
-                    let state = self.state.lock().unwrap();
-                    state.ui.focused_column.clone()
-                };
-                let mut state = self.state.lock().unwrap();
-                state.open_task_editor_create(&col_id);
-            }
-            Some(Action::EditTask) => {
-                let task_id = {
-                    let state = self.state.lock().unwrap();
-                    state.ui.focused_task_id.clone()
-                };
-                if let Some(id) = task_id {
-                    let mut state = self.state.lock().unwrap();
-                    state.open_task_editor_edit(&id);
-                }
-            }
-            Some(Action::MoveForward) => {
-                let visible = self.config.columns.visible_column_ids();
-                let (task_id, current_col_idx) = {
-                    let state = self.state.lock().unwrap();
-                    let tid = state.ui.focused_task_id.clone();
-                    let idx = state.kanban.focused_column_index;
-                    (tid, idx)
-                };
-                if let Some(tid) = task_id {
-                    if current_col_idx + 1 < visible.len() {
-                        let target_col = visible[current_col_idx + 1].clone();
-                        let mut state = self.state.lock().unwrap();
-                        state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
-                    } else {
-                        let mut state = self.state.lock().unwrap();
-                        state.set_notification(
-                            "Already at the last column".to_string(),
-                            crate::state::types::NotificationVariant::Info,
-                            2000,
-                        );
-                    }
-                }
-            }
-            Some(Action::MoveBackward) => {
-                let visible = self.config.columns.visible_column_ids();
-                let (task_id, current_col_idx) = {
-                    let state = self.state.lock().unwrap();
-                    let tid = state.ui.focused_task_id.clone();
-                    let idx = state.kanban.focused_column_index;
-                    (tid, idx)
-                };
-                if let Some(tid) = task_id {
-                    if current_col_idx > 0 {
-                        let target_col = visible[current_col_idx - 1].clone();
-                        let mut state = self.state.lock().unwrap();
-                        state.move_task(
-                            &tid,
-                            crate::state::types::KanbanColumn(target_col),
-                        );
-                    } else {
-                        let mut state = self.state.lock().unwrap();
-                        state.set_notification(
-                            "Already at the first column".to_string(),
-                            crate::state::types::NotificationVariant::Info,
-                            2000,
-                        );
-                    }
-                }
-            }
-            Some(Action::DeleteTask) => {
-                let task_id = {
-                    let state = self.state.lock().unwrap();
-                    state.ui.focused_task_id.clone()
-                };
-                if let Some(tid) = task_id {
-                    let mut state = self.state.lock().unwrap();
-                    state.delete_task(&tid);
-                    state.set_notification(
-                        "Task deleted".to_string(),
-                        crate::state::types::NotificationVariant::Info,
-                        3000,
-                    );
-                }
-            }
-            Some(Action::ViewTask) => {
-                let task_id = {
-                    let state = self.state.lock().unwrap();
-                    state.ui.focused_task_id.clone()
-                };
-                if let Some(tid) = task_id {
-                    let mut state = self.state.lock().unwrap();
-                    state.open_task_detail(&tid);
-                }
-            }
-            Some(Action::AbortSession) => {
-                let session_id = {
-                    let state = self.state.lock().unwrap();
-                    state
-                        .ui
-                        .focused_task_id
-                        .as_ref()
-                        .and_then(|tid| state.tasks.get(tid))
-                        .and_then(|t| t.session_id.clone())
-                };
-                if let Some(sid) = session_id {
-                    tracing::info!("Abort session requested: {}", sid);
-
-                    // Find the client for the active project and spawn an abort task.
-                    let client = {
-                        let state = self.state.lock().unwrap();
-                        state
-                            .active_project_id
-                            .as_ref()
-                            .and_then(|pid| self.opencode_clients.get(pid))
-                            .cloned()
-                    };
-
-                    if let Some(client) = client {
-                        let state = self.state.clone();
-                        tokio::spawn(async move {
-                            match client.abort_session(&sid).await {
-                                Ok(aborted) => {
-                                    if aborted {
-                                        tracing::info!("Session {} aborted successfully", sid);
-                                    } else {
-                                        tracing::warn!(
-                                            "Session {} abort returned false (may already be done)",
-                                            sid
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to abort session {}: {}", sid, e);
-                                }
-                            }
-                            // Update notification after attempt
-                            let mut state = state.lock().unwrap();
-                            state.set_notification(
-                                format!("Session abort requested: {}", sid),
-                                crate::state::types::NotificationVariant::Warning,
-                                3000,
-                            );
-                            state.mark_render_dirty();
-                        });
-                    } else {
-                        tracing::warn!(
-                            "No OpenCode client available for aborting session {}",
-                            sid
-                        );
-                        let mut state = self.state.lock().unwrap();
-                        state.set_notification(
-                            "No client available to abort session".to_string(),
-                            crate::state::types::NotificationVariant::Error,
-                            3000,
-                        );
-                    }
-                }
-            }
-            None => {} // Unmatched key, ignore
         }
+    }
+
+    // ── Shared helpers ──
+
+    /// Switch to the previous/next project by an offset (-1 or +1).
+    /// Wraps around at the boundaries.
+    fn switch_project_offset(&mut self, direction: i32) {
+        let mut state = self.state.lock().unwrap();
+        let len = state.projects.len();
+        if len <= 1 {
+            return;
+        }
+        let current_idx = state
+            .active_project_id
+            .as_ref()
+            .and_then(|id| state.projects.iter().position(|p| &p.id == id))
+            .unwrap_or(0);
+        let new_idx = (current_idx as i32 + direction).rem_euclid(len as i32) as usize;
+        let new_id = state.projects[new_idx].id.clone();
+        state.select_project(&new_id);
     }
 
     /// Handle key events in ProjectRename mode.
