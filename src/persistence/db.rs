@@ -310,12 +310,12 @@ fn project_status_to_str(s: &ProjectStatus) -> &'static str {
     }
 }
 
-/// Returns the default database path: `~/.local/share/cortex/cortex.db`.
+/// Returns the default database path: `$XDG_DATA_HOME/cortex/cortex.db`.
+///
+/// Respects the `XDG_DATA_HOME` environment variable via `config::xdg_data_home()`,
+/// ensuring the database and logs end up in the same directory tree.
 pub fn default_db_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
-        .join(".local")
-        .join("share")
+    crate::config::xdg_data_home()
         .join("cortex")
         .join("cortex.db")
 }

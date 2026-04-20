@@ -46,7 +46,7 @@ impl AppState {
         match current_name {
             Some(name) => {
                 self.ui.input_text = name;
-                self.ui.input_cursor = self.ui.input_text.len();
+                self.ui.input_cursor = self.ui.input_text.chars().count();
                 self.ui.prompt_label = "Rename project to:".to_string();
                 self.ui.prompt_context = Some("rename_project".to_string());
                 self.ui.mode = AppMode::ProjectRename;
@@ -402,7 +402,7 @@ impl AppState {
         match current_dir {
             Some(dir) => {
                 self.ui.input_text = dir;
-                self.ui.input_cursor = self.ui.input_text.len();
+                self.ui.input_cursor = self.ui.input_text.chars().count();
                 self.ui.prompt_label = "Set working directory:".to_string();
                 self.ui.prompt_context = Some("set_working_directory".to_string());
                 self.ui.mode = AppMode::InputPrompt;

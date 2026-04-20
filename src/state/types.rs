@@ -271,7 +271,8 @@ pub struct UIState {
     pub notification: Option<Notification>,
     /// Text input buffer (used for prompts like project rename).
     pub input_text: String,
-    /// Cursor position within `input_text` (byte offset).
+    /// Cursor position within `input_text` (char index, not byte offset).
+    /// Tracked as char index to correctly handle multi-byte Unicode chars.
     pub input_cursor: usize,
     /// Label displayed above the input prompt (e.g., "Rename project:").
     pub prompt_label: String,
