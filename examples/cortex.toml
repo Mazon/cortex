@@ -182,6 +182,8 @@ visible = false
 # prev_project = "ctrl+k"              # Switch to previous project
 # next_project = "ctrl+j"              # Switch to next project
 # new_project = "ctrl+n"               # Create a new project
+# rename_project = "r"                 # Rename active project
+# set_working_directory = "d"          # Set working directory for active project
 
 # Session
 # abort_session = "ctrl+a a"           # Abort the active agent session

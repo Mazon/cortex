@@ -145,7 +145,7 @@ Persisted data (SQLite database, logs) is stored under `$XDG_DATA_HOME/cortex/` 
 | `n` | Create new task |
 | `e` | Edit selected task |
 | `m` | Move task forward (next column) |
-| `M` | Move task backward (previous column) |
+| `Shift+M` | Move task backward (previous column) |
 | `x` | Delete selected task |
 | `v` | Open task detail view |
 | `?` | Toggle help overlay |
@@ -153,6 +153,8 @@ Persisted data (SQLite database, logs) is stored under `$XDG_DATA_HOME/cortex/` 
 | `Ctrl+K` | Previous project |
 | `Ctrl+N` | New project |
 | `Ctrl+A` `A` | Abort active session |
+| `R` | Rename active project |
+| `D` | Set working directory |
 | `Ctrl+Q` | Quit |
 
 ### Task editor (fixed)
@@ -231,6 +233,7 @@ Contributions are welcome! Here's how to get started:
 - Use `RUST_LOG=debug cortex` for verbose logging
 - Use `cortex --reset` to clear all persisted state during development
 - An example config with all options documented is at `examples/cortex.toml`
+- Always commit `Cargo.lock` — Cortex is a binary application, and the lock file ensures reproducible builds
 
 ## License
 

@@ -48,7 +48,8 @@ pub fn xdg_data_home() -> PathBuf {
 /// Load config from a TOML file. If the file doesn't exist, generate a default
 /// config file at the path and return the defaults. This lets users discover and
 /// customize settings without needing to consult documentation.
-/// If the file exists, parse it and deep-merge with defaults for any missing fields.
+/// If the file exists, parse it and apply serde defaults for any missing fields.
+/// Column definitions are replaced entirely, not merged.
 pub fn load_config(path: &Path) -> Result<CortexConfig> {
     if !path.exists() {
         let config = default_config();

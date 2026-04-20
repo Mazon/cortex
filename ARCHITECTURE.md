@@ -37,8 +37,7 @@ src/
     ├── status_bar.rs    # Bottom status bar
     ├── help.rs          # Help overlay (keybindings reference)
     ├── keys.rs          # Key event parsing and keybinding config
-    ├── editor_handler.rs # Key handler for task editor mode
-    └── normal_mode.rs   # Key handler for normal mode (navigation, actions)
+    └── editor_handler.rs # Key handler for task editor mode
 ```
 
 ## SSE Event Flow
