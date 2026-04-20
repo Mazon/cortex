@@ -145,6 +145,43 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
         anyhow::bail!("opencode.port must be > 0");
     }
 
+    // Validate layout dimensions — zero widths cause rendering failures
+    if config.theme.sidebar_width == 0 {
+        anyhow::bail!("theme.sidebar_width must be > 0");
+    }
+    if config.theme.column_width == 0 {
+        anyhow::bail!("theme.column_width must be > 0");
+    }
+
+    // Validate log level is a recognized tracing level
+    const VALID_LOG_LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+    if !VALID_LOG_LEVELS.contains(&config.log.level.to_lowercase().as_str()) {
+        anyhow::bail!(
+            "log.level must be one of: {} (got '{}')",
+            VALID_LOG_LEVELS.join(", "),
+            config.log.level
+        );
+    }
+
+    // Validate that column agent names reference configured agents.
+    // Only check when agents are explicitly configured — the default config has
+    // column agent references but no agent definitions, which is valid until
+    // the user adds their first [opencode.agents.*] section.
+    if !config.opencode.agents.is_empty() {
+        for col in &config.columns.definitions {
+            if let Some(ref agent_name) = col.agent {
+                if !config.opencode.agents.contains_key(agent_name) {
+                    anyhow::bail!(
+                        "Column '{}' references agent '{}' but no [opencode.agents.{}] is defined",
+                        col.id,
+                        agent_name,
+                        agent_name
+                    );
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -370,6 +407,146 @@ mod tests {
         let mut config = minimal_config();
         config.columns.definitions[0].display_name = Some(String::new());
         // Empty display_name should be fine — it's cosmetic
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ─── sidebar_width / column_width validation (F-32) ───
+
+    #[test]
+    fn test_validate_sidebar_width_zero_rejected() {
+        let mut config = minimal_config();
+        config.theme.sidebar_width = 0;
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("sidebar_width must be > 0"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_column_width_zero_rejected() {
+        let mut config = minimal_config();
+        config.theme.column_width = 0;
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("column_width must be > 0"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_sidebar_width_one_is_valid() {
+        let mut config = minimal_config();
+        config.theme.sidebar_width = 1;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_column_width_one_is_valid() {
+        let mut config = minimal_config();
+        config.theme.column_width = 1;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ─── log.level validation (F-32) ───
+
+    #[test]
+    fn test_validate_log_level_valid() {
+        for level in &["trace", "debug", "info", "warn", "error"] {
+            let mut config = minimal_config();
+            config.log.level = level.to_string();
+            assert!(
+                validate_config(&config).is_ok(),
+                "level '{}' should be valid",
+                level
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_log_level_case_insensitive() {
+        let mut config = minimal_config();
+        config.log.level = "INFO".to_string();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_log_level_invalid() {
+        let mut config = minimal_config();
+        config.log.level = "verbose".to_string();
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("log.level must be one of"), "got: {}", msg);
+        assert!(msg.contains("verbose"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_log_level_empty() {
+        let mut config = minimal_config();
+        config.log.level = String::new();
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("log.level must be one of"), "got: {}", msg);
+    }
+
+    // ─── Column agent validation (F-33) ───
+
+    #[test]
+    fn test_validate_column_agent_undefined_rejected() {
+        let mut config = minimal_config();
+        // Add an agent definition so the agents map is non-empty
+        config.opencode.agents.insert(
+            "coder".to_string(),
+            types::OpenCodeAgentConfig {
+                model: None,
+                instructions: None,
+                tools: None,
+                max_turns: None,
+                disable: None,
+            },
+        );
+        // Column references a non-existent agent
+        config.columns.definitions[0].agent = Some("nonexistent".to_string());
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("nonexistent"), "got: {}", msg);
+        assert!(
+            msg.contains("is defined") && msg.contains("nonexistent"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_validate_column_agent_defined_passes() {
+        let mut config = minimal_config();
+        config.opencode.agents.insert(
+            "planner".to_string(),
+            types::OpenCodeAgentConfig {
+                model: None,
+                instructions: None,
+                tools: None,
+                max_turns: None,
+                disable: None,
+            },
+        );
+        config.columns.definitions[0].agent = Some("planner".to_string());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_column_agent_no_agents_configured_skips_check() {
+        let mut config = minimal_config();
+        // When no agents are configured at all, column agent references are allowed
+        config.columns.definitions[0].agent = Some("any-name".to_string());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_column_no_agent_passes() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].agent = None;
         assert!(validate_config(&config).is_ok());
     }
 }

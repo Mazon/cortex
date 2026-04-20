@@ -62,12 +62,21 @@ pub fn render_input_prompt(f: &mut Frame, state: &crate::state::types::AppState)
     let input_inner = input_block.inner(v_layout[1]);
     f.render_widget(input_block, v_layout[1]);
 
-    // Build the input text with a visible cursor (█ at cursor position)
+    // Build the input text with a visible cursor (█ at cursor position).
+    // `input_cursor` is a char index (not byte offset) to correctly handle
+    // multi-byte Unicode characters (e.g. emoji in project names).
     let text = &state.ui.input_text;
-    let cursor_pos = state.ui.input_cursor;
+    let cursor_char_idx = state.ui.input_cursor;
+
+    // Convert char index to byte offset for split_at.
+    let cursor_byte_pos = text
+        .char_indices()
+        .nth(cursor_char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
 
     // Split text into before-cursor and after-cursor portions
-    let (before, after) = text.split_at(cursor_pos.min(text.len()));
+    let (before, after) = text.split_at(cursor_byte_pos);
 
     let input_line = Span::styled(
         format!("{}{}", before, after),
@@ -77,9 +86,12 @@ pub fn render_input_prompt(f: &mut Frame, state: &crate::state::types::AppState)
     let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
     f.render_widget(input, input_inner);
 
-    // Show the cursor as a block-style character by setting cursor position
+    // Show the cursor as a block-style character by setting cursor position.
+    // Use the char index for x-position since each character occupies one
+    // terminal cell (CJK wide characters aside — acceptable approximation).
+    let char_count = text.chars().count();
     f.set_cursor_position((
-        input_inner.x + cursor_pos.min(text.len()) as u16,
+        input_inner.x + cursor_char_idx.min(char_count) as u16,
         input_inner.y,
     ));
 

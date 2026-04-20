@@ -634,23 +634,43 @@ impl App {
             }
             KeyCode::Char(c) => {
                 let mut state = self.state.lock().unwrap();
-                let pos = state.ui.input_cursor.min(state.ui.input_text.len());
-                state.ui.input_text.insert(pos, c);
-                state.ui.input_cursor = pos + 1;
+                let char_count = state.ui.input_text.chars().count();
+                let cursor = state.ui.input_cursor.min(char_count);
+                // Convert char index to byte offset for insertion.
+                let byte_pos = state.ui.input_text
+                    .char_indices()
+                    .nth(cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(state.ui.input_text.len());
+                state.ui.input_text.insert(byte_pos, c);
+                // The inserted char is exactly 1 char wide; advance cursor.
+                state.ui.input_cursor = cursor + 1;
             }
             KeyCode::Backspace => {
                 let mut state = self.state.lock().unwrap();
                 if state.ui.input_cursor > 0 {
-                    state.ui.input_cursor -= 1;
-                    let pos = state.ui.input_cursor;
-                    state.ui.input_text.remove(pos);
+                    let cursor = state.ui.input_cursor;
+                    // Find the byte range of the char just before the cursor.
+                    let char_indices: Vec<(usize, char)> =
+                        state.ui.input_text.char_indices().collect();
+                    if let Some(&(byte_start, ch)) = char_indices.get(cursor - 1) {
+                        let byte_end = byte_start + ch.len_utf8();
+                        state.ui.input_text.replace_range(byte_start..byte_end, "");
+                    }
+                    state.ui.input_cursor = cursor - 1;
                 }
             }
             KeyCode::Delete => {
                 let mut state = self.state.lock().unwrap();
-                let pos = state.ui.input_cursor;
-                if pos < state.ui.input_text.len() {
-                    state.ui.input_text.remove(pos);
+                let char_count = state.ui.input_text.chars().count();
+                if state.ui.input_cursor < char_count {
+                    let cursor = state.ui.input_cursor;
+                    let char_indices: Vec<(usize, char)> =
+                        state.ui.input_text.char_indices().collect();
+                    if let Some(&(byte_start, ch)) = char_indices.get(cursor) {
+                        let byte_end = byte_start + ch.len_utf8();
+                        state.ui.input_text.replace_range(byte_start..byte_end, "");
+                    }
                 }
             }
             KeyCode::Left => {
@@ -659,8 +679,9 @@ impl App {
             }
             KeyCode::Right => {
                 let mut state = self.state.lock().unwrap();
+                let char_count = state.ui.input_text.chars().count();
                 let new_pos = state.ui.input_cursor + 1;
-                state.ui.input_cursor = new_pos.min(state.ui.input_text.len());
+                state.ui.input_cursor = new_pos.min(char_count);
             }
             KeyCode::Home => {
                 let mut state = self.state.lock().unwrap();
@@ -668,7 +689,7 @@ impl App {
             }
             KeyCode::End => {
                 let mut state = self.state.lock().unwrap();
-                state.ui.input_cursor = state.ui.input_text.len();
+                state.ui.input_cursor = state.ui.input_text.chars().count();
             }
             _ => {} // Ignore other keys
         }
