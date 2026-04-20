@@ -23,7 +23,7 @@ pub type Terminal = ratatui::Terminal<CrosstermBackend>;
 /// Render the normal mode layout: sidebar + kanban + status bar.
 pub fn render_normal(
     f: &mut ratatui::Frame,
-    state: &crate::state::types::AppState,
+    state: &mut crate::state::types::AppState,
     config: &crate::config::types::CortexConfig,
 ) {
     let area = f.area();
@@ -61,8 +61,8 @@ pub fn render_normal(
             kanban::render_kanban(f, kanban_v[0], state, config);
         }
         FocusedPanel::TaskDetail => {
-            if let Some(ref task_id) = state.ui.viewing_task_id {
-                task_detail::render_task_detail(f, kanban_v[0], state, task_id);
+            if let Some(task_id) = state.ui.viewing_task_id.clone() {
+                task_detail::render_task_detail(f, kanban_v[0], state, &task_id, &config.theme);
             } else {
                 kanban::render_kanban(f, kanban_v[0], state, config);
             }

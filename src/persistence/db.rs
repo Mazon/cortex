@@ -4,13 +4,13 @@ use crate::error::AppResult;
 use crate::state::types::{
     AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, TaskAgentType,
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction};
 use std::collections::HashMap;
 use std::path::Path;
 
 /// Database wrapper for SQLite persistence.
 pub struct Db {
-    conn: Connection,
+    pub conn: Connection,
 }
 
 impl Db {
@@ -225,6 +225,85 @@ impl Db {
             |row| row.get(0),
         )?;
         Ok(max.unwrap_or(0) + 1)
+    }
+
+    // ─── Transaction-aware variants (for use within save_state) ──────
+
+    pub fn save_project_with_conn(
+        &self,
+        project: &CortexProject,
+        tx: &Transaction,
+    ) -> AppResult<()> {
+        tx.execute(
+            "INSERT OR REPLACE INTO projects (id, name, working_directory, status, position) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                project.id,
+                project.name,
+                project.working_directory,
+                project_status_to_str(&project.status),
+                project.position,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_task_with_conn(&self, task: &CortexTask, tx: &Transaction) -> AppResult<()> {
+        tx.execute(
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                task.id,
+                task.number,
+                task.title,
+                task.description,
+                task.column.0,
+                task.session_id,
+                task.agent_type.as_str(),
+                task.agent_status.to_string(),
+                task.error_message,
+                task.plan_output,
+                task.pending_permission_count,
+                task.pending_question_count,
+                task.project_id,
+                task.created_at,
+                task.updated_at,
+                task.entered_column_at,
+                task.last_activity_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_kanban_order_with_conn(
+        &self,
+        column: &KanbanColumn,
+        task_ids: &[String],
+        tx: &Transaction,
+    ) -> AppResult<()> {
+        tx.execute(
+            "DELETE FROM kanban_order WHERE column_id = ?1",
+            params![column.0],
+        )?;
+        for (pos, task_id) in task_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO kanban_order (column_id, task_id, position) VALUES (?1, ?2, ?3)",
+                params![column.0, task_id, pos],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn set_metadata_with_conn(
+        &self,
+        key: &str,
+        value: &str,
+        tx: &Transaction,
+    ) -> AppResult<()> {
+        tx.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
     }
 }
 

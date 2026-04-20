@@ -46,10 +46,18 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
         };
 
         let icon_color = match project.status {
-            crate::state::types::ProjectStatus::Working => Color::Blue,
-            crate::state::types::ProjectStatus::Error => Color::Red,
-            crate::state::types::ProjectStatus::Question => Color::Yellow,
-            crate::state::types::ProjectStatus::Done => Color::Green,
+            crate::state::types::ProjectStatus::Working => _config
+                .theme
+                .color_or(&_config.theme.status_working, Color::Blue),
+            crate::state::types::ProjectStatus::Error => _config
+                .theme
+                .color_or(&_config.theme.status_error, Color::Red),
+            crate::state::types::ProjectStatus::Question => _config
+                .theme
+                .color_or(&_config.theme.status_question, Color::Yellow),
+            crate::state::types::ProjectStatus::Done => _config
+                .theme
+                .color_or(&_config.theme.status_done, Color::Green),
             crate::state::types::ProjectStatus::Hung => Color::Rgb(255, 87, 34),
             _ => Color::DarkGray,
         };

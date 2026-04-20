@@ -499,6 +499,7 @@ impl AppState {
                 ..Default::default()
             });
         session.messages = messages;
+        session.render_version += 1;
     }
 
     /// Set or clear the streaming text buffer for a task's session.
@@ -511,6 +512,7 @@ impl AppState {
                 ..Default::default()
             });
         session.streaming_text = text;
+        session.render_version += 1;
     }
 
     /// Add a pending permission request to a task's session.
@@ -1427,5 +1429,180 @@ mod tests {
     fn get_task_editor_mut_returns_none_when_closed() {
         let mut state = make_state_with_tasks();
         assert!(state.get_task_editor_mut().is_none());
+    }
+
+    // ── Project rename ──────────────────────────────────────────────────
+
+    #[test]
+    fn open_project_rename_sets_mode_and_prepopulates_input() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.mode, AppMode::Normal);
+
+        state.open_project_rename();
+
+        assert_eq!(state.ui.mode, AppMode::ProjectRename);
+        assert_eq!(state.ui.input_text, "Test Project");
+        assert_eq!(state.ui.input_cursor, "Test Project".chars().count());
+        assert_eq!(state.ui.prompt_label, "Rename project to:");
+        assert_eq!(state.ui.prompt_context, Some("rename_project".to_string()));
+    }
+
+    #[test]
+    fn open_project_rename_no_active_project_shows_warning() {
+        let mut state = AppState::default();
+        // No active project set
+
+        state.open_project_rename();
+
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        let notif = state.ui.notification.as_ref().unwrap();
+        assert!(notif.message.contains("No active project"));
+        assert_eq!(notif.variant, NotificationVariant::Warning);
+    }
+
+    #[test]
+    fn submit_project_rename_updates_name_and_resets_mode() {
+        let mut state = make_state_with_tasks();
+        state.open_project_rename();
+        state.ui.input_text = "New Project Name".to_string();
+        state.ui.input_cursor = "New Project Name".chars().count();
+
+        let result = state.submit_project_rename();
+
+        assert_eq!(
+            result,
+            Some(("Test Project".to_string(), "New Project Name".to_string()))
+        );
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert_eq!(state.projects[0].name, "New Project Name");
+        assert!(state.ui.input_text.is_empty());
+        assert_eq!(state.ui.input_cursor, 0);
+        assert!(state.ui.prompt_label.is_empty());
+        assert!(state.ui.prompt_context.is_none());
+    }
+
+    #[test]
+    fn submit_project_rename_empty_name_returns_none() {
+        let mut state = make_state_with_tasks();
+        state.open_project_rename();
+        state.ui.input_text = "   ".to_string(); // whitespace only
+
+        let result = state.submit_project_rename();
+
+        assert_eq!(result, None);
+        // Mode should still be ProjectRename (not reset)
+        assert_eq!(state.ui.mode, AppMode::ProjectRename);
+        // Project name should be unchanged
+        assert_eq!(state.projects[0].name, "Test Project");
+    }
+
+    #[test]
+    fn cancel_project_rename_resets_state() {
+        let mut state = make_state_with_tasks();
+        state.open_project_rename();
+        state.ui.input_text = "Discard Me".to_string();
+        assert_eq!(state.ui.mode, AppMode::ProjectRename);
+
+        state.cancel_project_rename();
+
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert!(state.ui.input_text.is_empty());
+        assert_eq!(state.ui.input_cursor, 0);
+        assert!(state.ui.prompt_label.is_empty());
+        assert!(state.ui.prompt_context.is_none());
+        // Project name should be unchanged
+        assert_eq!(state.projects[0].name, "Test Project");
+    }
+
+    // ── Working directory ───────────────────────────────────────────────
+
+    #[test]
+    fn open_set_working_directory_sets_mode_and_prepopulates_input() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.mode, AppMode::Normal);
+
+        state.open_set_working_directory();
+
+        assert_eq!(state.ui.mode, AppMode::InputPrompt);
+        assert_eq!(state.ui.input_text, "/tmp");
+        assert_eq!(state.ui.input_cursor, "/tmp".chars().count());
+        assert_eq!(state.ui.prompt_label, "Set working directory:");
+        assert_eq!(
+            state.ui.prompt_context,
+            Some("set_working_directory".to_string())
+        );
+    }
+
+    #[test]
+    fn open_set_working_directory_no_active_project_shows_warning() {
+        let mut state = AppState::default();
+        // No active project set
+
+        state.open_set_working_directory();
+
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        let notif = state.ui.notification.as_ref().unwrap();
+        assert!(notif.message.contains("No active project"));
+        assert_eq!(notif.variant, NotificationVariant::Warning);
+    }
+
+    #[test]
+    fn submit_working_directory_updates_project_and_resets_mode() {
+        let mut state = make_state_with_tasks();
+        state.open_set_working_directory();
+        state.ui.input_text = "/home/user/project".to_string();
+
+        let result = state.submit_working_directory();
+
+        assert!(result);
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert_eq!(state.projects[0].working_directory, "/home/user/project");
+        assert!(state.ui.input_text.is_empty());
+        assert_eq!(state.ui.input_cursor, 0);
+        assert!(state.ui.prompt_label.is_empty());
+        assert!(state.ui.prompt_context.is_none());
+    }
+
+    #[test]
+    fn submit_working_directory_empty_returns_false() {
+        let mut state = make_state_with_tasks();
+        state.open_set_working_directory();
+        state.ui.input_text = "   ".to_string(); // whitespace only
+
+        let result = state.submit_working_directory();
+
+        assert!(!result);
+        // Working directory should be unchanged
+        assert_eq!(state.projects[0].working_directory, "/tmp");
+    }
+
+    #[test]
+    fn submit_working_directory_no_active_project_returns_false() {
+        let mut state = AppState::default();
+        // Simulate being in InputPrompt mode with no active project
+        state.ui.mode = AppMode::InputPrompt;
+        state.ui.input_text = "/some/path".to_string();
+
+        let result = state.submit_working_directory();
+
+        assert!(!result);
+    }
+
+    #[test]
+    fn cancel_working_directory_resets_state() {
+        let mut state = make_state_with_tasks();
+        state.open_set_working_directory();
+        state.ui.input_text = "/discard/this".to_string();
+        assert_eq!(state.ui.mode, AppMode::InputPrompt);
+
+        state.cancel_working_directory();
+
+        assert_eq!(state.ui.mode, AppMode::Normal);
+        assert!(state.ui.input_text.is_empty());
+        assert_eq!(state.ui.input_cursor, 0);
+        assert!(state.ui.prompt_label.is_empty());
+        assert!(state.ui.prompt_context.is_none());
+        // Working directory should be unchanged
+        assert_eq!(state.projects[0].working_directory, "/tmp");
     }
 }

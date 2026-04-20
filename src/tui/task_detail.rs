@@ -29,7 +29,13 @@ fn format_elapsed_time(entered_at: i64) -> String {
 ///
 /// Shows task metadata (title, status, timer, agent), description,
 /// streaming agent output, messages, and pending permissions.
-pub fn render_task_detail(f: &mut Frame, area: Rect, state: &AppState, task_id: &str) {
+pub fn render_task_detail(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+    task_id: &str,
+    theme: &crate::config::types::ThemeConfig,
+) {
     let task = match state.tasks.get(task_id) {
         Some(t) => t,
         None => {
@@ -42,7 +48,14 @@ pub fn render_task_detail(f: &mut Frame, area: Rect, state: &AppState, task_id: 
         }
     };
 
-    let session = state.task_sessions.get(task_id);
+    // Extract permission data early so we can drop the immutable borrow
+    // before passing &mut state to render_streaming_block.
+    let has_permissions = state
+        .task_sessions
+        .get(task_id)
+        .map(|s| !s.pending_permissions.is_empty() || !s.pending_questions.is_empty())
+        .unwrap_or(false);
+    let permission_rows: u16 = if has_permissions { 2 } else { 0 };
 
     // Outer block with task title
     let title = format!(" #{}: {} ", task.number, task.title);
@@ -70,11 +83,6 @@ pub fn render_task_detail(f: &mut Frame, area: Rect, state: &AppState, task_id: 
     // Streaming block: remaining space
     // Permissions/questions: up to 2 rows
     // Footer hints: 1 row
-
-    let has_permissions = session
-        .map(|s| !s.pending_permissions.is_empty() || !s.pending_questions.is_empty())
-        .unwrap_or(false);
-    let permission_rows: u16 = if has_permissions { 2 } else { 0 };
 
     // Reserve footer row
     let footer_height: u16 = 1;
@@ -109,17 +117,22 @@ pub fn render_task_detail(f: &mut Frame, area: Rect, state: &AppState, task_id: 
         .split(inner);
 
     // ── 1. Metadata line ─────────────────────────────────────────────
-    render_metadata_line(f, v_layout[0], task);
+    render_metadata_line(f, v_layout[0], task, theme);
 
     // ── 2. Description block ─────────────────────────────────────────
     render_description_block(f, v_layout[2], task);
 
-    // ── 3. Streaming output + messages ───────────────────────────────
-    render_streaming_block(f, v_layout[3], session);
+    // ── 3. Streaming output + messages (uses &mut state for cache) ────
+    let session = state.task_sessions.get(task_id);
+    render_streaming_block(f, v_layout[3], session, state, task_id);
 
     // ── 4. Pending permissions / questions ───────────────────────────
     if has_permissions {
-        render_permissions(f, v_layout[4], session.unwrap());
+        // Re-borrow session for permissions (immutable borrow is fine here
+        // since the mutable borrow ended with render_streaming_block).
+        if let Some(session) = state.task_sessions.get(task_id) {
+            render_permissions(f, v_layout[4], session);
+        }
     }
 
     // ── 5. Footer key hints ──────────────────────────────────────────
@@ -127,13 +140,18 @@ pub fn render_task_detail(f: &mut Frame, area: Rect, state: &AppState, task_id: 
 }
 
 /// Render the metadata line: status icon, status text, timer, agent name.
-fn render_metadata_line(f: &mut Frame, area: Rect, task: &CortexTask) {
+fn render_metadata_line(
+    f: &mut Frame,
+    area: Rect,
+    task: &CortexTask,
+    theme: &crate::config::types::ThemeConfig,
+) {
     let status_icon = task.agent_status.icon();
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
-        AgentStatus::Running => Color::Blue,
-        AgentStatus::Complete => Color::Green,
-        AgentStatus::Error => Color::Red,
+        AgentStatus::Running => theme.color_or(&theme.status_working, Color::Blue),
+        AgentStatus::Complete => theme.color_or(&theme.status_done, Color::Green),
+        AgentStatus::Error => theme.color_or(&theme.status_error, Color::Red),
         AgentStatus::Hung => Color::Rgb(255, 87, 34),
         AgentStatus::Pending => Color::DarkGray,
     };

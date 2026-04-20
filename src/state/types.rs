@@ -700,6 +700,10 @@ pub struct TaskDetailSession {
     pub pending_permissions: Vec<PermissionRequest>,
     /// Outstanding questions awaiting user answers.
     pub pending_questions: Vec<QuestionRequest>,
+    /// Monotonically increasing version counter. Incremented whenever
+    /// messages or streaming text change. Used by the render path to skip
+    /// rebuilding `Vec<Line>` when nothing has changed.
+    pub render_version: u64,
 }
 
 // ─── Top-Level State ──────────────────────────────────────────────────────
@@ -725,6 +729,10 @@ pub struct AppState {
     pub session_to_task: HashMap<String, String>,
     /// Session data for task detail view, keyed by task_id.
     pub task_sessions: HashMap<String, TaskDetailSession>,
+    /// Cache for rendered streaming lines in the task detail view.
+    /// Maps `task_id → (render_version, lines)`. Only rebuild lines when
+    /// the session's `render_version` has changed.
+    pub cached_streaming_lines: HashMap<String, (u64, Vec<ratatui::prelude::Line<'static>>)>,
     /// Dirty flag for persistence — set when state changes need to be saved.
     pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Dirty flag for render optimization — set when state changes,
@@ -744,6 +752,7 @@ impl Default for AppState {
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),
             task_sessions: HashMap::new(),
+            cached_streaming_lines: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }

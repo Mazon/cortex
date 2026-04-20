@@ -6,7 +6,6 @@ use crate::error::AppResult;
 use crate::state::types::{AppState, CortexProject, CortexTask, KanbanColumn};
 use db::Db;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 /// Persist all tasks and projects from state to the database.
 pub fn save_state(state: &AppState, db: &Db) -> AppResult<()> {
@@ -227,6 +226,7 @@ mod tests {
                 m
             },
             task_sessions: HashMap::new(),
+            cached_streaming_lines: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };

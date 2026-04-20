@@ -108,7 +108,13 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         height: card_height,
                     };
 
-                    crate::tui::task_card::render_task_card(f, card_area, task, is_task_focused);
+                    crate::tui::task_card::render_task_card(
+                        f,
+                        card_area,
+                        task,
+                        is_task_focused,
+                        &config.theme,
+                    );
                     card_y += card_height + 1; // 1px gap between cards
                 }
             }

@@ -458,3 +458,27 @@ impl Default for ThemeConfig {
         }
     }
 }
+
+impl ThemeConfig {
+    /// Parse a hex color string (e.g. `"#2196F3"`) into a `ratatui::Color`.
+    ///
+    /// Returns `None` if the string is not a valid 6-digit hex color.
+    /// Falls back to the provided default color on parse failure.
+    pub fn color_or(&self, hex: &str, default: ratatui::prelude::Color) -> ratatui::prelude::Color {
+        parse_hex_color(hex).unwrap_or(default)
+    }
+}
+
+/// Parse a `#RRGGBB` hex string into a [`ratatui::prelude::Color::Rgb`].
+///
+/// Returns `None` if the string is not exactly 7 characters (`#` + 6 hex digits)
+/// or if any digit is not valid hex.
+pub fn parse_hex_color(hex: &str) -> Option<ratatui::prelude::Color> {
+    if hex.len() != 7 || hex.as_bytes()[0] != b'#' {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[1..3], 16).ok()?;
+    let g = u8::from_str_radix(&hex[3..5], 16).ok()?;
+    let b = u8::from_str_radix(&hex[5..7], 16).ok()?;
+    Some(ratatui::prelude::Color::Rgb(r, g, b))
+}

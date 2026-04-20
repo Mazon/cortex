@@ -158,29 +158,34 @@ impl App {
             // Render — only if the state has changed since the last frame.
             // This avoids expensive full UI re-renders every 100 ms tick when
             // nothing has changed.
+            //
+            // We hold the Mutex lock for the duration of `terminal.draw()`.
+            // This is the standard ratatui pattern — the draw closure is fast
+            // (it only builds a frame buffer), so the lock is held briefly.
             let needs_render = self.state.lock().unwrap().take_render_dirty();
             if needs_render {
-                let state_snapshot = self.state.lock().unwrap().clone();
                 let config = &self.config;
+                let mut state = self.state.lock().unwrap();
                 self.terminal.draw(|f| {
-                    match state_snapshot.ui.mode {
+                    let state = &mut *state;
+                    match state.ui.mode {
                         crate::state::types::AppMode::Normal => {
-                            crate::tui::render_normal(f, &state_snapshot, config);
+                            crate::tui::render_normal(f, state, config);
                         }
                         crate::state::types::AppMode::TaskEditor => {
-                            crate::tui::task_editor::render_task_editor(f, &state_snapshot);
+                            crate::tui::task_editor::render_task_editor(f, state);
                         }
                         crate::state::types::AppMode::Help => {
-                            crate::tui::render_normal(f, &state_snapshot, config);
+                            crate::tui::render_normal(f, state, config);
                             crate::tui::help::render_help_overlay(f);
                         }
                         crate::state::types::AppMode::ProjectRename => {
-                            crate::tui::render_normal(f, &state_snapshot, config);
-                            crate::tui::prompt::render_input_prompt(f, &state_snapshot);
+                            crate::tui::render_normal(f, state, config);
+                            crate::tui::prompt::render_input_prompt(f, state);
                         }
                         crate::state::types::AppMode::InputPrompt => {
-                            crate::tui::render_normal(f, &state_snapshot, config);
-                            crate::tui::prompt::render_input_prompt(f, &state_snapshot);
+                            crate::tui::render_normal(f, state, config);
+                            crate::tui::prompt::render_input_prompt(f, state);
                         }
                     }
                 })?;
