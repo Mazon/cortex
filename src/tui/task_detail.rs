@@ -123,13 +123,10 @@ pub fn render_task_detail(
     render_description_block(f, v_layout[2], task);
 
     // ── 3. Streaming output + messages (uses &mut state for cache) ────
-    let session = state.task_sessions.get(task_id);
-    render_streaming_block(f, v_layout[3], session, state, task_id);
+    render_streaming_block(f, v_layout[3], state, task_id);
 
     // ── 4. Pending permissions / questions ───────────────────────────
     if has_permissions {
-        // Re-borrow session for permissions (immutable borrow is fine here
-        // since the mutable borrow ended with render_streaming_block).
         if let Some(session) = state.task_sessions.get(task_id) {
             render_permissions(f, v_layout[4], session);
         }
@@ -239,7 +236,10 @@ fn render_description_block(f: &mut Frame, area: Rect, task: &CortexTask) {
 }
 
 /// Render the streaming output block with messages.
-fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetailSession>) {
+///
+/// Uses a render version cache on `AppState` to avoid rebuilding `Vec<Line>`
+/// on every frame when the session data hasn't changed.
+fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_id: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -257,128 +257,52 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
         return;
     }
 
-    let session = match session {
-        Some(s) => s,
-        None => {
-            let para = Paragraph::new(Span::styled(
-                "No session data available. Start an agent to see output here.",
-                Style::default().fg(Color::DarkGray),
-            ))
-            .wrap(Wrap { trim: true });
-            f.render_widget(para, inner);
-            return;
-        }
+    // Early return if no session data — avoids cache logic for non-existent sessions.
+    if !state.task_sessions.contains_key(task_id) {
+        let para = Paragraph::new(Span::styled(
+            "No session data available. Start an agent to see output here.",
+            Style::default().fg(Color::DarkGray),
+        ))
+        .wrap(Wrap { trim: true });
+        f.render_widget(para, inner);
+        return;
+    }
+
+    // Extract the session's render_version (short-lived borrow, then dropped).
+    let current_version = state
+        .task_sessions
+        .get(task_id)
+        .map(|s| s.render_version)
+        .unwrap_or(0);
+
+    // Check render cache: only rebuild lines when the session version changes.
+    let cached_version = state
+        .cached_streaming_lines
+        .get(task_id)
+        .map(|(v, _)| *v)
+        .unwrap_or(0);
+
+    let lines: Vec<Line<'static>> = if current_version == cached_version {
+        // Cache hit — reuse previously built lines
+        state
+            .cached_streaming_lines
+            .get(task_id)
+            .map(|(_, lines)| lines.clone())
+            .unwrap_or_default()
+    } else {
+        // Cache miss — re-borrow session (immutable), build lines, then
+        // write to cache (mutable). These borrows are sequential, not
+        // simultaneous, so the borrow checker is happy.
+        let built = state
+            .task_sessions
+            .get(task_id)
+            .map(|s| build_streaming_lines(s))
+            .unwrap_or_default();
+        state
+            .cached_streaming_lines
+            .insert(task_id.to_string(), (current_version, built.clone()));
+        built
     };
-
-    // Build content lines from messages + streaming text
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Render messages as conversation
-    for msg in &session.messages {
-        for part in &msg.parts {
-            match part {
-                TaskMessagePart::Text { text } => {
-                    let prefix = match msg.role {
-                        MessageRole::User => "▸ ",
-                        MessageRole::Assistant => "  ",
-                    };
-                    let prefix_style = match msg.role {
-                        MessageRole::User => Style::default().fg(Color::Cyan),
-                        MessageRole::Assistant => Style::default().fg(Color::DarkGray),
-                    };
-                    for line in text.lines() {
-                        lines.push(Line::from(vec![
-                            Span::styled(prefix, prefix_style),
-                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
-                        ]));
-                    }
-                }
-                TaskMessagePart::Tool {
-                    tool,
-                    state: tool_state,
-                    cached_summary,
-                    error,
-                    ..
-                } => {
-                    let state_icon = match tool_state {
-                        ToolState::Pending => "○",
-                        ToolState::Running => "◐",
-                        ToolState::Completed => "✓",
-                        ToolState::Error => "✗",
-                    };
-                    let state_color = match tool_state {
-                        ToolState::Pending => Color::DarkGray,
-                        ToolState::Running => Color::Blue,
-                        ToolState::Completed => Color::Green,
-                        ToolState::Error => Color::Red,
-                    };
-
-                    // Tool invocation line — use pre-computed summary
-                    let tool_label = if let Some(ref summary) = cached_summary {
-                        format!("{} {}({})", state_icon, tool, summary)
-                    } else {
-                        format!("{} {}", state_icon, tool)
-                    };
-
-                    lines.push(Line::from(vec![
-                        Span::styled("  > ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(tool_label, Style::default().fg(state_color)),
-                    ]));
-
-                    // Show error if any
-                    if let Some(err) = error {
-                        for line in err.lines().take(3) {
-                            lines.push(Line::from(vec![
-                                Span::styled("    ", Style::default()),
-                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
-                            ]));
-                        }
-                    }
-                }
-                TaskMessagePart::StepStart { .. } => {
-                    lines.push(Line::from(Span::styled(
-                        "  ── step start ──",
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                TaskMessagePart::StepFinish { .. } => {
-                    lines.push(Line::from(Span::styled(
-                        "  ── step done ──",
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                }
-                TaskMessagePart::Reasoning { text } => {
-                    for line in text.lines() {
-                        lines.push(Line::from(vec![
-                            Span::styled("  💭 ", Style::default().fg(Color::Magenta)),
-                            Span::styled(
-                                line.to_string(),
-                                Style::default().fg(Color::Rgb(180, 140, 255)),
-                            ),
-                        ]));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Append streaming text (currently being generated)
-    if let Some(ref streaming) = session.streaming_text {
-        if !streaming.is_empty() {
-            for line in streaming.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::White),
-                )));
-            }
-            // Cursor indicator
-            lines.push(Line::from(Span::styled(
-                "▊",
-                Style::default().fg(Color::Cyan),
-            )));
-        }
-    }
 
     if lines.is_empty() {
         let para = Paragraph::new(Span::styled(
@@ -405,8 +329,6 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
     f.render_widget(para, inner);
 
     // ── Scroll indicator ────────────────────────────────────────────
-    // Show a compact "▼ X-Y/Z" indicator at the bottom-right of the
-    // streaming area when content overflows the visible height.
     if total_lines > visible_height {
         let first_visible = scroll_offset + 1;
         let last_visible = (scroll_offset + visible_height).min(total_lines);
@@ -419,7 +341,6 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
         let indicator_width = (full_indicator.len() + total_text.len()) as u16;
 
         if indicator_width <= inner.width {
-            // Render the indicator at the bottom-right of the streaming area
             let x = inner.x + inner.width - indicator_width;
             let y = inner.y + inner.height - 1;
             let area = Rect::new(x, y, indicator_width, 1);
@@ -435,6 +356,115 @@ fn render_streaming_block(f: &mut Frame, area: Rect, session: Option<&TaskDetail
             f.render_widget(indicator, area);
         }
     }
+}
+
+/// Build the streaming output lines from session messages and streaming text.
+fn build_streaming_lines(session: &TaskDetailSession) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    for msg in &session.messages {
+        for part in &msg.parts {
+            match part {
+                TaskMessagePart::Text { text } => {
+                    let prefix = match msg.role {
+                        MessageRole::User => "▸ ",
+                        MessageRole::Assistant => "  ",
+                    };
+                    let prefix_style = match msg.role {
+                        MessageRole::User => Style::default().fg(Color::Cyan),
+                        MessageRole::Assistant => Style::default().fg(Color::DarkGray),
+                    };
+                    for line in text.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled(prefix.to_owned(), prefix_style),
+                            Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        ]));
+                    }
+                }
+                TaskMessagePart::Tool {
+                    tool,
+                    state: tool_state,
+                    cached_summary,
+                    error,
+                    ..
+                } => {
+                    let state_icon = match tool_state {
+                        ToolState::Pending => "○",
+                        ToolState::Running => "◐",
+                        ToolState::Completed => "✓",
+                        ToolState::Error => "✗",
+                    };
+                    let state_color = match tool_state {
+                        ToolState::Pending => Color::DarkGray,
+                        ToolState::Running => Color::Blue,
+                        ToolState::Completed => Color::Green,
+                        ToolState::Error => Color::Red,
+                    };
+
+                    let tool_label = if let Some(ref summary) = cached_summary {
+                        format!("{} {}({})", state_icon, tool, summary)
+                    } else {
+                        format!("{} {}", state_icon, tool)
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled("  > ".to_owned(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(tool_label, Style::default().fg(state_color)),
+                    ]));
+
+                    if let Some(err) = error {
+                        for line in err.lines().take(3) {
+                            lines.push(Line::from(vec![
+                                Span::styled("    ".to_owned(), Style::default()),
+                                Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                            ]));
+                        }
+                    }
+                }
+                TaskMessagePart::StepStart { .. } => {
+                    lines.push(Line::from(Span::styled(
+                        "  ── step start ──",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                TaskMessagePart::StepFinish { .. } => {
+                    lines.push(Line::from(Span::styled(
+                        "  ── step done ──",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                TaskMessagePart::Reasoning { text } => {
+                    for line in text.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled("  💭 ".to_owned(), Style::default().fg(Color::Magenta)),
+                            Span::styled(
+                                line.to_string(),
+                                Style::default().fg(Color::Rgb(180, 140, 255)),
+                            ),
+                        ]));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(ref streaming) = session.streaming_text {
+        if !streaming.is_empty() {
+            for line in streaming.lines() {
+                lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::White),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                "▊",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
+    }
+
+    lines
 }
 
 /// Render pending permissions and questions.

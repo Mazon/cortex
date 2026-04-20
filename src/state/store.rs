@@ -1,6 +1,5 @@
 //! App state store — mutation methods on AppState.
 
-use crate::config::types::ColumnsConfig;
 use crate::state::types::*;
 use std::collections::HashMap;
 
@@ -793,11 +792,6 @@ impl AppState {
                 break;
             }
         }
-    }
-
-    /// Get visible column IDs for the current kanban view.
-    pub fn get_visible_column_ids(&self, columns_config: &ColumnsConfig) -> Vec<String> {
-        columns_config.visible_column_ids().to_vec()
     }
 }
 
