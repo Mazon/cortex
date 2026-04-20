@@ -496,6 +496,26 @@ impl App {
         }
     }
 
+    // ── Shared helpers ──
+
+    /// Switch to the previous/next project by an offset (-1 or +1).
+    /// Wraps around at the boundaries.
+    fn switch_project_offset(&mut self, direction: i32) {
+        let mut state = self.state.lock().unwrap();
+        let len = state.projects.len();
+        if len <= 1 {
+            return;
+        }
+        let current_idx = state
+            .active_project_id
+            .as_ref()
+            .and_then(|id| state.projects.iter().position(|p| &p.id == id))
+            .unwrap_or(0);
+        let new_idx = (current_idx as i32 + direction).rem_euclid(len as i32) as usize;
+        let new_id = state.projects[new_idx].id.clone();
+        state.select_project(&new_id);
+    }
+
     /// Shared text-input key handler for single-line input prompts.
     ///
     /// Used by both the project-rename and working-directory prompts.
