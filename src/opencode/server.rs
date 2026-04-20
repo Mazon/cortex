@@ -171,12 +171,6 @@ impl OpenCodeServer {
     }
 }
 
-impl Default for OpenCodeServer {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default OpenCodeServer")
-    }
-}
-
 /// Manages OpenCode servers for multiple projects.
 pub struct ServerManager {
     servers: HashMap<String, OpenCodeServer>,
