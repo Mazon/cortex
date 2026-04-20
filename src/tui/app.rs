@@ -10,6 +10,14 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Identifies which input prompt is active, so `handle_text_input` can
+/// dispatch submit/cancel to the correct state method.
+#[derive(Clone, Copy)]
+enum InputPrompt {
+    RenameProject,
+    WorkingDirectory,
+}
+
 /// The main TUI application.
 pub struct App {
     pub state: Arc<Mutex<AppState>>,
