@@ -1,9 +1,20 @@
 //! Status bar renderer — bottom bar showing connection status, project info,
-//! notifications, attention indicators, and key hints.
+//! notifications, attention indicators, and contextual key hints.
+//!
+//! Hints are context-sensitive: only the keys relevant to the current UI state
+//! are shown. When multiple contexts apply (e.g. a running task with pending
+//! permissions), hints rotate on a ~3-second cycle so the user can discover
+//! all applicable shortcuts. `?:help` is always shown as a fallback.
 
-use crate::state::types::{AppState, NotificationVariant, MAX_NOTIFICATIONS};
+use crate::state::types::{
+    AgentStatus, AppMode, AppState, FocusedPanel, NotificationVariant, MAX_NOTIFICATIONS,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Seconds between hint rotations when multiple context groups apply.
+const HINT_ROTATION_SECS: u64 = 3;
 
 /// Render the status bar at the bottom of the kanban area.
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
@@ -104,12 +115,26 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         (String::new(), Color::Reset)
     };
 
-    // Key hints tiers — from longest to shortest, chosen based on available space.
-    const HINTS_FULL: &str =
-        "?:help  n:new  e:edit  m:move  x:del  r:rename  d:dir  ^j/^k:proj  ^q:quit";
-    const HINTS_MEDIUM: &str = "?:help  n:new  e:edit  m:move  x:del  ^q:quit";
-    const HINTS_SHORT: &str = "?:help  ^q:quit";
-    const HINTS_MINIMAL: &str = "?:help";
+    // Build context-sensitive hint groups based on current state.
+    // When multiple groups apply, they rotate on a ~3-second cycle.
+    let hint_groups = build_contextual_hints(state);
+    let rotation_index = current_rotation_index(hint_groups.len());
+    let contextual = hint_groups
+        .get(rotation_index)
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    // Always append "?:help" to the contextual hint
+    let hints_full = if contextual.is_empty() {
+        "?:help".to_string()
+    } else {
+        format!("{}  ?:help", contextual)
+    };
+
+    // Tiered fallbacks — progressively shorter versions
+    let hints_medium = "?:help".to_string();
+    let hints_short = "?:help".to_string();
+    let hints_minimal = "?:help".to_string();
 
     // Build the status bar using a horizontal layout
     let total_width = area.width as usize;
@@ -133,24 +158,24 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     // Choose the appropriate hint tier based on available space.
     let hints = if has_center_text {
         let hint_budget = remaining.saturating_sub(20);
-        if hint_budget >= HINTS_FULL.chars().count() {
-            HINTS_FULL
-        } else if hint_budget >= HINTS_MEDIUM.chars().count() {
-            HINTS_MEDIUM
-        } else if hint_budget >= HINTS_SHORT.chars().count() {
-            HINTS_SHORT
+        if hint_budget >= hints_full.chars().count() {
+            hints_full.as_str()
+        } else if hint_budget >= hints_medium.chars().count() {
+            hints_medium.as_str()
+        } else if hint_budget >= hints_short.chars().count() {
+            hints_short.as_str()
         } else {
-            HINTS_MINIMAL
+            hints_minimal.as_str()
         }
     } else {
-        if remaining >= HINTS_FULL.chars().count() {
-            HINTS_FULL
-        } else if remaining >= HINTS_MEDIUM.chars().count() {
-            HINTS_MEDIUM
-        } else if remaining >= HINTS_SHORT.chars().count() {
-            HINTS_SHORT
+        if remaining >= hints_full.chars().count() {
+            hints_full.as_str()
+        } else if remaining >= hints_medium.chars().count() {
+            hints_medium.as_str()
+        } else if remaining >= hints_short.chars().count() {
+            hints_short.as_str()
         } else if total_width >= 60 {
-            HINTS_MINIMAL
+            hints_minimal.as_str()
         } else {
             ""
         }
@@ -215,5 +240,401 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     if !hints.is_empty() {
         let right = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
         f.render_widget(right, h_layout[slot]);
+    }
+}
+
+/// Build context-sensitive hint groups based on the current application state.
+///
+/// Returns a list of hint strings. When multiple groups apply, the status bar
+/// rotates through them so the user can discover all relevant shortcuts.
+fn build_contextual_hints(state: &AppState) -> Vec<String> {
+    let mut groups: Vec<String> = Vec::new();
+
+    match state.ui.mode {
+        AppMode::TaskEditor => {
+            groups.push("Tab: next field  Ctrl+S: save  Esc: cancel".to_string());
+            // If there's a validation error, hint about it
+            if state
+                .ui
+                .task_editor
+                .as_ref()
+                .map_or(false, |e| e.validation_error.is_some())
+            {
+                groups.push("fix title error or Esc: cancel".to_string());
+            }
+            // If there are unsaved changes with the discard warning shown
+            if state
+                .ui
+                .task_editor
+                .as_ref()
+                .map_or(false, |e| e.discard_warning_shown)
+            {
+                groups.push("Esc: discard changes  Ctrl+S: save".to_string());
+            }
+        }
+        AppMode::Help => {
+            groups.push("Esc: close help".to_string());
+        }
+        AppMode::ConfirmDialog => {
+            groups.push("y: confirm  n/Esc: cancel".to_string());
+        }
+        AppMode::InputPrompt | AppMode::ProjectRename => {
+            groups.push("Enter: submit  Esc: cancel".to_string());
+        }
+        AppMode::Normal => {
+            match state.ui.focused_panel {
+                FocusedPanel::TaskDetail => {
+                    // Task detail view hints
+                    groups.push("↑/↓: scroll  Esc: back".to_string());
+
+                    // If viewing a task with pending permissions
+                    if let Some(ref tid) = state.ui.viewing_task_id {
+                        if state
+                            .task_sessions
+                            .get(tid)
+                            .map_or(false, |s| !s.pending_permissions.is_empty())
+                        {
+                            groups.push("y: approve  n: reject  Esc: back".to_string());
+                        }
+                        // If viewing a task with pending questions
+                        if state
+                            .task_sessions
+                            .get(tid)
+                            .map_or(false, |s| !s.pending_questions.is_empty())
+                        {
+                            groups.push("1-9: answer question  Esc: back".to_string());
+                        }
+                    }
+                }
+                FocusedPanel::Kanban => {
+                    // Check if focused column is empty
+                    let column_tasks = state
+                        .kanban
+                        .columns
+                        .get(&state.ui.focused_column)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+                    let is_empty = column_tasks.is_empty();
+
+                    if is_empty {
+                        // Empty column: just show the create shortcut
+                        groups.push("n: new task".to_string());
+                    } else if let Some(ref task_id) = state.ui.focused_task_id {
+                        // A task is selected — build hints based on task state
+                        if let Some(task) = state.tasks.get(task_id) {
+                            // Check for pending permissions on this task
+                            let has_pending = task.pending_permission_count > 0
+                                || task.pending_question_count > 0;
+
+                            if task.agent_status == AgentStatus::Running {
+                                // Running task: abort is the most relevant action
+                                groups.push("Ctrl+A A: abort  v: view".to_string());
+                                if has_pending {
+                                    groups.push("v: view (pending approval)".to_string());
+                                }
+                            } else if has_pending {
+                                // Task with pending permissions/questions
+                                groups.push("v: view (pending approval)".to_string());
+                            } else {
+                                // Normal task: show full action set
+                                groups.push("v: view  e: edit  m: move  x: delete".to_string());
+                            }
+
+                            // Additional contextual hints for non-running tasks
+                            if task.agent_status != AgentStatus::Running {
+                                groups.push("n: new  ^j/^k: proj  ^q: quit".to_string());
+                            }
+                        }
+                    } else {
+                        // Column has tasks but none selected (shouldn't normally happen)
+                        groups.push("j/k: select  n: new task".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    groups
+}
+
+/// Returns a rotation index based on the current wall-clock time.
+///
+/// The index cycles through `0..count` every `HINT_ROTATION_SECS` seconds,
+/// so when multiple context groups apply they rotate automatically.
+fn current_rotation_index(count: usize) -> usize {
+    if count <= 1 {
+        return 0;
+    }
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (secs / HINT_ROTATION_SECS) as usize % count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::types::{KanbanColumn, KanbanState, TaskAgentType, UIState};
+    use std::collections::HashMap;
+
+    fn base_state() -> AppState {
+        let mut state = AppState::default();
+        state.ui = UIState::default();
+        state.kanban = KanbanState::default();
+        state.connected = true;
+        state
+    }
+
+    fn make_task(
+        id: &str,
+        status: AgentStatus,
+        perm_count: u32,
+        question_count: u32,
+    ) -> crate::state::types::CortexTask {
+        crate::state::types::CortexTask {
+            id: id.to_string(),
+            number: 1,
+            title: "Test".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: if status == AgentStatus::Running {
+                Some("s1".to_string())
+            } else {
+                None
+            },
+            agent_type: if status == AgentStatus::Running {
+                TaskAgentType::Do
+            } else {
+                TaskAgentType::None
+            },
+            agent_status: status,
+            entered_column_at: 0,
+            last_activity_at: 0,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: perm_count,
+            pending_question_count: question_count,
+            created_at: 0,
+            updated_at: 0,
+            project_id: "proj-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn empty_column_shows_new_task_hint() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.kanban.columns.insert("todo".to_string(), vec![]);
+        state.ui.focused_task_id = None;
+
+        let hints = build_contextual_hints(&state);
+        assert_eq!(hints, vec!["n: new task"]);
+    }
+
+    #[test]
+    fn task_selected_shows_action_hints() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.ui.focused_task_id = Some("task-1".to_string());
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec!["task-1".to_string()]);
+        state.tasks.insert(
+            "task-1".to_string(),
+            make_task("task-1", AgentStatus::Pending, 0, 0),
+        );
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"v: view  e: edit  m: move  x: delete".to_string()));
+        assert!(hints.contains(&"n: new  ^j/^k: proj  ^q: quit".to_string()));
+    }
+
+    #[test]
+    fn running_task_shows_abort_hint() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.ui.focused_task_id = Some("task-1".to_string());
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec!["task-1".to_string()]);
+        state.tasks.insert(
+            "task-1".to_string(),
+            make_task("task-1", AgentStatus::Running, 0, 0),
+        );
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"Ctrl+A A: abort  v: view".to_string()));
+    }
+
+    #[test]
+    fn running_task_with_pending_shows_approval_hint() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.ui.focused_task_id = Some("task-1".to_string());
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec!["task-1".to_string()]);
+        state.tasks.insert(
+            "task-1".to_string(),
+            make_task("task-1", AgentStatus::Running, 1, 0),
+        );
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"Ctrl+A A: abort  v: view".to_string()));
+        assert!(hints.contains(&"v: view (pending approval)".to_string()));
+    }
+
+    #[test]
+    fn task_with_pending_permissions_shows_approval_hint() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.ui.focused_task_id = Some("task-1".to_string());
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec!["task-1".to_string()]);
+        state.tasks.insert(
+            "task-1".to_string(),
+            make_task("task-1", AgentStatus::Pending, 2, 0),
+        );
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"v: view (pending approval)".to_string()));
+    }
+
+    #[test]
+    fn task_detail_view_shows_scroll_and_back() {
+        let mut state = base_state();
+        state.ui.focused_panel = FocusedPanel::TaskDetail;
+        state.ui.viewing_task_id = Some("task-1".to_string());
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"↑/↓: scroll  Esc: back".to_string()));
+    }
+
+    #[test]
+    fn task_editor_shows_field_and_save_hints() {
+        let mut state = base_state();
+        state.ui.mode = AppMode::TaskEditor;
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"Tab: next field  Ctrl+S: save  Esc: cancel".to_string()));
+    }
+
+    #[test]
+    fn help_overlay_shows_close_hint() {
+        let mut state = base_state();
+        state.ui.mode = AppMode::Help;
+
+        let hints = build_contextual_hints(&state);
+        assert_eq!(hints, vec!["Esc: close help"]);
+    }
+
+    #[test]
+    fn confirm_dialog_shows_confirm_cancel() {
+        let mut state = base_state();
+        state.ui.mode = AppMode::ConfirmDialog;
+
+        let hints = build_contextual_hints(&state);
+        assert_eq!(hints, vec!["y: confirm  n/Esc: cancel"]);
+    }
+
+    #[test]
+    fn input_prompt_shows_submit_cancel() {
+        let mut state = base_state();
+        state.ui.mode = AppMode::InputPrompt;
+
+        let hints = build_contextual_hints(&state);
+        assert_eq!(hints, vec!["Enter: submit  Esc: cancel"]);
+    }
+
+    #[test]
+    fn rotation_index_cycles() {
+        let idx = current_rotation_index(3);
+        assert!(idx < 3);
+
+        let idx = current_rotation_index(1);
+        assert_eq!(idx, 0);
+
+        let idx = current_rotation_index(0);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn pending_permissions_in_task_detail() {
+        use crate::state::types::{PermissionRequest, TaskDetailSession};
+
+        let mut state = base_state();
+        state.ui.focused_panel = FocusedPanel::TaskDetail;
+        state.ui.viewing_task_id = Some("task-1".to_string());
+
+        let session = TaskDetailSession {
+            task_id: "task-1".to_string(),
+            session_id: Some("s1".to_string()),
+            messages: vec![],
+            streaming_text: None,
+            pending_permissions: vec![PermissionRequest {
+                id: "p1".to_string(),
+                session_id: "s1".to_string(),
+                tool_name: "bash".to_string(),
+                description: "run tests".to_string(),
+                status: "pending".to_string(),
+                details: None,
+            }],
+            pending_questions: vec![],
+            render_version: 0,
+        };
+        state.task_sessions.insert("task-1".to_string(), session);
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"y: approve  n: reject  Esc: back".to_string()));
+    }
+
+    #[test]
+    fn pending_questions_in_task_detail() {
+        use crate::state::types::{QuestionRequest, TaskDetailSession};
+
+        let mut state = base_state();
+        state.ui.focused_panel = FocusedPanel::TaskDetail;
+        state.ui.viewing_task_id = Some("task-1".to_string());
+
+        let session = TaskDetailSession {
+            task_id: "task-1".to_string(),
+            session_id: Some("s1".to_string()),
+            messages: vec![],
+            streaming_text: None,
+            pending_permissions: vec![],
+            pending_questions: vec![QuestionRequest {
+                id: "q1".to_string(),
+                session_id: "s1".to_string(),
+                question: "Which approach?".to_string(),
+                answers: vec!["Option A".to_string(), "Option B".to_string()],
+                status: "pending".to_string(),
+            }],
+            render_version: 0,
+        };
+        state.task_sessions.insert("task-1".to_string(), session);
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"1-9: answer question  Esc: back".to_string()));
+    }
+
+    #[test]
+    fn no_column_tasks_no_selection_shows_select_hint() {
+        let mut state = base_state();
+        state.ui.focused_column = "todo".to_string();
+        state.ui.focused_task_id = None;
+        // Column has tasks but none focused
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec!["task-1".to_string()]);
+
+        let hints = build_contextual_hints(&state);
+        assert!(hints.contains(&"j/k: select  n: new task".to_string()));
     }
 }
