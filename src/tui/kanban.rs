@@ -38,7 +38,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             .get(col_id.as_str())
             .map(|v| v.len())
             .unwrap_or(0);
-        let header_text = format!(" {} ({}) ", display_name, task_count);
+        let agent_name = config.columns.agent_for_column(col_id);
 
         let header_style = if is_focused {
             Style::default()
@@ -46,6 +46,25 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
+        };
+
+        // Build header title with optional agent indicator
+        let header_title: Line = if let Some(agent) = &agent_name {
+            // Truncate agent name to keep header compact (max 10 chars)
+            let agent_label = if agent.len() > 10 {
+                format!(" {}...", &agent[..9])
+            } else {
+                format!(" {}", agent)
+            };
+            let name_span =
+                Span::styled(format!(" {} ({})", display_name, task_count), header_style);
+            let agent_span = Span::styled(agent_label, Style::default().fg(Color::Yellow));
+            Line::from(vec![name_span, agent_span])
+        } else {
+            Line::from(Span::styled(
+                format!(" {} ({}) ", display_name, task_count),
+                header_style,
+            ))
         };
 
         let border_style = if is_focused {
@@ -68,7 +87,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
         let header_block = Block::default()
             .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
             .border_style(border_style)
-            .title(Span::styled(header_text, header_style));
+            .title(header_title);
         let header_paragraph = Paragraph::new("").block(header_block);
         f.render_widget(header_paragraph, v_layout[0]);
 
@@ -130,8 +149,8 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             if remaining > 0 && inner.height > 0 {
                 let indicator_y = inner.y + inner.height.saturating_sub(1);
                 let indicator_text = format!("  ▼ {} more", remaining);
-                let indicator = Paragraph::new(indicator_text)
-                    .style(Style::default().fg(Color::DarkGray));
+                let indicator =
+                    Paragraph::new(indicator_text).style(Style::default().fg(Color::DarkGray));
                 f.render_widget(
                     indicator,
                     Rect {

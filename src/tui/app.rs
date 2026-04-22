@@ -457,6 +457,13 @@ impl App {
         if let Some(id) = task_id {
             let mut state = self.state.lock().unwrap();
             state.open_task_editor_edit(&id);
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No task selected to edit".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
         }
     }
 

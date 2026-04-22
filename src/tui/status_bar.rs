@@ -1,5 +1,5 @@
 //! Status bar renderer — bottom bar showing connection status, project info,
-//! notifications, and key hints.
+//! notifications, attention indicators, and key hints.
 
 use crate::state::types::{AppState, NotificationVariant, MAX_NOTIFICATIONS};
 use ratatui::prelude::*;
@@ -7,6 +7,49 @@ use ratatui::widgets::Paragraph;
 
 /// Render the status bar at the bottom of the kanban area.
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
+    // Count pending permissions and questions across all tasks for the active project
+    let (total_permissions, total_questions) = state
+        .tasks
+        .values()
+        .filter(|t| {
+            state
+                .active_project_id
+                .as_ref()
+                .map_or(false, |pid| t.project_id == *pid)
+        })
+        .fold((0u32, 0u32), |(perm, quest), t| {
+            (
+                perm + t.pending_permission_count,
+                quest + t.pending_question_count,
+            )
+        });
+    let has_attention_items = total_permissions > 0 || total_questions > 0;
+
+    // Build attention indicator text (shown prominently when there are pending items)
+    let attention_text = if total_permissions > 0 && total_questions > 0 {
+        format!(
+            "\u{26A0} {} perm{}, {} quest{} \u{2014} press v",
+            total_permissions,
+            if total_permissions == 1 { "" } else { "s" },
+            total_questions,
+            if total_questions == 1 { "" } else { "s" },
+        )
+    } else if total_permissions > 0 {
+        format!(
+            "\u{26A0} {} permission{} pending \u{2014} press v",
+            total_permissions,
+            if total_permissions == 1 { "" } else { "s" },
+        )
+    } else if total_questions > 0 {
+        format!(
+            "\u{26A0} {} question{} pending \u{2014} press v",
+            total_questions,
+            if total_questions == 1 { "" } else { "s" },
+        )
+    } else {
+        String::new()
+    };
+
     // Connection status (left)
     let (conn_text, conn_color) = if state.reconnecting {
         let attempt = state.reconnect_attempt;
@@ -79,14 +122,16 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let show_project = !project_info.is_empty() && total_width >= 70;
     let proj_width = if show_project { proj_len as u16 } else { 0 };
 
-    // Available space for notification + hints
+    // Attention indicator takes precedence over notification in the center area
+    let has_center_text = has_attention_items || !notif_text.is_empty();
+
+    // Available space for center text + hints
     let remaining = total_width
         .saturating_sub(conn_width as usize)
         .saturating_sub(proj_width as usize);
 
     // Choose the appropriate hint tier based on available space.
-    let has_notification = !notif_text.is_empty();
-    let hints = if has_notification {
+    let hints = if has_center_text {
         let hint_budget = remaining.saturating_sub(20);
         if hint_budget >= HINTS_FULL.chars().count() {
             HINTS_FULL
@@ -120,7 +165,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     if show_project {
         constraints.push(Constraint::Length(proj_width)); // Project name + task count
     }
-    constraints.push(Constraint::Min(0)); // Notification (center, flexible)
+    constraints.push(Constraint::Min(0)); // Attention / Notification (center, flexible)
     constraints.push(Constraint::Length(hints_width)); // Key hints (right)
 
     let h_layout = Layout::default()
@@ -143,8 +188,20 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         slot += 1;
     }
 
-    // Center: notification
-    if !notif_text.is_empty() {
+    // Center: attention indicator (takes precedence) or notification
+    if has_attention_items {
+        let inner = h_layout[slot].inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
+        let center = Paragraph::new(Span::styled(
+            attention_text,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        f.render_widget(center, inner);
+    } else if !notif_text.is_empty() {
         let inner = h_layout[slot].inner(Margin {
             horizontal: 1,
             vertical: 0,
