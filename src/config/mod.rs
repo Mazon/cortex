@@ -111,7 +111,7 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
     // Validate that column IDs are unique and not excessively long
     let mut seen = std::collections::HashSet::new();
     for col in &config.columns.definitions {
-        if col.id.is_empty() {
+        if col.id.trim().is_empty() {
             anyhow::bail!("Column ID must not be empty");
         }
         if col.id.len() > MAX_COLUMN_ID_LENGTH {
@@ -389,9 +389,11 @@ mod tests {
     fn test_validate_column_id_with_whitespace() {
         let mut config = minimal_config();
         config.columns.definitions[0].id = "  ".to_string();
-        // Whitespace-only IDs are technically not empty strings, so they pass validation.
-        // This test documents the current behavior — trimming could be added later.
-        assert!(validate_config(&config).is_ok());
+        // Whitespace-only IDs should be rejected
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must not be empty"), "got: {}", msg);
     }
 
     #[test]

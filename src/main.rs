@@ -255,10 +255,11 @@ fn main() -> Result<()> {
             let state = state.clone();
             let pid = project_id.clone();
             let columns_config = config.columns.clone();
+            let opencode_config = config.opencode.clone();
             let shutdown_rx = sse_shutdown_rx.clone();
             let handle = tokio::spawn(async move {
                 tracing::info!("Starting SSE event loop for project {}", pid);
-                opencode::events::sse_event_loop(client, state, columns_config, shutdown_rx).await;
+                opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx).await;
             });
             sse_handles.push(handle);
         }

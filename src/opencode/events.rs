@@ -4,12 +4,12 @@ use futures::StreamExt;
 use tracing::{debug, warn};
 use std::sync::{Arc, Mutex};
 
-use crate::config::types::ColumnsConfig;
+use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::{
     convert_session_error, extract_permission_fields, is_safe_tool,
     OpenCodeClient,
 };
-use crate::orchestration::engine::on_agent_completed;
+use crate::orchestration::engine::{on_agent_completed, on_task_moved, AutoProgressAction};
 use crate::state::types::AppState;
 
 /// Run the SSE event loop for a single project's OpenCode client.
@@ -22,6 +22,7 @@ pub async fn sse_event_loop(
     client: OpenCodeClient,
     state: Arc<Mutex<AppState>>,
     columns_config: ColumnsConfig,
+    opencode_config: OpenCodeConfig,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut backoff_ms: u64 = 2000;
@@ -71,11 +72,27 @@ pub async fn sse_event_loop(
                                 }
                             };
 
-                            let mut state = state.lock().unwrap();
-                            process_event(&event, &mut state, &client, &columns_config);
+                            let action = {
+                                let mut state = state.lock().unwrap();
+                                process_event(&event, &mut state, &client, &columns_config)
+                            };
+
+                            // Start deferred agent if auto-progression triggered one.
+                            // This must happen after the MutexGuard is dropped to avoid
+                            // deadlock (start_agent acquires its own lock).
+                            if let Some(action) = action {
+                                on_task_moved(
+                                    &action.task_id,
+                                    &action.target_column,
+                                    &state,
+                                    &client,
+                                    &columns_config,
+                                    &opencode_config,
+                                );
+                            }
                         }
-                        _ = shutdown.changed() => {
-                            if *shutdown.borrow() {
+                        result = shutdown.changed() => {
+                            if result.is_err() || *shutdown.borrow() {
                                 debug!("SSE event loop shutting down (received signal during stream)");
                                 return;
                             }
@@ -103,12 +120,15 @@ pub async fn sse_event_loop(
 }
 
 /// Process a single SSE event, updating state directly.
+/// Returns an `AutoProgressAction` if the event triggered auto-progression
+/// and the target column has a configured agent. The caller is responsible
+/// for starting the agent after releasing the MutexGuard.
 fn process_event(
     event: &opencode_sdk_rs::resources::event::EventListResponse,
     state: &mut AppState,
     client: &OpenCodeClient,
     columns_config: &ColumnsConfig,
-) {
+) -> Option<AutoProgressAction> {
     // Any incoming SSE event potentially changes the UI — mark for re-render.
     state.mark_render_dirty();
 
@@ -122,12 +142,15 @@ fn process_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             state.process_session_status(&properties.session_id, status);
+            None
         }
 
         EventListResponse::SessionIdle { properties } => {
             if let Some(task_id) = state.process_session_idle(&properties.session_id) {
                 // Trigger auto-progression if configured for this column
-                on_agent_completed(&task_id, state, columns_config);
+                on_agent_completed(&task_id, state, columns_config)
+            } else {
+                None
             }
         }
 
@@ -140,10 +163,12 @@ fn process_event(
                     .unwrap_or_default();
                 state.process_session_error(sid, &msg);
             }
+            None
         }
 
         EventListResponse::MessagePartDelta { properties } => {
             state.process_message_part_delta(&properties.session_id, &properties.delta);
+            None
         }
 
         EventListResponse::PermissionAsked { properties } => {
@@ -166,12 +191,19 @@ fn process_event(
                     });
                 }
             }
+            None
         }
 
         EventListResponse::PermissionReplied { properties } => {
             if let Some(task_id) = state.get_task_id_by_session(&properties.session_id).map(|s| s.to_string()) {
-                state.resolve_permission_request(&task_id, &properties.request_id, true);
+                let approved = matches!(
+                    properties.reply,
+                    opencode_sdk_rs::resources::event::PermissionReply::Once
+                        | opencode_sdk_rs::resources::event::PermissionReply::Always
+                );
+                state.resolve_permission_request(&task_id, &properties.request_id, approved);
             }
+            None
         }
 
         EventListResponse::QuestionAsked { properties } => {
@@ -190,9 +222,10 @@ fn process_event(
                     10000,
                 );
             }
+            None
         }
 
-        _ => {} // Ignore events we don't care about
+        _ => None, // Ignore events we don't care about
     }
 }
 
@@ -248,11 +281,8 @@ mod tests {
             .session_to_task
             .insert(session_id.clone(), task_id.clone());
 
-        // We need a dummy client. Since `process_event` only uses `client` for
-        // `resolve_permission` in the auto-approve path (which spawns a tokio
-        // task that we can't easily test), we create a real client pointing at
-        // an unlikely address — it will never actually be called in our tests.
-        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        // Tests that need a client construct their own; process_event only uses
+        // the client for resolve_permission in the auto-approve path.
 
         (state, task_id, session_id)
     }

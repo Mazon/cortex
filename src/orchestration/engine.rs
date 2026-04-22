@@ -123,13 +123,22 @@ fn start_agent(
     });
 }
 
+/// Action returned by `on_agent_completed` for the caller to execute
+/// after releasing the MutexGuard.
+pub struct AutoProgressAction {
+    pub task_id: String,
+    pub target_column: KanbanColumn,
+    pub agent: String,
+}
+
 /// Called when an agent completes (from SSE SessionIdle).
-/// Auto-progresses if the column configures it.
+/// Auto-progresses if the column configures it and returns an action
+/// for the caller to start the target column's agent (if configured).
 pub fn on_agent_completed(
     task_id: &str,
     state: &mut AppState,
     columns_config: &ColumnsConfig,
-) {
+) -> Option<AutoProgressAction> {
     let column = state
         .tasks
         .get(task_id)
@@ -142,9 +151,19 @@ pub fn on_agent_completed(
                 col.0,
                 target
             );
-            state.move_task(task_id, KanbanColumn(target));
+            state.move_task(task_id, KanbanColumn(target.clone()));
+
+            // Check if target column has an agent configured
+            if let Some(agent) = columns_config.agent_for_column(&target) {
+                return Some(AutoProgressAction {
+                    task_id: task_id.to_string(),
+                    target_column: KanbanColumn(target),
+                    agent,
+                });
+            }
         }
     }
+    None
 }
 
 #[cfg(test)]
@@ -229,7 +248,7 @@ mod tests {
         let (mut state, task_id) = make_state_with_task_in_column("planning");
         let columns_config = make_columns_with_auto_progress("planning", "running");
 
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
 
         // Task should now be in "running"
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
@@ -245,6 +264,12 @@ mod tests {
             .get("planning")
             .unwrap()
             .contains(&task_id));
+        // Should return an action to start the "do" agent
+        assert!(action.is_some());
+        let action = action.unwrap();
+        assert_eq!(action.task_id, task_id);
+        assert_eq!(action.target_column.0, "running");
+        assert_eq!(action.agent, "do");
     }
 
     #[test]
@@ -253,7 +278,7 @@ mod tests {
         let columns_config = make_columns_with_auto_progress("planning", "running");
 
         let old_entered = state.tasks.get(&task_id).unwrap().entered_column_at;
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let _action = on_agent_completed(&task_id, &mut state, &columns_config);
 
         let new_entered = state.tasks.get(&task_id).unwrap().entered_column_at;
         assert!(new_entered >= old_entered);
@@ -268,7 +293,7 @@ mod tests {
         // Override "running" to have no auto-progression
         columns_config.definitions[1].auto_progress_to = None;
 
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
 
         // Task should stay in "running"
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
@@ -278,6 +303,8 @@ mod tests {
             .get("running")
             .unwrap()
             .contains(&task_id));
+        // No action returned since no auto-progression
+        assert!(action.is_none());
     }
 
     #[test]
@@ -286,7 +313,7 @@ mod tests {
         let columns_config = make_columns_with_auto_progress("planning", "running");
 
         // Should not panic for a nonexistent task
-        on_agent_completed("nonexistent-task", &mut state, &columns_config);
+        let action = on_agent_completed("nonexistent-task", &mut state, &columns_config);
 
         // Original task should still be in planning
         assert!(state
@@ -295,6 +322,8 @@ mod tests {
             .get("planning")
             .unwrap()
             .contains(&_task_id));
+        // No action for nonexistent task
+        assert!(action.is_none());
     }
 
     #[test]
@@ -331,15 +360,18 @@ mod tests {
         columns_config.finalize();
 
         // First completion: planning → running
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+        assert_eq!(action.unwrap().agent, "do");
 
         // Second completion: running → review
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        assert_eq!(action.unwrap().agent, "reviewer");
 
         // Third completion: review stays (no auto_progress_to)
-        on_agent_completed(&task_id, &mut state, &columns_config);
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        assert!(action.is_none());
     }
 }

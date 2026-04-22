@@ -291,18 +291,26 @@ impl App {
                                         "Permission {} {} for tool {}",
                                         perm_id, action_word, tool_name
                                     );
+                                    // Only remove from pending list on success
+                                    let mut s = state.lock().unwrap();
+                                    s.resolve_permission_request(&tid, &perm_id, approve);
+                                    s.mark_render_dirty();
                                 }
                                 Err(e) => {
                                     tracing::error!(
                                         "Failed to resolve permission {}: {}",
                                         perm_id, e
                                     );
+                                    // Keep the permission in the pending list so the user can retry
+                                    let mut s = state.lock().unwrap();
+                                    s.set_notification(
+                                        format!("Failed to resolve permission: {}", e),
+                                        crate::state::types::NotificationVariant::Error,
+                                        5000,
+                                    );
+                                    s.mark_render_dirty();
                                 }
                             }
-                            // Remove from pending list regardless of API success/failure
-                            let mut s = state.lock().unwrap();
-                            s.resolve_permission_request(&tid, &perm_id, approve);
-                            s.mark_render_dirty();
                         });
                     }
                 } else {

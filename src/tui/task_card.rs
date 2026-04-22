@@ -1,6 +1,6 @@
 //! Task card component — renders a task as a bordered card within a column.
 
-use crate::config::types::ThemeConfig;
+use crate::config::types::{parse_hex_color_or, ThemeConfig};
 use crate::state::types::{AgentStatus, CortexTask};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
@@ -51,9 +51,9 @@ pub fn render_task_card(
     let status_icon = task.agent_status.icon();
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
-        AgentStatus::Running => theme.color_or(&theme.status_working, Color::Blue),
-        AgentStatus::Complete => theme.color_or(&theme.status_done, Color::Green),
-        AgentStatus::Error => theme.color_or(&theme.status_error, Color::Red),
+        AgentStatus::Running => parse_hex_color_or(&theme.status_working, Color::Blue),
+        AgentStatus::Complete => parse_hex_color_or(&theme.status_done, Color::Green),
+        AgentStatus::Error => parse_hex_color_or(&theme.status_error, Color::Red),
         AgentStatus::Hung => Color::Rgb(255, 87, 34),
         AgentStatus::Pending => Color::DarkGray,
     };

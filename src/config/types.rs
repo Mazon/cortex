@@ -465,8 +465,16 @@ impl ThemeConfig {
     /// Returns `None` if the string is not a valid 6-digit hex color.
     /// Falls back to the provided default color on parse failure.
     pub fn color_or(&self, hex: &str, default: ratatui::prelude::Color) -> ratatui::prelude::Color {
-        parse_hex_color(hex).unwrap_or(default)
+        parse_hex_color_or(hex, default)
     }
+}
+
+/// Parse a `#RRGGBB` hex string into a [`ratatui::prelude::Color::Rgb`].
+///
+/// Returns the provided `default` color if the string is not exactly 7 characters
+/// (`#` + 6 hex digits) or if any digit is not valid hex.
+pub fn parse_hex_color_or(hex: &str, default: ratatui::prelude::Color) -> ratatui::prelude::Color {
+    parse_hex_color(hex).unwrap_or(default)
 }
 
 /// Parse a `#RRGGBB` hex string into a [`ratatui::prelude::Color::Rgb`].

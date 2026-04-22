@@ -1,5 +1,6 @@
 //! Task detail view — full-screen panel for viewing task metadata, streaming output, messages, and permissions.
 
+use crate::config::types::parse_hex_color_or;
 use crate::state::types::{
     AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
 };
@@ -146,9 +147,9 @@ fn render_metadata_line(
     let status_icon = task.agent_status.icon();
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
-        AgentStatus::Running => theme.color_or(&theme.status_working, Color::Blue),
-        AgentStatus::Complete => theme.color_or(&theme.status_done, Color::Green),
-        AgentStatus::Error => theme.color_or(&theme.status_error, Color::Red),
+        AgentStatus::Running => parse_hex_color_or(&theme.status_working, Color::Blue),
+        AgentStatus::Complete => parse_hex_color_or(&theme.status_done, Color::Green),
+        AgentStatus::Error => parse_hex_color_or(&theme.status_error, Color::Red),
         AgentStatus::Hung => Color::Rgb(255, 87, 34),
         AgentStatus::Pending => Color::DarkGray,
     };
@@ -301,6 +302,8 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         state
             .cached_streaming_lines
             .insert(task_id.to_string(), (current_version, built.clone()));
+        // Evict stale entries when cache grows too large
+        state.prune_streaming_cache(10);
         built
     };
 
