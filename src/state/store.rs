@@ -195,6 +195,8 @@ impl AppState {
             if let Some(sid) = &task.session_id {
                 self.session_to_task.remove(sid);
             }
+            // Remove render cache for deleted task
+            self.cached_streaming_lines.remove(task_id);
             self.mark_dirty();
             true
         } else {
@@ -618,6 +620,7 @@ impl AppState {
                     session.streaming_text = Some(delta.to_string());
                 }
             }
+            session.render_version += 1;
         }
     }
 

@@ -26,6 +26,8 @@ pub struct App {
     pub should_quit: bool,
     /// OpenCode clients keyed by project ID, used for API calls from the TUI.
     pub opencode_clients: HashMap<String, OpenCodeClient>,
+    /// Pre-computed key matcher — built once from config, avoids per-keypress allocation.
+    key_matcher: crate::tui::keys::KeyMatcher,
 }
 
 impl App {
@@ -52,6 +54,7 @@ impl App {
     ) -> anyhow::Result<Self> {
         let backend = CrosstermBackend::new(std::io::stdout());
         let terminal = ratatui::Terminal::new(backend)?;
+        let key_matcher = crate::tui::keys::KeyMatcher::from_config(&config.keybindings);
 
         Ok(Self {
             state,
@@ -59,6 +62,7 @@ impl App {
             terminal,
             should_quit: false,
             opencode_clients,
+            key_matcher,
         })
     }
 
@@ -301,14 +305,20 @@ impl App {
                             s.mark_render_dirty();
                         });
                     }
+                } else {
+                    // In TaskDetail view with no pending permission — consume y/n
+                    // to prevent fallthrough to keybinding dispatch (e.g. n → CreateTask)
+                    let state = self.state.lock().unwrap();
+                    if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
+                        return;
+                    }
                 }
             }
         }
 
-        use crate::tui::keys::{Action, KeyMatcher};
+        use crate::tui::keys::Action;
 
-        let key_matcher = KeyMatcher::from_config(&self.config.keybindings);
-        let action = key_matcher.match_key(key);
+        let action = self.key_matcher.match_key(key);
 
         match action {
             Some(Action::Quit) => self.handle_quit(),

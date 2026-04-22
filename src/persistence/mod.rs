@@ -3,37 +3,43 @@
 pub mod db;
 
 use crate::error::AppResult;
-use crate::state::types::{AppState, CortexProject, CortexTask, KanbanColumn};
+use crate::state::types::{AppState, KanbanColumn};
 use db::Db;
 use std::collections::HashMap;
 
 /// Persist all tasks and projects from state to the database.
+///
+/// All writes are performed inside a single SQLite transaction so that a
+/// crash mid-save never leaves the database in an inconsistent state.
 pub fn save_state(state: &AppState, db: &Db) -> AppResult<()> {
+    let tx = db.conn.unchecked_transaction()?;
+
     // Save all projects
     for project in &state.projects {
-        db.save_project(project)?;
+        db.save_project_with_conn(project, &tx)?;
     }
 
     // Save all tasks (depends on projects — saved above)
     for task in state.tasks.values() {
-        db.save_task(task)?;
+        db.save_task_with_conn(task, &tx)?;
     }
 
     // Save kanban order (depends on tasks — saved above)
     for (column_id, task_ids) in &state.kanban.columns {
-        db.save_kanban_order(&KanbanColumn(column_id.clone()), task_ids)?;
+        db.save_kanban_order_with_conn(&KanbanColumn(column_id.clone()), task_ids, &tx)?;
     }
 
     // Save active project
     if let Some(ref pid) = state.active_project_id {
-        db.set_metadata("active_project_id", pid)?;
+        db.set_metadata_with_conn("active_project_id", pid, &tx)?;
     }
 
     // Save task number counters
     for (pid, counter) in &state.task_number_counters {
-        db.set_metadata(&format!("counter_{}", pid), &counter.to_string())?;
+        db.set_metadata_with_conn(&format!("counter_{}", pid), &counter.to_string(), &tx)?;
     }
 
+    tx.commit()?;
     Ok(())
 }
 

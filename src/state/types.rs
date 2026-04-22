@@ -789,8 +789,8 @@ pub fn extract_tool_summary(tool_name: &str, input: &str) -> String {
                 .get("command")
                 .and_then(|v| v.as_str())
                 .map(|s| {
-                    if s.len() > 60 {
-                        format!("{}...", &s[..57])
+                    if s.chars().count() > 60 {
+                        format!("{}...", s.chars().take(57).collect::<String>())
                     } else {
                         s.to_string()
                     }
