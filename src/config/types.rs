@@ -297,6 +297,10 @@ pub struct KeybindingConfig {
     pub kanban_move_forward: String,
     #[serde(default = "default_kanban_move_backward")]
     pub kanban_move_backward: String,
+    #[serde(default = "default_task_move_up")]
+    pub task_move_up: String,
+    #[serde(default = "default_task_move_down")]
+    pub task_move_down: String,
     #[serde(default = "default_todo_new")]
     pub todo_new: String,
     #[serde(default = "default_todo_edit")]
@@ -345,6 +349,15 @@ fn default_kanban_move_forward() -> String {
 fn default_kanban_move_backward() -> String {
     "shift+m".to_string()
 }
+
+fn default_task_move_up() -> String {
+    "ctrl+up".to_string()
+}
+
+fn default_task_move_down() -> String {
+    "ctrl+down".to_string()
+}
+
 fn default_todo_new() -> String {
     "n".to_string()
 }
@@ -392,6 +405,8 @@ impl Default for KeybindingConfig {
             kanban_down: default_kanban_down(),
             kanban_move_forward: default_kanban_move_forward(),
             kanban_move_backward: default_kanban_move_backward(),
+            task_move_up: default_task_move_up(),
+            task_move_down: default_task_move_down(),
             todo_new: default_todo_new(),
             todo_edit: default_todo_edit(),
             task_delete: default_task_delete(),

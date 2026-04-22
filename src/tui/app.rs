@@ -351,6 +351,8 @@ impl App {
             Some(Action::EditTask) => self.handle_edit_task(),
             Some(Action::MoveForward) => self.handle_move_task(1),
             Some(Action::MoveBackward) => self.handle_move_task(-1),
+            Some(Action::MoveTaskUp) => self.handle_reorder_task(-1),
+            Some(Action::MoveTaskDown) => self.handle_reorder_task(1),
             Some(Action::DeleteTask) => self.handle_delete_task(),
             Some(Action::ViewTask) => self.handle_view_task(),
             Some(Action::AbortSession) => self.handle_abort_session(),
@@ -499,6 +501,48 @@ impl App {
             let mut state = self.state.lock().unwrap();
             state.set_notification(
                 "No task selected to move".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
+        }
+    }
+
+
+    /// Reorder the focused task within its column by swapping with a neighbor.
+    /// `direction` is -1 (move up) or +1 (move down).
+    fn handle_reorder_task(&mut self, direction: i32) {
+        let task_id = {
+            let state = self.state.lock().unwrap();
+            state.ui.focused_task_id.clone()
+        };
+        if let Some(tid) = task_id {
+            let moved = {
+                let mut state = self.state.lock().unwrap();
+                if direction < 0 {
+                    state.reorder_task_up(&tid)
+                } else {
+                    state.reorder_task_down(&tid)
+                }
+            };
+            let (msg, variant) = if moved {
+                if direction < 0 {
+                    ("Task moved up".to_string(), crate::state::types::NotificationVariant::Info)
+                } else {
+                    ("Task moved down".to_string(), crate::state::types::NotificationVariant::Info)
+                }
+            } else {
+                if direction < 0 {
+                    ("Already at top".to_string(), crate::state::types::NotificationVariant::Warning)
+                } else {
+                    ("Already at bottom".to_string(), crate::state::types::NotificationVariant::Warning)
+                }
+            };
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(msg, variant, 1500);
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No task selected to reorder".to_string(),
                 crate::state::types::NotificationVariant::Info,
                 2000,
             );
