@@ -134,6 +134,13 @@ pub enum ToolState {
     Error,
 }
 
+/// A destructive action awaiting user confirmation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmableAction {
+    /// Delete the task with the given ID.
+    DeleteTask(String),
+}
+
 /// Application mode — determines rendering and key routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
@@ -144,6 +151,8 @@ pub enum AppMode {
     InputPrompt,
     /// Project rename prompt.
     ProjectRename,
+    /// Confirmation dialog for destructive actions.
+    ConfirmDialog,
 }
 
 /// Which field is focused in the task editor.
@@ -281,6 +290,8 @@ pub struct UIState {
     pub prompt_context: Option<String>,
     /// Task editor state when in `AppMode::TaskEditor`.
     pub task_editor: Option<TaskEditorState>,
+    /// Pending destructive action awaiting confirmation in `AppMode::ConfirmDialog`.
+    pub confirm_action: Option<ConfirmableAction>,
 }
 
 impl Default for UIState {
@@ -297,6 +308,7 @@ impl Default for UIState {
             prompt_label: String::new(),
             prompt_context: None,
             task_editor: None,
+            confirm_action: None,
         }
     }
 }
@@ -340,6 +352,11 @@ pub struct TaskEditorState {
     pub column_id: Option<String>,
     /// Agent type to assign when creating a new task.
     pub agent_type: TaskAgentType,
+    /// Whether the user has made unsaved edits since the last save or open.
+    pub has_unsaved_changes: bool,
+    /// Whether the "unsaved changes" discard warning is currently displayed.
+    /// Set on first Esc with unsaved changes; cleared on any edit or save.
+    pub discard_warning_shown: bool,
 }
 
 impl TaskEditorState {
@@ -356,6 +373,8 @@ impl TaskEditorState {
             scroll_offset: 0,
             column_id: Some(default_column.to_string()),
             agent_type: TaskAgentType::None,
+            has_unsaved_changes: false,
+            discard_warning_shown: false,
         }
     }
 
@@ -382,6 +401,8 @@ impl TaskEditorState {
             scroll_offset: 0,
             column_id: Some(task.column.0.clone()),
             agent_type: task.agent_type.clone(),
+            has_unsaved_changes: false,
+            discard_warning_shown: false,
         }
     }
 
@@ -428,8 +449,15 @@ impl TaskEditorState {
         self.cached_description = None;
     }
 
+    /// Marks the editor as having unsaved changes and clears any discard warning.
+    fn mark_edited(&mut self) {
+        self.has_unsaved_changes = true;
+        self.discard_warning_shown = false;
+    }
+
     /// Inserts a character at cursor position in the focused field.
     pub fn insert_char(&mut self, ch: char) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 // Convert char index to byte offset for String::insert.
@@ -464,6 +492,7 @@ impl TaskEditorState {
 
     /// Deletes character before cursor (backspace).
     pub fn delete_char_back(&mut self) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 if self.cursor_col > 0 {
@@ -505,6 +534,7 @@ impl TaskEditorState {
 
     /// Deletes character at cursor (delete key).
     pub fn delete_char_forward(&mut self) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 if self.cursor_col < self.title.chars().count() {
@@ -545,6 +575,7 @@ impl TaskEditorState {
         if self.focused_field != EditorField::Description {
             return;
         }
+        self.mark_edited();
         let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
         let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
         let col = self.cursor_col.min(line_len);
@@ -765,6 +796,10 @@ pub struct AppState {
     pub ui: UIState,
     /// Whether at least one OpenCode client is connected.
     pub connected: bool,
+    /// Whether an SSE reconnection is in progress (exponential backoff).
+    pub reconnecting: bool,
+    /// Current reconnect attempt number (0 when not reconnecting, 1-based during reconnect).
+    pub reconnect_attempt: u32,
     /// ID of the currently active project.
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
@@ -792,6 +827,8 @@ impl Default for AppState {
             kanban: KanbanState::default(),
             ui: UIState::default(),
             connected: false,
+            reconnecting: false,
+            reconnect_attempt: 0,
             active_project_id: None,
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),
