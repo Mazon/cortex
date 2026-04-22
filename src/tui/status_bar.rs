@@ -1,4 +1,5 @@
-//! Status bar renderer — bottom bar showing connection status, notifications, key hints.
+//! Status bar renderer — bottom bar showing connection status, project info,
+//! notifications, and key hints.
 
 use crate::state::types::{AppState, NotificationVariant, MAX_NOTIFICATIONS};
 use ratatui::prelude::*;
@@ -20,6 +21,27 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         ("○ disconnected".to_string(), Color::DarkGray)
     };
 
+    // Active project name + task count (displayed between connection status and notifications)
+    let project_info = state
+        .active_project_id
+        .as_ref()
+        .and_then(|pid| {
+            state.projects.iter().find(|p| &p.id == pid).map(|p| {
+                let task_count = state
+                    .tasks
+                    .values()
+                    .filter(|t| t.project_id == *pid)
+                    .count();
+                let label = if task_count == 1 {
+                    "1 task".to_string()
+                } else {
+                    format!("{} tasks", task_count)
+                };
+                format!(" │ {} ({})", p.name, label)
+            })
+        })
+        .unwrap_or_default();
+
     // Notification (center) — show most recent with queue count indicator
     let (notif_text, notif_color) = if let Some(n) = state.ui.notifications.back() {
         let color = match n.variant {
@@ -39,36 +61,102 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         (String::new(), Color::Reset)
     };
 
-    // Key hints (right)
-    let hints = "?:help  n:new  e:edit  m:move  x:del  r:rename  d:dir  ^j/^k:proj  ^q:quit";
+    // Key hints tiers — from longest to shortest, chosen based on available space.
+    const HINTS_FULL: &str =
+        "?:help  n:new  e:edit  m:move  x:del  r:rename  d:dir  ^j/^k:proj  ^q:quit";
+    const HINTS_MEDIUM: &str = "?:help  n:new  e:edit  m:move  x:del  ^q:quit";
+    const HINTS_SHORT: &str = "?:help  ^q:quit";
+    const HINTS_MINIMAL: &str = "?:help";
 
     // Build the status bar using a horizontal layout
+    let total_width = area.width as usize;
+
     // Connection status width is dynamic: "● connected" (13) to "◐ reconnecting (99)..." (23)
     let conn_width = conn_text.chars().count().max(14) as u16;
+
+    // Project info width (hide on narrow terminals)
+    let proj_len = project_info.chars().count();
+    let show_project = !project_info.is_empty() && total_width >= 70;
+    let proj_width = if show_project { proj_len as u16 } else { 0 };
+
+    // Available space for notification + hints
+    let remaining = total_width
+        .saturating_sub(conn_width as usize)
+        .saturating_sub(proj_width as usize);
+
+    // Choose the appropriate hint tier based on available space.
+    let has_notification = !notif_text.is_empty();
+    let hints = if has_notification {
+        let hint_budget = remaining.saturating_sub(20);
+        if hint_budget >= HINTS_FULL.chars().count() {
+            HINTS_FULL
+        } else if hint_budget >= HINTS_MEDIUM.chars().count() {
+            HINTS_MEDIUM
+        } else if hint_budget >= HINTS_SHORT.chars().count() {
+            HINTS_SHORT
+        } else {
+            HINTS_MINIMAL
+        }
+    } else {
+        if remaining >= HINTS_FULL.chars().count() {
+            HINTS_FULL
+        } else if remaining >= HINTS_MEDIUM.chars().count() {
+            HINTS_MEDIUM
+        } else if remaining >= HINTS_SHORT.chars().count() {
+            HINTS_SHORT
+        } else if total_width >= 60 {
+            HINTS_MINIMAL
+        } else {
+            ""
+        }
+    };
+
+    let hints_width = hints.chars().count() as u16;
+
+    // Layout: connection (fixed) | project (fixed, conditional) | notification (flex) | hints (fixed)
+    let mut constraints: Vec<Constraint> = vec![
+        Constraint::Length(conn_width), // Connection status (left, fixed)
+    ];
+    if show_project {
+        constraints.push(Constraint::Length(proj_width)); // Project name + task count
+    }
+    constraints.push(Constraint::Min(0)); // Notification (center, flexible)
+    constraints.push(Constraint::Length(hints_width)); // Key hints (right)
+
     let h_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(conn_width), // Connection status (dynamic)
-            Constraint::Min(0),             // Notification (center)
-            Constraint::Length(52),         // Key hints
-        ])
+        .constraints(constraints)
         .split(area);
+
+    let mut slot = 0;
 
     // Left: connection status
     let left = Paragraph::new(Span::styled(conn_text, Style::default().fg(conn_color)));
-    f.render_widget(left, h_layout[0]);
+    f.render_widget(left, h_layout[slot]);
+    slot += 1;
+
+    // Project info
+    if show_project {
+        let proj_widget =
+            Paragraph::new(Span::styled(project_info, Style::default().fg(Color::Cyan)));
+        f.render_widget(proj_widget, h_layout[slot]);
+        slot += 1;
+    }
 
     // Center: notification
     if !notif_text.is_empty() {
-        let inner = h_layout[1].inner(Margin {
+        let inner = h_layout[slot].inner(Margin {
             horizontal: 1,
             vertical: 0,
         });
         let center = Paragraph::new(Span::styled(notif_text, Style::default().fg(notif_color)));
         f.render_widget(center, inner);
     }
+    slot += 1;
 
     // Right: key hints
-    let right = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
-    f.render_widget(right, h_layout[2]);
+    if !hints.is_empty() {
+        let right = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+        f.render_widget(right, h_layout[slot]);
+    }
 }

@@ -488,6 +488,13 @@ impl App {
                     2000,
                 );
             }
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No task selected to move".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
         }
     }
 
@@ -501,6 +508,13 @@ impl App {
             state.ui.confirm_action =
                 Some(crate::state::types::ConfirmableAction::DeleteTask(tid));
             state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No task selected to delete".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
         }
     }
 
@@ -512,6 +526,13 @@ impl App {
         if let Some(tid) = task_id {
             let mut state = self.state.lock().unwrap();
             state.open_task_detail(&tid);
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No task selected to view".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
         }
     }
 
@@ -577,6 +598,13 @@ impl App {
                     3000,
                 );
             }
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No active session to abort".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
         }
     }
 

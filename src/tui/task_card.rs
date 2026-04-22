@@ -78,13 +78,101 @@ pub fn render_task_card(
             }
         }
     }
-    // Permission/question indicators
-    if task.pending_permission_count > 0 {
+    // Permission/question indicators — bold + bright colors for visibility
+    let has_permissions = task.pending_permission_count > 0;
+    let has_questions = task.pending_question_count > 0;
+    if has_permissions {
         status_line.push_str(&format!(" !{}", task.pending_permission_count));
     }
-    if task.pending_question_count > 0 {
+    if has_questions {
         status_line.push_str(&format!(" ?{}", task.pending_question_count));
     }
+
+    // Build status line as styled spans so indicators get bold + bright colors
+    let status_spans: Vec<Span<'_>> = if !has_permissions && !has_questions {
+        vec![Span::styled(status_line, Style::default().fg(status_color))]
+    } else {
+        let mut spans = Vec::new();
+
+        // Collect indicator positions: (byte_position, kind)
+        let mut indicator_positions: Vec<(usize, char)> = Vec::new();
+        let mut search_from = 0;
+        while search_from < status_line.len() {
+            let perm_idx = status_line[search_from..]
+                .find(" !")
+                .map(|i| search_from + i);
+            let quest_idx = status_line[search_from..]
+                .find(" ?")
+                .map(|i| search_from + i);
+
+            match (perm_idx, quest_idx) {
+                (Some(p), Some(q)) => {
+                    if p <= q {
+                        indicator_positions.push((p, '!'));
+                        search_from = p + 2;
+                    } else {
+                        indicator_positions.push((q, '?'));
+                        search_from = q + 2;
+                    }
+                }
+                (Some(p), None) => {
+                    indicator_positions.push((p, '!'));
+                    search_from = p + 2;
+                }
+                (None, Some(q)) => {
+                    indicator_positions.push((q, '?'));
+                    search_from = q + 2;
+                }
+                (None, None) => break,
+            }
+        }
+
+        // Build spans from indicator positions
+        let mut last_end = 0;
+        for (pos, kind) in &indicator_positions {
+            // Text before this indicator
+            if *pos > last_end {
+                spans.push(Span::styled(
+                    status_line[last_end..*pos].to_string(),
+                    Style::default().fg(status_color),
+                ));
+            }
+
+            // Extract the number after the indicator character
+            let num_start = *pos + 2; // skip " !" or " ?"
+            let num_end = status_line[num_start..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map(|i| num_start + i)
+                .unwrap_or(status_line.len());
+
+            let indicator_str = format!("{}{}", kind, &status_line[num_start..num_end]);
+            let indicator_style = if *kind == '!' {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            };
+            spans.push(Span::styled(indicator_str, indicator_style));
+
+            last_end = num_end;
+        }
+
+        // Remaining text after the last indicator
+        if last_end < status_line.len() {
+            spans.push(Span::styled(
+                status_line[last_end..].to_string(),
+                Style::default().fg(status_color),
+            ));
+        }
+
+        // Fallback: if parsing produced no spans, render as plain text
+        if spans.is_empty() {
+            spans.push(Span::styled(status_line, Style::default().fg(status_color)));
+        }
+
+        spans
+    };
 
     if inner.height >= 1 {
         // Line 1 (title) — always render if we have any space
@@ -104,8 +192,7 @@ pub fn render_task_card(
 
         // Line 2 (status) — only if we have enough room
         if inner.height >= 2 {
-            let status_para =
-                Paragraph::new(Span::styled(status_line, Style::default().fg(status_color)));
+            let status_para = Paragraph::new(Line::from(status_spans));
             f.render_widget(
                 status_para,
                 Rect {
