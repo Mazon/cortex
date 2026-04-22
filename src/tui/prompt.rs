@@ -1,4 +1,4 @@
-//! Input prompt overlay — renders a centered text input dialog.
+//! Input prompt and confirmation dialog overlays.
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
@@ -110,4 +110,72 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
     let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
     Rect::new(x, y, popup_width, popup_height)
+}
+
+/// Render a centered confirmation dialog overlay on top of the current view.
+///
+/// Displays the confirmation message and `[y: delete / n: cancel]` hint.
+/// The user presses `y` to confirm or `n`/`Esc` to cancel.
+pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppState) {
+    let area = centered_rect(50, 20, f.area());
+
+    // Build the confirmation message from the pending action
+    let (title, message) = match &state.ui.confirm_action {
+        Some(crate::state::types::ConfirmableAction::DeleteTask(task_id)) => {
+            let task_label = state
+                .tasks
+                .get(task_id)
+                .map(|t| format!("#{}: {}", t.number, t.title))
+                .unwrap_or_else(|| task_id.clone());
+            (
+                " Confirm Delete ".to_string(),
+                format!("Delete task {}?", task_label),
+            )
+        }
+        None => (" Confirm ".to_string(), "Are you sure?".to_string()),
+    };
+
+    // Clear the area behind the overlay
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(Color::Rgb(36, 40, 56)));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Layout inside the block: message | hint
+    let constraints = [
+        Constraint::Length(1), // Message
+        Constraint::Length(1), // Hint
+    ];
+    let v_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+
+    // Message
+    let msg = Paragraph::new(Span::styled(
+        message,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    f.render_widget(msg, v_layout[0]);
+
+    // Hint
+    let hint = Paragraph::new(Span::styled(
+        "y: delete  |  n/Esc: cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+    f.render_widget(hint, v_layout[1]);
 }

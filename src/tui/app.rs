@@ -191,6 +191,10 @@ impl App {
                             crate::tui::render_normal(f, state, config);
                             crate::tui::prompt::render_input_prompt(f, state);
                         }
+                        crate::state::types::AppMode::ConfirmDialog => {
+                            crate::tui::render_normal(f, state, config);
+                            crate::tui::prompt::render_confirm_dialog(f, state);
+                        }
                     }
                 })?;
             }
@@ -226,6 +230,9 @@ impl App {
             }
             crate::state::types::AppMode::InputPrompt => {
                 self.handle_input_prompt_key(key);
+            }
+            crate::state::types::AppMode::ConfirmDialog => {
+                self.handle_confirm_dialog_key(key);
             }
         }
     }
@@ -491,12 +498,9 @@ impl App {
         };
         if let Some(tid) = task_id {
             let mut state = self.state.lock().unwrap();
-            state.delete_task(&tid);
-            state.set_notification(
-                "Task deleted".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                3000,
-            );
+            state.ui.confirm_action =
+                Some(crate::state::types::ConfirmableAction::DeleteTask(tid));
+            state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
         }
     }
 
@@ -573,6 +577,42 @@ impl App {
                     3000,
                 );
             }
+        }
+    }
+
+    /// Handle key events in ConfirmDialog mode.
+    ///
+    /// `y` confirms the pending action, `n` or `Esc` cancels.
+    fn handle_confirm_dialog_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        use crate::state::types::ConfirmableAction;
+
+        match key.code {
+            KeyCode::Char('y') => {
+                let action = {
+                    let mut state = self.state.lock().unwrap();
+                    state.ui.confirm_action.take()
+                };
+                if let Some(action) = action {
+                    match action {
+                        ConfirmableAction::DeleteTask(task_id) => {
+                            let mut state = self.state.lock().unwrap();
+                            state.delete_task(&task_id);
+                            state.set_notification(
+                                "Task deleted".to_string(),
+                                crate::state::types::NotificationVariant::Info,
+                                3000,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.confirm_action = None;
+                state.ui.mode = crate::state::types::AppMode::Normal;
+            }
+            _ => {}
         }
     }
 
