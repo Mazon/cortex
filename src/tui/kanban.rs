@@ -94,6 +94,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                 .copied()
                 .unwrap_or(0);
 
+            let mut rendered_count = 0usize;
             for (task_idx, task_id) in task_ids.iter().enumerate() {
                 if let Some(task) = state.tasks.get(task_id) {
                     let is_task_focused = is_focused
@@ -120,7 +121,26 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         &config.theme,
                     );
                     card_y += card_height + 1; // 1px gap between cards
+                    rendered_count += 1;
                 }
+            }
+
+            // Show scroll indicator if tasks were clipped
+            let remaining = task_ids.len() - rendered_count;
+            if remaining > 0 && inner.height > 0 {
+                let indicator_y = inner.y + inner.height.saturating_sub(1);
+                let indicator_text = format!("  ▼ {} more", remaining);
+                let indicator = Paragraph::new(indicator_text)
+                    .style(Style::default().fg(Color::DarkGray));
+                f.render_widget(
+                    indicator,
+                    Rect {
+                        x: inner.x,
+                        y: indicator_y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
             }
         } else {
             // Empty column — show placeholder text
