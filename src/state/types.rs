@@ -432,16 +432,28 @@ impl TaskEditorState {
     pub fn insert_char(&mut self, ch: char) {
         match self.focused_field {
             EditorField::Title => {
-                self.title.insert(self.cursor_col.min(self.title.len()), ch);
-                self.cursor_col = (self.cursor_col + 1).min(self.title.len());
+                // Convert char index to byte offset for String::insert.
+                let byte_pos = self
+                    .title
+                    .char_indices()
+                    .nth(self.cursor_col)
+                    .map(|(i, _)| i)
+                    .unwrap_or(self.title.len());
+                self.title.insert(byte_pos, ch);
+                self.cursor_col += 1; // char-based, so +1 is always correct
             }
             EditorField::Description => {
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
-                let col = self
-                    .cursor_col
-                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
+                let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
+                let col = self.cursor_col.min(line_len);
                 if let Some(line) = self.desc_lines.get_mut(row) {
-                    line.insert(col, ch);
+                    // Convert char index to byte offset for String::insert.
+                    let byte_pos = line
+                        .char_indices()
+                        .nth(col)
+                        .map(|(i, _)| i)
+                        .unwrap_or(line.len());
+                    line.insert(byte_pos, ch);
                     self.cursor_col = col + 1;
                     self.cursor_row = row;
                 }
@@ -455,24 +467,32 @@ impl TaskEditorState {
         match self.focused_field {
             EditorField::Title => {
                 if self.cursor_col > 0 {
-                    self.title.remove(self.cursor_col - 1);
+                    // Find byte range of the char at char index (cursor_col - 1).
+                    let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
+                    if let Some(&(byte_start, ch)) = char_indices.get(self.cursor_col - 1) {
+                        let byte_end = byte_start + ch.len_utf8();
+                        self.title.replace_range(byte_start..byte_end, "");
+                    }
                     self.cursor_col -= 1;
                 }
             }
             EditorField::Description => {
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
-                let col = self
-                    .cursor_col
-                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
+                let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
+                let col = self.cursor_col.min(line_len);
 
                 if col > 0 {
                     if let Some(line) = self.desc_lines.get_mut(row) {
-                        line.remove(col - 1);
+                        let char_indices: Vec<(usize, char)> = line.char_indices().collect();
+                        if let Some(&(byte_start, ch)) = char_indices.get(col - 1) {
+                            let byte_end = byte_start + ch.len_utf8();
+                            line.replace_range(byte_start..byte_end, "");
+                        }
                         self.cursor_col = col - 1;
                     }
                 } else if row > 0 {
                     // Merge with previous line
-                    let prev_len = self.desc_lines[row - 1].len();
+                    let prev_len = self.desc_lines[row - 1].chars().count();
                     let current = self.desc_lines.remove(row);
                     self.desc_lines[row - 1].push_str(&current);
                     self.cursor_row = row - 1;
@@ -487,19 +507,28 @@ impl TaskEditorState {
     pub fn delete_char_forward(&mut self) {
         match self.focused_field {
             EditorField::Title => {
-                if self.cursor_col < self.title.len() {
-                    self.title.remove(self.cursor_col);
+                if self.cursor_col < self.title.chars().count() {
+                    let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
+                    if let Some(&(byte_start, ch)) = char_indices.get(self.cursor_col) {
+                        let byte_end = byte_start + ch.len_utf8();
+                        self.title.replace_range(byte_start..byte_end, "");
+                    }
                 }
             }
             EditorField::Description => {
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
-                let col = self
-                    .cursor_col
-                    .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
+                let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
+                let col = self.cursor_col.min(line_len);
 
                 if row < self.desc_lines.len() {
-                    if col < self.desc_lines[row].len() {
-                        self.desc_lines[row].remove(col);
+                    let line_char_count = self.desc_lines[row].chars().count();
+                    if col < line_char_count {
+                        let line = &mut self.desc_lines[row];
+                        let char_indices: Vec<(usize, char)> = line.char_indices().collect();
+                        if let Some(&(byte_start, ch)) = char_indices.get(col) {
+                            let byte_end = byte_start + ch.len_utf8();
+                            line.replace_range(byte_start..byte_end, "");
+                        }
                     } else if row + 1 < self.desc_lines.len() {
                         // Merge with next line
                         let next = self.desc_lines.remove(row + 1);
@@ -517,12 +546,17 @@ impl TaskEditorState {
             return;
         }
         let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
-        let col = self
-            .cursor_col
-            .min(self.desc_lines.get(row).map_or(0, |l| l.len()));
+        let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
+        let col = self.cursor_col.min(line_len);
 
         if row < self.desc_lines.len() {
-            let rest = self.desc_lines[row].split_off(col);
+            // Convert char index to byte offset for split_off.
+            let byte_pos = self.desc_lines[row]
+                .char_indices()
+                .nth(col)
+                .map(|(i, _)| i)
+                .unwrap_or(self.desc_lines[row].len());
+            let rest = self.desc_lines[row].split_off(byte_pos);
             self.desc_lines.insert(row + 1, rest);
         }
         self.cursor_row = row + 1;
@@ -538,13 +572,13 @@ impl TaskEditorState {
                     self.cursor_col = self.cursor_col.saturating_sub(1);
                 }
                 CursorDirection::Right => {
-                    self.cursor_col = (self.cursor_col + 1).min(self.title.len());
+                    self.cursor_col = (self.cursor_col + 1).min(self.title.chars().count());
                 }
                 CursorDirection::Home => {
                     self.cursor_col = 0;
                 }
                 CursorDirection::End => {
-                    self.cursor_col = self.title.len();
+                    self.cursor_col = self.title.chars().count();
                 }
                 _ => {}
             },
@@ -556,16 +590,20 @@ impl TaskEditorState {
                     CursorDirection::Up => {
                         if self.cursor_row > 0 {
                             self.cursor_row -= 1;
-                            let line_len =
-                                self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
+                            let line_len = self
+                                .desc_lines
+                                .get(self.cursor_row)
+                                .map_or(0, |l| l.chars().count());
                             self.cursor_col = self.cursor_col.min(line_len);
                         }
                     }
                     CursorDirection::Down => {
                         if self.cursor_row < max_row {
                             self.cursor_row += 1;
-                            let line_len =
-                                self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
+                            let line_len = self
+                                .desc_lines
+                                .get(self.cursor_row)
+                                .map_or(0, |l| l.chars().count());
                             self.cursor_col = self.cursor_col.min(line_len);
                         }
                     }
@@ -573,14 +611,20 @@ impl TaskEditorState {
                         self.cursor_col = self.cursor_col.saturating_sub(1);
                     }
                     CursorDirection::Right => {
-                        let line_len = self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
+                        let line_len = self
+                            .desc_lines
+                            .get(self.cursor_row)
+                            .map_or(0, |l| l.chars().count());
                         self.cursor_col = (self.cursor_col + 1).min(line_len);
                     }
                     CursorDirection::Home => {
                         self.cursor_col = 0;
                     }
                     CursorDirection::End => {
-                        let line_len = self.desc_lines.get(self.cursor_row).map_or(0, |l| l.len());
+                        let line_len = self
+                            .desc_lines
+                            .get(self.cursor_row)
+                            .map_or(0, |l| l.chars().count());
                         self.cursor_col = line_len;
                     }
                 }
