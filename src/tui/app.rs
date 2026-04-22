@@ -5,6 +5,7 @@ use crate::opencode::client::OpenCodeClient;
 use crate::state::types::AppState;
 use crate::tui::{CrosstermBackend, Terminal};
 use crossterm::event::{self, Event, KeyEventKind};
+use ratatui::prelude::Rect;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -181,7 +182,7 @@ impl App {
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
-                            crate::tui::help::render_help_overlay(f);
+                            crate::tui::help::render_help_overlay(f, &config.keybindings);
                         }
                         crate::state::types::AppMode::ProjectRename => {
                             crate::tui::render_normal(f, state, config);
@@ -356,6 +357,8 @@ impl App {
             Some(Action::DeleteTask) => self.handle_delete_task(),
             Some(Action::ViewTask) => self.handle_view_task(),
             Some(Action::AbortSession) => self.handle_abort_session(),
+            Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
+            Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
             None => {} // Unmatched key, ignore
         }
     }
@@ -412,6 +415,7 @@ impl App {
     }
 
     /// Move the focused column left or right by `direction` (-1 or +1).
+    /// Auto-scrolls the kanban view to keep the focused column visible.
     fn handle_nav_column(&mut self, direction: i32) {
         let visible = self.config.columns.visible_column_ids();
         let mut state = self.state.lock().unwrap();
@@ -421,6 +425,8 @@ impl App {
             if let Some(col_id) = visible.get(state.kanban.focused_column_index) {
                 state.set_focused_column(col_id);
             }
+            // Auto-scroll to keep the focused column visible.
+            Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
         }
     }
 
@@ -909,6 +915,52 @@ impl App {
             }
             EditorAction::None => {}
         }
+    }
+
+    // ── Horizontal scroll helpers ──
+
+    /// Calculate the maximum number of kanban columns that can fit.
+    fn max_visible_columns(config: &CortexConfig, terminal: &Terminal) -> usize {
+        let term_width = terminal
+            .size()
+            .unwrap_or(Rect::new(0, 0, 80, 24))
+            .width;
+        let sidebar_width = config.theme.sidebar_width;
+        let kanban_width = term_width.saturating_sub(sidebar_width);
+        let available = kanban_width.saturating_sub(6);
+        let col_width = config.theme.column_width;
+        std::cmp::max(1, (available / col_width) as usize)
+    }
+
+    /// Ensure the focused column is visible by adjusting the scroll offset.
+    fn ensure_column_visible(
+        state: &mut AppState,
+        config: &CortexConfig,
+        terminal: &Terminal,
+    ) {
+        let total_cols = config.columns.visible_column_ids().len();
+        if total_cols == 0 {
+            return;
+        }
+
+        let max_visible = Self::max_visible_columns(config, terminal);
+
+        if total_cols <= max_visible {
+            state.kanban.kanban_scroll_offset = 0;
+            return;
+        }
+
+        let focused = state.kanban.focused_column_index;
+        let offset = &mut state.kanban.kanban_scroll_offset;
+
+        if focused < *offset {
+            *offset = focused;
+        } else if focused >= *offset + max_visible {
+            *offset = focused - max_visible + 1;
+        }
+
+        let max_offset = total_cols.saturating_sub(max_visible);
+        *offset = (*offset).min(max_offset);
     }
 
     /// Teardown the terminal. Call this on shutdown.

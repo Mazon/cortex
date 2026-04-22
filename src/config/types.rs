@@ -321,6 +321,10 @@ pub struct KeybindingConfig {
     pub set_working_directory: String,
     #[serde(default = "default_abort_session")]
     pub abort_session: String,
+    #[serde(default = "default_scroll_kanban_left")]
+    pub scroll_kanban_left: String,
+    #[serde(default = "default_scroll_kanban_right")]
+    pub scroll_kanban_right: String,
     #[serde(default = "default_help_toggle")]
     pub help_toggle: String,
     #[serde(default = "default_quit")]
@@ -388,6 +392,12 @@ fn default_set_working_directory() -> String {
 fn default_abort_session() -> String {
     "ctrl+a a".to_string()
 }
+fn default_scroll_kanban_left() -> String {
+    "pageup".to_string()
+}
+fn default_scroll_kanban_right() -> String {
+    "pagedown".to_string()
+}
 fn default_help_toggle() -> String {
     "?".to_string()
 }
@@ -417,6 +427,8 @@ impl Default for KeybindingConfig {
             rename_project: default_rename_project(),
             set_working_directory: default_set_working_directory(),
             abort_session: default_abort_session(),
+            scroll_kanban_left: default_scroll_kanban_left(),
+            scroll_kanban_right: default_scroll_kanban_right(),
             help_toggle: default_help_toggle(),
             quit: default_quit(),
         }
