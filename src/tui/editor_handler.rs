@@ -21,8 +21,18 @@ pub fn handle_editor_input(editor: &mut TaskEditorState, key: KeyEvent) -> Edito
         return EditorAction::Save;
     }
 
-    // Escape → Cancel
+    // Escape → Cancel (with unsaved changes warning)
     if key.code == KeyCode::Esc {
+        if editor.discard_warning_shown {
+            // Second Esc: user confirmed they want to discard
+            return EditorAction::Cancel;
+        }
+        if editor.has_unsaved_changes {
+            // First Esc with unsaved changes: show warning, don't cancel yet
+            editor.discard_warning_shown = true;
+            return EditorAction::None;
+        }
+        // No unsaved changes: cancel immediately
         return EditorAction::Cancel;
     }
 
@@ -470,8 +480,95 @@ mod tests {
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(editor.focused_field, EditorField::Title);
 
-        // Cancel
+        // First Esc shows warning (unsaved changes exist)
+        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, EditorAction::None);
+        assert!(editor.discard_warning_shown);
+
+        // Second Esc confirms discard
         let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(action, EditorAction::Cancel);
+    }
+
+    // ── Unsaved changes warning ─────────────────────────────────────────
+
+    #[test]
+    fn esc_without_changes_cancels_immediately() {
+        let mut editor = new_editor();
+        // No edits made — Esc should cancel immediately
+        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, EditorAction::Cancel);
+    }
+
+    #[test]
+    fn first_esc_with_changes_shows_warning() {
+        let mut editor = new_editor();
+        handle_editor_input(&mut editor, char_key('H'));
+        assert!(editor.has_unsaved_changes);
+
+        // First Esc: shows warning, does not cancel
+        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, EditorAction::None);
+        assert!(editor.discard_warning_shown);
+    }
+
+    #[test]
+    fn second_esc_with_warning_confirms_discard() {
+        let mut editor = new_editor();
+        handle_editor_input(&mut editor, char_key('H'));
+
+        // First Esc: warning
+        handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(editor.discard_warning_shown);
+
+        // Second Esc: cancel
+        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, EditorAction::Cancel);
+    }
+
+    #[test]
+    fn typing_after_warning_clears_discard_flag() {
+        let mut editor = new_editor();
+        handle_editor_input(&mut editor, char_key('A'));
+
+        // First Esc: warning
+        handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(editor.discard_warning_shown);
+
+        // Type another character — should clear the warning flag
+        handle_editor_input(&mut editor, char_key('B'));
+        assert!(!editor.discard_warning_shown);
+        assert!(editor.has_unsaved_changes);
+
+        // Next Esc should show warning again (not cancel)
+        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(action, EditorAction::None);
+        assert!(editor.discard_warning_shown);
+    }
+
+    #[test]
+    fn backspace_sets_unsaved_changes() {
+        let mut editor = new_editor();
+        editor.title = "ab".to_string();
+        editor.cursor_col = 2;
+        handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(editor.has_unsaved_changes);
+    }
+
+    #[test]
+    fn delete_forward_sets_unsaved_changes() {
+        let mut editor = new_editor();
+        editor.title = "ab".to_string();
+        editor.cursor_col = 0;
+        handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE));
+        assert!(editor.has_unsaved_changes);
+    }
+
+    #[test]
+    fn newline_sets_unsaved_changes() {
+        let mut editor = new_editor();
+        editor.focused_field = EditorField::Description;
+        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(editor.has_unsaved_changes);
     }
 }

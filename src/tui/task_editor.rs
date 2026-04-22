@@ -188,11 +188,18 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     }
 
     // Footer hint
-    let footer_text = "Ctrl+S: save  Esc: cancel  Tab: next field";
-    let footer = Paragraph::new(Span::styled(
-        footer_text,
-        Style::default().fg(Color::DarkGray),
-    ))
-    .alignment(Alignment::Center);
+    let (footer_text, footer_style) = if editor.discard_warning_shown {
+        (
+            "Unsaved changes! Press Esc again to discard or Ctrl+S to save",
+            Style::default().fg(Color::Yellow),
+        )
+    } else {
+        (
+            "Ctrl+S: save  Esc: cancel  Tab: next field",
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+    let footer =
+        Paragraph::new(Span::styled(footer_text, footer_style)).alignment(Alignment::Center);
     f.render_widget(footer, v_layout[6]);
 }
