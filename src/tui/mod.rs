@@ -5,6 +5,7 @@ pub mod editor_handler;
 pub mod help;
 pub mod kanban;
 pub mod keys;
+pub mod loading;
 pub mod prompt;
 pub mod sidebar;
 pub mod status_bar;
