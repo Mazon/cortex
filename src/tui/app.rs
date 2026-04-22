@@ -430,6 +430,7 @@ impl App {
             Some(Action::NewProject) => self.handle_new_project(),
             Some(Action::RenameProject) => self.handle_rename_project(),
             Some(Action::SetWorkingDirectory) => self.handle_set_working_directory(),
+            Some(Action::DeleteProject) => self.handle_delete_project(),
             Some(Action::NavLeft) => self.handle_nav_column(-1),
             Some(Action::NavRight) => self.handle_nav_column(1),
             Some(Action::NavUp) => self.handle_nav_task(-1),
@@ -498,6 +499,38 @@ impl App {
     fn handle_set_working_directory(&mut self) {
         let mut state = self.state.lock().unwrap();
         state.open_set_working_directory();
+    }
+
+    fn handle_delete_project(&mut self) {
+        let (project_id, project_name) = {
+            let state = self.state.lock().unwrap();
+            match state.active_project_id.as_ref() {
+                Some(pid) => {
+                    let name = state
+                        .projects
+                        .iter()
+                        .find(|p| &p.id == pid)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    (Some(pid.clone()), name)
+                }
+                None => (None, String::new()),
+            }
+        };
+
+        if let Some(pid) = project_id {
+            let mut state = self.state.lock().unwrap();
+            state.ui.confirm_action =
+                Some(crate::state::types::ConfirmableAction::DeleteProject(pid));
+            state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
+        } else {
+            let mut state = self.state.lock().unwrap();
+            state.set_notification(
+                "No active project to delete".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
+        }
     }
 
     /// Move the focused column left or right by `direction` (-1 or +1).
@@ -753,6 +786,26 @@ impl App {
         }
     }
 
+    /// Scroll the kanban view left or right without changing the focused column.
+    /// Bound to PageUp (left) and PageDown (right) by default.
+    fn handle_scroll_kanban(&mut self, direction: i32) {
+        let total_cols = self.config.columns.visible_column_ids().len();
+        if total_cols == 0 {
+            return;
+        }
+
+        let max_visible = Self::max_visible_columns(&self.config, &self.terminal);
+        if total_cols <= max_visible {
+            return;
+        }
+
+        let mut state = self.state.lock().unwrap();
+        let current = state.kanban.kanban_scroll_offset as i32;
+        let max_offset = (total_cols.saturating_sub(max_visible)) as i32;
+        let new_offset = (current + direction).clamp(0, max_offset);
+        state.kanban.kanban_scroll_offset = new_offset as usize;
+    }
+
     /// Handle key events in ConfirmDialog mode.
     ///
     /// `y` confirms the pending action, `n` or `Esc` cancels.
@@ -774,6 +827,35 @@ impl App {
                             state.delete_task(&task_id);
                             state.set_notification(
                                 "Task deleted".to_string(),
+                                crate::state::types::NotificationVariant::Info,
+                                3000,
+                            );
+                        }
+                        ConfirmableAction::DeleteProject(project_id) => {
+                            // Remove the OpenCode client for this project.
+                            self.opencode_clients.remove(&project_id);
+
+                            // Get project name for notification before removing it.
+                            let project_name = {
+                                let state = self.state.lock().unwrap();
+                                state
+                                    .projects
+                                    .iter()
+                                    .find(|p| p.id == project_id)
+                                    .map(|p| p.name.clone())
+                                    .unwrap_or_else(|| project_id.clone())
+                            };
+
+                            let mut state = self.state.lock().unwrap();
+                            state.remove_project(&project_id);
+
+                            // If there are remaining projects, select the first one.
+                            if let Some(first) = state.projects.first() {
+                                state.select_project(&first.id);
+                            }
+
+                            state.set_notification(
+                                format!("Project \"{}\" deleted", project_name),
                                 crate::state::types::NotificationVariant::Info,
                                 3000,
                             );

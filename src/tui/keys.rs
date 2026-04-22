@@ -33,6 +33,7 @@ pub enum Action {
     AbortSession,
     // Project operations
     SetWorkingDirectory,
+    DeleteProject,
 }
 
 /// Matches crossterm KeyEvents to Actions based on config.
@@ -87,6 +88,11 @@ impl KeyMatcher {
             &mut bindings,
             &config.set_working_directory,
             Action::SetWorkingDirectory,
+        );
+        parse_and_add(
+            &mut bindings,
+            &config.delete_project,
+            Action::DeleteProject,
         );
 
         Self { bindings }

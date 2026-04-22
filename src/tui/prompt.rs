@@ -120,7 +120,7 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
     let area = centered_rect(50, 20, f.area());
 
     // Build the confirmation message from the pending action
-    let (title, message) = match &state.ui.confirm_action {
+    let (title, message, hint) = match &state.ui.confirm_action {
         Some(crate::state::types::ConfirmableAction::DeleteTask(task_id)) => {
             let task_label = state
                 .tasks
@@ -130,9 +130,27 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
             (
                 " Confirm Delete ".to_string(),
                 format!("Delete task {}?", task_label),
+                "y: delete  |  n/Esc: cancel".to_string(),
             )
         }
-        None => (" Confirm ".to_string(), "Are you sure?".to_string()),
+        Some(crate::state::types::ConfirmableAction::DeleteProject(project_id)) => {
+            let project_name = state
+                .projects
+                .iter()
+                .find(|p| &p.id == project_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| project_id.clone());
+            (
+                " Delete Project ".to_string(),
+                format!("Delete project \"{}\"?", project_name),
+                "y: delete  |  n/Esc: cancel".to_string(),
+            )
+        }
+        None => (
+            " Confirm ".to_string(),
+            "Are you sure?".to_string(),
+            "y: confirm  |  n/Esc: cancel".to_string(),
+        ),
     };
 
     // Clear the area behind the overlay
@@ -173,9 +191,9 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
     f.render_widget(msg, v_layout[0]);
 
     // Hint
-    let hint = Paragraph::new(Span::styled(
-        "y: delete  |  n/Esc: cancel",
+    let hint_widget = Paragraph::new(Span::styled(
+        hint,
         Style::default().fg(Color::DarkGray),
     ));
-    f.render_widget(hint, v_layout[1]);
+    f.render_widget(hint_widget, v_layout[1]);
 }

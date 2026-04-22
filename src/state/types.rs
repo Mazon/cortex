@@ -139,6 +139,8 @@ pub enum ToolState {
 pub enum ConfirmableAction {
     /// Delete the task with the given ID.
     DeleteTask(String),
+    /// Delete the project with the given ID.
+    DeleteProject(String),
 }
 
 /// Application mode — determines rendering and key routing.
