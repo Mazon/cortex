@@ -181,7 +181,7 @@ impl App {
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
-                            crate::tui::help::render_help_overlay(f);
+                            crate::tui::help::render_help_overlay(f, &config.keybindings);
                         }
                         crate::state::types::AppMode::ProjectRename => {
                             crate::tui::render_normal(f, state, config);
