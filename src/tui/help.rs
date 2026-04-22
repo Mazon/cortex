@@ -33,6 +33,7 @@ pub fn render_help_overlay(f: &mut Frame) {
    Ctrl+J / K    Next / Previous project
    Ctrl+N        New project
    R             Rename active project
+   Ctrl+Shift+D   Delete active project
 
  Kanban Keys
  ─────────────────────────────────────────

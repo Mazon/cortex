@@ -139,6 +139,8 @@ pub enum ToolState {
 pub enum ConfirmableAction {
     /// Delete the task with the given ID.
     DeleteTask(String),
+    /// Delete the project with the given ID.
+    DeleteProject(String),
 }
 
 /// Application mode — determines rendering and key routing.
@@ -264,6 +266,9 @@ pub struct KanbanState {
     pub focused_column_index: usize,
     /// Per-column focused task index.
     pub focused_task_index: HashMap<String, usize>,
+    /// Horizontal scroll offset — index of the first visible column.
+    /// 0 means no scrolling (leftmost column is visible).
+    pub kanban_scroll_offset: usize,
 }
 
 /// UI state — tracks the current view mode and focus.

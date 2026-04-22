@@ -245,18 +245,56 @@ fn process_event(
         EventListResponse::QuestionAsked { properties } => {
             let session_id = properties.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(task_id) = state.get_task_id_by_session(session_id).map(|s| s.to_string()) {
-                let question: String = properties
+                let question_id: String = properties
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let question_text: String = properties
                     .get("question")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string();
+                let answers: Vec<String> = properties
+                    .get("answers")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let request = crate::state::types::QuestionRequest {
+                    id: question_id,
+                    session_id: session_id.to_string(),
+                    question: question_text.clone(),
+                    answers,
+                    status: "pending".to_string(),
+                };
+                state.add_question_request(&task_id, request);
                 state.update_project_status(&task_id);
-                let preview: String = question.chars().take(50).collect();
+
+                let preview: String = question_text.chars().take(50).collect();
                 state.set_notification(
                     format!("Question pending: {}", preview),
                     crate::state::types::NotificationVariant::Warning,
                     10000,
                 );
+            }
+            None
+        }
+
+        EventListResponse::QuestionReplied { properties } => {
+            if let Some(task_id) = state.get_task_id_by_session(&properties.session_id).map(|s| s.to_string()) {
+                state.resolve_question_request(&task_id, &properties.request_id);
+            }
+            None
+        }
+
+        EventListResponse::QuestionRejected { properties } => {
+            if let Some(task_id) = state.get_task_id_by_session(&properties.session_id).map(|s| s.to_string()) {
+                state.resolve_question_request(&task_id, &properties.request_id);
             }
             None
         }
