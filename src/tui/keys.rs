@@ -18,6 +18,9 @@ pub enum Action {
     NavRight,
     NavUp,
     NavDown,
+    // Kanban horizontal scroll
+    ScrollKanbanLeft,
+    ScrollKanbanRight,
     // Task operations
     CreateTask,
     EditTask,
@@ -66,6 +69,16 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
+        parse_and_add(
+            &mut bindings,
+            &config.scroll_kanban_left,
+            Action::ScrollKanbanLeft,
+        );
+        parse_and_add(
+            &mut bindings,
+            &config.scroll_kanban_right,
+            Action::ScrollKanbanRight,
+        );
         parse_and_add(
             &mut bindings,
             &config.set_working_directory,
