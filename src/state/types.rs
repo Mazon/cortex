@@ -1,7 +1,7 @@
 //! Core domain types for the Cortex application.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // ─── Enums ────────────────────────────────────────────────────────────────
 
@@ -185,6 +185,9 @@ pub enum NotificationVariant {
     Error,
 }
 
+/// Maximum number of notifications that can be queued simultaneously.
+pub const MAX_NOTIFICATIONS: usize = 3;
+
 /// Cursor direction for movement in the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorDirection {
@@ -276,8 +279,8 @@ pub struct UIState {
     pub focused_task_id: Option<String>,
     /// ID of the task being viewed in the detail panel.
     pub viewing_task_id: Option<String>,
-    /// Active notification toast, if any.
-    pub notification: Option<Notification>,
+    /// Notification queue (most recent at back). Max capacity: `MAX_NOTIFICATIONS`.
+    pub notifications: VecDeque<Notification>,
     /// Text input buffer (used for prompts like project rename).
     pub input_text: String,
     /// Cursor position within `input_text` (char index, not byte offset).
@@ -302,7 +305,7 @@ impl Default for UIState {
             focused_column: KanbanColumn::TODO.to_string(),
             focused_task_id: None,
             viewing_task_id: None,
-            notification: None,
+            notifications: VecDeque::new(),
             input_text: String::new(),
             input_cursor: 0,
             prompt_label: String::new(),
@@ -357,6 +360,10 @@ pub struct TaskEditorState {
     /// Whether the "unsaved changes" discard warning is currently displayed.
     /// Set on first Esc with unsaved changes; cleared on any edit or save.
     pub discard_warning_shown: bool,
+    /// Inline validation error message displayed below the title field.
+    /// Set when the user tries to save with an empty title; cleared when
+    /// the user types in the title field.
+    pub validation_error: Option<String>,
 }
 
 impl TaskEditorState {
@@ -375,6 +382,7 @@ impl TaskEditorState {
             agent_type: TaskAgentType::None,
             has_unsaved_changes: false,
             discard_warning_shown: false,
+            validation_error: None,
         }
     }
 
@@ -403,6 +411,7 @@ impl TaskEditorState {
             agent_type: task.agent_type.clone(),
             has_unsaved_changes: false,
             discard_warning_shown: false,
+            validation_error: None,
         }
     }
     /// Returns the description text as a single string.

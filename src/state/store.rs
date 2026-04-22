@@ -1542,7 +1542,7 @@ mod tests {
         state.open_project_rename();
 
         assert_eq!(state.ui.mode, AppMode::Normal);
-        let notif = state.ui.notification.as_ref().unwrap();
+        let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("No active project"));
         assert_eq!(notif.variant, NotificationVariant::Warning);
     }
@@ -1628,7 +1628,7 @@ mod tests {
         state.open_set_working_directory();
 
         assert_eq!(state.ui.mode, AppMode::Normal);
-        let notif = state.ui.notification.as_ref().unwrap();
+        let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("No active project"));
         assert_eq!(notif.variant, NotificationVariant::Warning);
     }

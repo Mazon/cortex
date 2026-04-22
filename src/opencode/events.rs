@@ -444,7 +444,7 @@ mod tests {
         let task = state.tasks.get(&task_id).unwrap();
         assert_eq!(task.agent_status, AgentStatus::Complete);
         // Notification should be set
-        let notif = state.ui.notification.as_ref().unwrap();
+        let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("completed"));
         assert_eq!(notif.variant, NotificationVariant::Success);
     }
@@ -524,7 +524,7 @@ mod tests {
             AgentStatus::Running
         );
         // No notification should be set
-        assert!(state.ui.notification.is_none());
+        assert!(state.ui.notifications.is_empty());
     }
 
     // ── SessionError ────────────────────────────────────────────────────
@@ -673,7 +673,7 @@ mod tests {
         };
         process_event(&event, &mut state, &client, &columns_config);
 
-        let notif = state.ui.notification.as_ref().unwrap();
+        let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("Question pending"));
         assert!(notif.message.contains("Which approach"));
         assert_eq!(notif.variant, NotificationVariant::Warning);
@@ -694,7 +694,7 @@ mod tests {
         };
         process_event(&event, &mut state, &client, &columns_config);
 
-        let notif = state.ui.notification.as_ref().unwrap();
+        let notif = state.ui.notifications.back().unwrap();
         // The preview should be truncated to ~50 chars
         assert!(notif.message.len() < long_question.len() + 30);
     }
