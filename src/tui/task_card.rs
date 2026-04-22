@@ -151,7 +151,10 @@ pub fn render_task_card(
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                // Question indicator — bright yellow for high visibility
+                Style::default()
+                    .fg(Color::Rgb(255, 255, 0))
+                    .add_modifier(Modifier::BOLD)
             };
             spans.push(Span::styled(indicator_str, indicator_style));
 

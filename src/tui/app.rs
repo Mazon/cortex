@@ -332,6 +332,92 @@ impl App {
             }
         }
 
+        // Handle 1-9 for answering questions when in task detail view
+        if let KeyCode::Char(c) = key.code {
+            if c.is_ascii_digit() && c != '0' {
+                let answer_index = (c as usize) - ('1' as usize);
+                let (pending_question, task_id) = {
+                    let state = self.state.lock().unwrap();
+                    if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+                        (None, None)
+                    } else if let Some(ref tid) = state.ui.viewing_task_id {
+                        let question = state
+                            .task_sessions
+                            .get(tid)
+                            .and_then(|s| s.pending_questions.first().cloned())
+                            .filter(|q| answer_index < q.answers.len());
+                        (question, Some(tid.clone()))
+                    } else {
+                        (None, None)
+                    }
+                };
+
+                if let (Some(question), Some(tid)) = (pending_question, task_id) {
+                    let answer = question.answers[answer_index].clone();
+                    let client = {
+                        let state = self.state.lock().unwrap();
+                        state
+                            .active_project_id
+                            .as_ref()
+                            .and_then(|pid| self.opencode_clients.get(pid))
+                            .cloned()
+                    };
+
+                    if let Some(client) = client {
+                        let state = self.state.clone();
+                        let question_id = question.id.clone();
+                        let session_id = question.session_id.clone();
+                        let answer_preview = answer.chars().take(30).collect::<String>();
+                        tokio::spawn(async move {
+                            match client.resolve_question(&session_id, &question_id, &answer).await {
+                                Ok(()) => {
+                                    tracing::info!(
+                                        "Question {} answered with: {}",
+                                        question_id, answer_preview
+                                    );
+                                    let mut s = state.lock().unwrap();
+                                    s.resolve_question_request(&tid, &question_id);
+                                    s.set_notification(
+                                        format!("Answered: {}", answer_preview),
+                                        crate::state::types::NotificationVariant::Success,
+                                        3000,
+                                    );
+                                    s.mark_render_dirty();
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to resolve question {}: {}",
+                                        question_id, e
+                                    );
+                                    let mut s = state.lock().unwrap();
+                                    s.set_notification(
+                                        format!("Failed to answer question: {}", e),
+                                        crate::state::types::NotificationVariant::Error,
+                                        5000,
+                                    );
+                                    s.mark_render_dirty();
+                                }
+                            }
+                        });
+                    }
+                    return;
+                } else {
+                    let state = self.state.lock().unwrap();
+                    if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
+                        if let Some(ref tid) = state.ui.viewing_task_id {
+                            if state
+                                .task_sessions
+                                .get(tid)
+                                .map(|s| !s.pending_questions.is_empty())
+                                .unwrap_or(false)
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         use crate::tui::keys::Action;
 
         let action = self.key_matcher.match_key(key);
