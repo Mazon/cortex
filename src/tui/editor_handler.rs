@@ -36,12 +36,19 @@ pub fn handle_editor_input(editor: &mut TaskEditorState, key: KeyEvent) -> Edito
         return EditorAction::Cancel;
     }
 
-    // Tab → Cycle focus
+    // Tab → Cycle focus (or cycle columns when on column field)
     if key.code == KeyCode::Tab {
-        editor.focused_field = match editor.focused_field {
-            EditorField::Title => EditorField::Description,
-            EditorField::Description => EditorField::Title,
-        };
+        if editor.focused_field == EditorField::Column && !editor.available_columns.is_empty() {
+            editor.cycle_column();
+        } else {
+            editor.focused_field = match editor.focused_field {
+                EditorField::Title => EditorField::Description,
+                EditorField::Description => {
+                    if !editor.available_columns.is_empty() { EditorField::Column } else { EditorField::Title }
+                }
+                EditorField::Column => EditorField::Title,
+            };
+        }
         return EditorAction::None;
     }
 
@@ -56,6 +63,7 @@ pub fn handle_editor_input(editor: &mut TaskEditorState, key: KeyEvent) -> Edito
             EditorField::Description => {
                 editor.insert_newline();
             }
+            EditorField::Column => {}
         }
         return EditorAction::None;
     }
@@ -122,7 +130,11 @@ mod tests {
 
     /// Helper to create a fresh editor in create mode (title field focused).
     fn new_editor() -> TaskEditorState {
-        TaskEditorState::new_for_create("todo")
+        TaskEditorState::new_for_create("todo", Vec::new())
+    }
+
+    fn new_editor_with_columns() -> TaskEditorState {
+        TaskEditorState::new_for_create("todo", vec!["todo".to_string(), "doing".to_string(), "done".to_string()])
     }
 
     /// Helper to build a crossterm KeyEvent.

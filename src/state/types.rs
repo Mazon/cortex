@@ -160,6 +160,7 @@ pub enum AppMode {
 pub enum EditorField {
     Title,
     Description,
+    Column,
 }
 
 /// Which panel is focused in normal mode.
@@ -364,11 +365,14 @@ pub struct TaskEditorState {
     /// Set when the user tries to save with an empty title; cleared when
     /// the user types in the title field.
     pub validation_error: Option<String>,
+    pub available_columns: Vec<String>,
+    pub selected_column_index: usize,
 }
 
 impl TaskEditorState {
     /// Creates empty state for a new task.
-    pub fn new_for_create(default_column: &str) -> Self {
+    pub fn new_for_create(default_column: &str, available_columns: Vec<String>) -> Self {
+        let selected_column_index = available_columns.iter().position(|c| c == default_column).unwrap_or(0);
         Self {
             task_id: None,
             title: String::new(),
@@ -383,6 +387,8 @@ impl TaskEditorState {
             has_unsaved_changes: false,
             discard_warning_shown: false,
             validation_error: None,
+            available_columns,
+            selected_column_index,
         }
     }
 
@@ -412,6 +418,8 @@ impl TaskEditorState {
             has_unsaved_changes: false,
             discard_warning_shown: false,
             validation_error: None,
+            available_columns: Vec::new(),
+            selected_column_index: 0,
         }
     }
     /// Returns the description text as a single string.
@@ -449,6 +457,7 @@ impl TaskEditorState {
                 .desc_lines
                 .get(self.cursor_row)
                 .map_or("", |l| l.as_str()),
+            EditorField::Column => "",
         }
     }
 
@@ -497,6 +506,7 @@ impl TaskEditorState {
                 }
                 self.invalidate_cache();
             }
+            EditorField::Column => {}
         }
     }
 
@@ -541,6 +551,7 @@ impl TaskEditorState {
                 }
                 self.invalidate_cache();
             }
+            EditorField::Column => {}
         }
     }
 
@@ -581,6 +592,7 @@ impl TaskEditorState {
                 }
                 self.invalidate_cache();
             }
+            EditorField::Column => {}
         }
     }
 
@@ -674,6 +686,7 @@ impl TaskEditorState {
                     }
                 }
             }
+            EditorField::Column => {}
         }
     }
 
@@ -692,6 +705,14 @@ impl TaskEditorState {
     /// Returns (title, description) for saving.
     pub fn to_task_fields(&self) -> (String, String) {
         (self.title.clone(), self.description())
+    }
+
+    pub fn cycle_column(&mut self) {
+        if self.available_columns.len() <= 1 { return; }
+        self.selected_column_index = (self.selected_column_index + 1) % self.available_columns.len();
+        self.column_id = self.available_columns.get(self.selected_column_index).cloned();
+        self.has_unsaved_changes = true;
+        self.discard_warning_shown = false;
     }
 }
 

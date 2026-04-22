@@ -1,11 +1,12 @@
 //! Fullscreen task editor renderer.
 
-use crate::state::types::{AppState, EditorField, TaskEditorState};
+use crate::config::types::CortexConfig;
+use crate::state::types::{AppState, EditorField};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 /// Render the fullscreen task editor.
-pub fn render_task_editor(f: &mut Frame, state: &AppState) {
+pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig) {
     let editor = match &state.ui.task_editor {
         Some(e) => e,
         None => return,
@@ -24,6 +25,7 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
 
     // Vertical layout: header | title label + input | validation error | spacer | description label + textarea | footer
     let has_validation_error = editor.validation_error.is_some();
+    let show_column_selector = !editor.available_columns.is_empty();
     let v_constraints = [
         Constraint::Length(1), // Optional header (for edit mode)
         Constraint::Length(1), // Title label
@@ -206,6 +208,12 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
         }
     }
 
+    // Column selector (only shown in create mode when columns are available)
+    if show_column_selector {
+        let col_selector_area = v_layout[v_layout.len() - 2];
+        render_column_selector(f, editor, config, col_selector_area, x_margin);
+    }
+
     // Footer hint
     let (footer_text, footer_style) = if editor.discard_warning_shown {
         (
@@ -221,4 +229,31 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     let footer =
         Paragraph::new(Span::styled(footer_text, footer_style)).alignment(Alignment::Center);
     f.render_widget(footer, v_layout[7]);
+}
+
+fn render_column_selector(
+    f: &mut Frame,
+    editor: &crate::state::types::TaskEditorState,
+    config: &CortexConfig,
+    area: Rect,
+    x_margin: u16,
+) {
+    let col_focused = editor.focused_field == EditorField::Column;
+    let label = Paragraph::new(Span::styled("Column:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+    f.render_widget(label, Rect { x: area.x + x_margin, y: area.y, width: area.width.saturating_sub(x_margin * 2), height: 1 });
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, col_id) in editor.available_columns.iter().enumerate() {
+        if i > 0 { spans.push(Span::raw(" ")); }
+        let is_selected = Some(i) == editor.column_id.as_ref().and_then(|cid| editor.available_columns.iter().position(|c| c == cid));
+        let pill = format!(" {} ", config.columns.display_name_for(col_id));
+        if is_selected {
+            spans.push(Span::styled(pill, Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)));
+        } else {
+            spans.push(Span::styled(pill, Style::default().fg(if col_focused { Color::White } else { Color::DarkGray }).bg(Color::Rgb(60, 64, 80))));
+        }
+    }
+    if col_focused && editor.available_columns.len() > 1 {
+        spans.push(Span::styled("  Tab to cycle", Style::default().fg(Color::DarkGray)));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: area.x + x_margin, y: area.y + 1, width: area.width.saturating_sub(x_margin * 2), height: 1 });
 }

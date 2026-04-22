@@ -177,7 +177,7 @@ impl App {
                             crate::tui::render_normal(f, state, config);
                         }
                         crate::state::types::AppMode::TaskEditor => {
-                            crate::tui::task_editor::render_task_editor(f, state);
+                            crate::tui::task_editor::render_task_editor(f, state, config);
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
@@ -441,12 +441,14 @@ impl App {
     }
 
     fn handle_create_task(&mut self) {
-        let col_id = {
+        let (col_id, available_columns) = {
             let state = self.state.lock().unwrap();
-            state.ui.focused_column.clone()
+            let col_id = state.ui.focused_column.clone();
+            let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
+            (col_id, available_columns)
         };
         let mut state = self.state.lock().unwrap();
-        state.open_task_editor_create(&col_id);
+        state.open_task_editor_create(&col_id, available_columns);
     }
 
     fn handle_edit_task(&mut self) {

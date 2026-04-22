@@ -309,8 +309,8 @@ impl AppState {
     // ─── Task Editor Mode ────────────────────────────────────────────────
 
     /// Open the task editor in "create" mode.
-    pub fn open_task_editor_create(&mut self, default_column: &str) {
-        self.ui.task_editor = Some(TaskEditorState::new_for_create(default_column));
+    pub fn open_task_editor_create(&mut self, default_column: &str, available_columns: Vec<String>) {
+        self.ui.task_editor = Some(TaskEditorState::new_for_create(default_column, available_columns));
         self.ui.mode = AppMode::TaskEditor;
     }
 
@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(state.ui.mode, AppMode::Normal);
         assert!(state.ui.task_editor.is_none());
 
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
         assert!(state.ui.task_editor.is_some());
 
@@ -1177,7 +1177,7 @@ mod tests {
     #[test]
     fn save_task_editor_create_new_task() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         // Set title and description via editor
         if let Some(editor) = state.get_task_editor_mut() {
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn save_task_editor_empty_title_fails() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         // Leave title empty
         let result = state.save_task_editor();
@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn cancel_task_editor_resets_mode() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
 
         state.cancel_task_editor();
@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     fn cancel_task_editor_discards_changes() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         if let Some(editor) = state.get_task_editor_mut() {
             editor.title = "Discard Me".to_string();
@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn get_task_editor_mut_allows_mutation() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo");
+        state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         if let Some(editor) = state.get_task_editor_mut() {
             editor.title = "Mutated".to_string();
