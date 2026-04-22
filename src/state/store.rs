@@ -1354,20 +1354,44 @@ mod tests {
         let mut state = AppState::default();
         state.set_notification("Hello world".to_string(), NotificationVariant::Info, 5000);
 
-        let notif = state.ui.notification.as_ref().unwrap();
+        assert_eq!(state.ui.notifications.len(), 1);
+        let notif = state.ui.notifications.back().unwrap();
         assert_eq!(notif.message, "Hello world");
         assert_eq!(notif.variant, NotificationVariant::Info);
     }
 
     #[test]
-    fn set_notification_overwrites_previous() {
+    fn set_notification_queues_and_shows_latest() {
         let mut state = AppState::default();
         state.set_notification("First".to_string(), NotificationVariant::Info, 5000);
         state.set_notification("Second".to_string(), NotificationVariant::Warning, 5000);
 
-        let notif = state.ui.notification.as_ref().unwrap();
+        assert_eq!(state.ui.notifications.len(), 2);
+        // Most recent is at the back
+        let notif = state.ui.notifications.back().unwrap();
         assert_eq!(notif.message, "Second");
         assert_eq!(notif.variant, NotificationVariant::Warning);
+        // Oldest is at the front
+        let oldest = state.ui.notifications.front().unwrap();
+        assert_eq!(oldest.message, "First");
+    }
+
+    #[test]
+    fn set_notification_evicts_oldest_when_full() {
+        let mut state = AppState::default();
+        // Fill the queue to MAX_NOTIFICATIONS (3)
+        state.set_notification("First".to_string(), NotificationVariant::Info, 5000);
+        state.set_notification("Second".to_string(), NotificationVariant::Success, 5000);
+        state.set_notification("Third".to_string(), NotificationVariant::Warning, 5000);
+        assert_eq!(state.ui.notifications.len(), 3);
+
+        // Adding a 4th should evict the oldest
+        state.set_notification("Fourth".to_string(), NotificationVariant::Error, 5000);
+        assert_eq!(state.ui.notifications.len(), 3);
+        let oldest = state.ui.notifications.front().unwrap();
+        assert_eq!(oldest.message, "Second");
+        let newest = state.ui.notifications.back().unwrap();
+        assert_eq!(newest.message, "Fourth");
     }
 
     #[test]
@@ -1375,14 +1399,14 @@ mod tests {
         let mut state = AppState::default();
         // Set notification that expired 1 second ago
         let expires_at = chrono::Utc::now().timestamp_millis() - 1000;
-        state.ui.notification = Some(Notification {
+        state.ui.notifications.push_back(Notification {
             message: "Old".to_string(),
             variant: NotificationVariant::Info,
             expires_at,
         });
 
         state.clear_expired_notifications();
-        assert!(state.ui.notification.is_none());
+        assert!(state.ui.notifications.is_empty());
     }
 
     #[test]
@@ -1390,15 +1414,15 @@ mod tests {
         let mut state = AppState::default();
         // Set notification that expires far in the future
         let expires_at = chrono::Utc::now().timestamp_millis() + 60_000;
-        state.ui.notification = Some(Notification {
+        state.ui.notifications.push_back(Notification {
             message: "Fresh".to_string(),
             variant: NotificationVariant::Success,
             expires_at,
         });
 
         state.clear_expired_notifications();
-        assert!(state.ui.notification.is_some());
-        assert_eq!(state.ui.notification.as_ref().unwrap().message, "Fresh");
+        assert!(!state.ui.notifications.is_empty());
+        assert_eq!(state.ui.notifications.back().unwrap().message, "Fresh");
     }
 
     // ── Project selection ───────────────────────────────────────────────
