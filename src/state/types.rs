@@ -459,6 +459,8 @@ impl TaskEditorState {
         self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
+                // Clear inline validation error when user edits the title.
+                self.validation_error = None;
                 // Convert char index to byte offset for String::insert.
                 let byte_pos = self
                     .title
@@ -494,6 +496,8 @@ impl TaskEditorState {
         self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
+                // Clear inline validation error when user edits the title.
+                self.validation_error = None;
                 if self.cursor_col > 0 {
                     // Find byte range of the char at char index (cursor_col - 1).
                     let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
@@ -536,6 +540,8 @@ impl TaskEditorState {
         self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
+                // Clear inline validation error when user edits the title.
+                self.validation_error = None;
                 if self.cursor_col < self.title.chars().count() {
                     let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
                     if let Some(&(byte_start, ch)) = char_indices.get(self.cursor_col) {

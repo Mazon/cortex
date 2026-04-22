@@ -674,18 +674,28 @@ impl App {
                         }
                     }
                     InputPrompt::WorkingDirectory => {
-                        if state.submit_working_directory() {
-                            state.set_notification(
-                                "Working directory updated".to_string(),
-                                crate::state::types::NotificationVariant::Success,
-                                3000,
-                            );
-                        } else {
-                            state.set_notification(
-                                "Working directory cannot be empty".to_string(),
-                                crate::state::types::NotificationVariant::Warning,
-                                2000,
-                            );
+                        match state.submit_working_directory() {
+                            Ok(true) => {
+                                state.set_notification(
+                                    "Working directory updated".to_string(),
+                                    crate::state::types::NotificationVariant::Success,
+                                    3000,
+                                );
+                            }
+                            Ok(false) => {
+                                state.set_notification(
+                                    "Working directory cannot be empty".to_string(),
+                                    crate::state::types::NotificationVariant::Warning,
+                                    2000,
+                                );
+                            }
+                            Err(msg) => {
+                                state.set_notification(
+                                    msg,
+                                    crate::state::types::NotificationVariant::Error,
+                                    3000,
+                                );
+                            }
                         }
                     }
                 }
@@ -795,11 +805,20 @@ impl App {
                         );
                     }
                     Err(e) => {
-                        state.set_notification(
-                            format!("Save failed: {}", e),
-                            crate::state::types::NotificationVariant::Error,
-                            3000,
-                        );
+                        // Only show a notification toast if there's no inline
+                        // validation error (which is already visible in the editor).
+                        // Validation errors (e.g. empty title) are shown inline
+                        // and don't need a transient notification.
+                        let has_inline_error = state
+                            .get_task_editor()
+                            .map_or(false, |ed| ed.validation_error.is_some());
+                        if !has_inline_error {
+                            state.set_notification(
+                                format!("Save failed: {}", e),
+                                crate::state::types::NotificationVariant::Error,
+                                3000,
+                            );
+                        }
                     }
                 }
             }

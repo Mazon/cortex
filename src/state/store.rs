@@ -334,6 +334,11 @@ impl AppState {
         let (title, description) = editor.to_task_fields();
         let title = title.trim().to_string();
         if title.is_empty() {
+            // Set inline validation error so it's visible in the editor UI,
+            // instead of relying solely on a transient notification toast.
+            if let Some(ed) = self.ui.task_editor.as_mut() {
+                ed.validation_error = Some("Title cannot be empty".to_string());
+            }
             anyhow::bail!("Task title cannot be empty");
         }
 
@@ -352,6 +357,7 @@ impl AppState {
                     if let Some(ed) = self.ui.task_editor.as_mut() {
                         ed.has_unsaved_changes = false;
                         ed.discard_warning_shown = false;
+                        ed.validation_error = None;
                     }
                     Ok(task_id.clone())
                 } else {
@@ -373,6 +379,7 @@ impl AppState {
                 if let Some(ed) = self.ui.task_editor.as_mut() {
                     ed.has_unsaved_changes = false;
                     ed.discard_warning_shown = false;
+                    ed.validation_error = None;
                 }
                 Ok(task.id)
             }
@@ -429,19 +436,32 @@ impl AppState {
     }
 
     /// Submit the working directory change. Applies the entered path to the
-    /// active project. Returns `false` if the path is empty or no project is
-    /// active.
-    pub fn submit_working_directory(&mut self) -> bool {
+    /// active project.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if the directory was accepted and applied.
+    /// - `Ok(false)` if the path is empty or no project is active.
+    /// - `Err(message)` if the path is invalid (doesn't exist or isn't a directory).
+    pub fn submit_working_directory(&mut self) -> Result<bool, String> {
         let dir = if self.ui.input_text.trim().is_empty() {
-            return false;
+            return Ok(false);
         } else {
             self.ui.input_text.trim().to_string()
         };
 
         let project_id = match self.active_project_id.clone() {
             Some(id) => id,
-            None => return false,
+            None => return Ok(false),
         };
+
+        // Validate the path before accepting it.
+        let path = std::path::Path::new(&dir);
+        if !path.exists() {
+            return Err(format!("Directory does not exist: {}", dir));
+        }
+        if !path.is_dir() {
+            return Err(format!("Path is not a directory: {}", dir));
+        }
 
         if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
             project.working_directory = dir;
@@ -453,9 +473,9 @@ impl AppState {
             self.ui.mode = AppMode::Normal;
             self.mark_dirty();
             self.mark_render_dirty();
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -471,7 +491,8 @@ impl AppState {
     // ─── Notifications ───────────────────────────────────────────────────
 
     /// Display a notification toast with the given message, variant, and duration.
-    /// Replaces any existing notification.
+    /// Adds to the notification queue; if the queue is full, the oldest notification
+    /// is removed.
     pub fn set_notification(
         &mut self,
         message: String,
@@ -479,23 +500,33 @@ impl AppState {
         duration_ms: i64,
     ) {
         let expires_at = chrono::Utc::now().timestamp_millis() + duration_ms;
-        self.ui.notification = Some(Notification {
+        let notification = Notification {
             message,
             variant,
             expires_at,
-        });
+        };
+        if self.ui.notifications.len() >= MAX_NOTIFICATIONS {
+            self.ui.notifications.pop_front();
+        }
+        self.ui.notifications.push_back(notification);
     }
 
-    /// Clear expired notifications. Returns `true` if a notification was removed.
+    /// Clear expired notifications from the front of the queue. Returns `true`
+    /// if any notification was removed.
     pub fn clear_expired_notifications(&mut self) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
-        if let Some(ref n) = self.ui.notification {
+        let before = self.ui.notifications.len();
+        // Remove all expired notifications from the front.
+        // Since notifications are added chronologically, expired ones are always
+        // at the front of the deque.
+        while let Some(ref n) = self.ui.notifications.front() {
             if n.expires_at <= now {
-                self.ui.notification = None;
-                return true;
+                self.ui.notifications.pop_front();
+            } else {
+                break;
             }
         }
-        false
+        self.ui.notifications.len() != before
     }
 
     // ─── Session Data ────────────────────────────────────────────────────
@@ -1582,13 +1613,13 @@ mod tests {
     fn submit_working_directory_updates_project_and_resets_mode() {
         let mut state = make_state_with_tasks();
         state.open_set_working_directory();
-        state.ui.input_text = "/home/user/project".to_string();
+        state.ui.input_text = "/tmp".to_string();
 
         let result = state.submit_working_directory();
 
-        assert!(result);
+        assert_eq!(result, Ok(true));
         assert_eq!(state.ui.mode, AppMode::Normal);
-        assert_eq!(state.projects[0].working_directory, "/home/user/project");
+        assert_eq!(state.projects[0].working_directory, "/tmp");
         assert!(state.ui.input_text.is_empty());
         assert_eq!(state.ui.input_cursor, 0);
         assert!(state.ui.prompt_label.is_empty());
@@ -1603,7 +1634,7 @@ mod tests {
 
         let result = state.submit_working_directory();
 
-        assert!(!result);
+        assert_eq!(result, Ok(false));
         // Working directory should be unchanged
         assert_eq!(state.projects[0].working_directory, "/tmp");
     }
@@ -1617,7 +1648,44 @@ mod tests {
 
         let result = state.submit_working_directory();
 
-        assert!(!result);
+        assert_eq!(result, Ok(false));
+    }
+
+    #[test]
+    fn submit_working_directory_nonexistent_path_returns_error() {
+        let mut state = make_state_with_tasks();
+        state.open_set_working_directory();
+        state.ui.input_text = "/nonexistent/path/that/does/not/exist".to_string();
+
+        let result = state.submit_working_directory();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("does not exist"));
+        assert!(err.contains("/nonexistent/path/that/does/not/exist"));
+        // Should stay in prompt mode (not reset)
+        assert_eq!(state.ui.mode, AppMode::InputPrompt);
+        // Working directory should be unchanged
+        assert_eq!(state.projects[0].working_directory, "/tmp");
+    }
+
+    #[test]
+    fn submit_working_directory_file_instead_of_directory_returns_error() {
+        let mut state = make_state_with_tasks();
+        state.open_set_working_directory();
+        // /etc/hosts is a file, not a directory, on most Unix systems
+        state.ui.input_text = "/etc/hosts".to_string();
+
+        let result = state.submit_working_directory();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not a directory"));
+        assert!(err.contains("/etc/hosts"));
+        // Should stay in prompt mode
+        assert_eq!(state.ui.mode, AppMode::InputPrompt);
+        // Working directory should be unchanged
+        assert_eq!(state.projects[0].working_directory, "/tmp");
     }
 
     #[test]

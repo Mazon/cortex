@@ -22,11 +22,13 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     let outer_inner = outer_block.inner(area);
     f.render_widget(outer_block, area);
 
-    // Vertical layout: header | title label + input | spacer | description label + textarea | footer
+    // Vertical layout: header | title label + input | validation error | spacer | description label + textarea | footer
+    let has_validation_error = editor.validation_error.is_some();
     let v_constraints = [
         Constraint::Length(1), // Optional header (for edit mode)
         Constraint::Length(1), // Title label
         Constraint::Length(3), // Title input field
+        Constraint::Length(if has_validation_error { 1 } else { 0 }), // Validation error
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Description label
         Constraint::Min(0),    // Description textarea
@@ -105,6 +107,23 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
         f.set_cursor_position((cursor_x, cursor_y));
     }
 
+    // Validation error (inline, shown below title field)
+    if let Some(ref error_msg) = editor.validation_error {
+        let validation_label = Paragraph::new(Span::styled(
+            format!("✗ {}", error_msg),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+        f.render_widget(
+            validation_label,
+            Rect {
+                x: v_layout[3].x + x_margin,
+                y: v_layout[3].y,
+                width: v_layout[3].width.saturating_sub(x_margin * 2),
+                height: 1,
+            },
+        );
+    }
+
     // Description label
     let desc_label = Paragraph::new(Span::styled(
         "Description:",
@@ -115,9 +134,9 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     f.render_widget(
         desc_label,
         Rect {
-            x: v_layout[4].x + x_margin,
-            y: v_layout[4].y,
-            width: v_layout[4].width.saturating_sub(x_margin * 2),
+            x: v_layout[5].x + x_margin,
+            y: v_layout[5].y,
+            width: v_layout[5].width.saturating_sub(x_margin * 2),
             height: 1,
         },
     );
@@ -133,8 +152,8 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(desc_border_color));
-    let desc_inner = desc_block.inner(v_layout[5]);
-    f.render_widget(desc_block, v_layout[5]);
+    let desc_inner = desc_block.inner(v_layout[6]);
+    f.render_widget(desc_block, v_layout[6]);
 
     // Render description text with scroll (uses pre-computed lines, no split per frame)
     let visible_height = desc_inner.height as usize;
@@ -201,5 +220,5 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState) {
     };
     let footer =
         Paragraph::new(Span::styled(footer_text, footer_style)).alignment(Alignment::Center);
-    f.render_widget(footer, v_layout[6]);
+    f.render_widget(footer, v_layout[7]);
 }

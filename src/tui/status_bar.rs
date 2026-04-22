@@ -1,6 +1,6 @@
 //! Status bar renderer — bottom bar showing connection status, notifications, key hints.
 
-use crate::state::types::{AppState, NotificationVariant};
+use crate::state::types::{AppState, NotificationVariant, MAX_NOTIFICATIONS};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -20,17 +20,23 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         ("○ disconnected".to_string(), Color::DarkGray)
     };
 
-    // Notification (center)
-    let (notif_text, notif_color) = if let Some(ref n) = state.ui.notification {
+    // Notification (center) — show most recent with queue count indicator
+    let (notif_text, notif_color) = if let Some(n) = state.ui.notifications.back() {
         let color = match n.variant {
             NotificationVariant::Info => Color::Blue,
             NotificationVariant::Success => Color::Green,
             NotificationVariant::Warning => Color::Yellow,
             NotificationVariant::Error => Color::Red,
         };
-        (n.message.as_str(), color)
+        let count = state.ui.notifications.len();
+        if count > 1 {
+            let display = format!("({}/{}) {}", count, MAX_NOTIFICATIONS, n.message);
+            (display, color)
+        } else {
+            (n.message.clone(), color)
+        }
     } else {
-        ("", Color::Reset)
+        (String::new(), Color::Reset)
     };
 
     // Key hints (right)

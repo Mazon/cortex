@@ -199,10 +199,10 @@ fn process_event(
             if let Some((perm_id, session_id, tool_name, desc, _details)) =
                 extract_permission_fields(properties)
             {
-                state.process_permission_asked(&session_id, &perm_id, &tool_name, &desc);
-
-                // Auto-approve safe tools (fire-and-forget)
                 if is_safe_tool(&tool_name) {
+                    // Auto-approve safe tools (read-only: read, glob, grep, list).
+                    // Skip adding to pending_permissions to avoid a visual flash
+                    // on the task card — the user gets a notification instead.
                     let client_clone = client.clone();
                     let sid = session_id.clone();
                     let pid = perm_id.clone();
@@ -213,6 +213,18 @@ fn process_event(
                             warn!("Failed to auto-approve permission: {}", e);
                         }
                     });
+
+                    // Show a brief, non-intrusive notification
+                    let preview: String = desc.chars().take(50).collect();
+                    let preview = preview.trim_end();
+                    state.set_notification(
+                        format!("Auto-approved: {} — {}", tool_name, preview),
+                        crate::state::types::NotificationVariant::Info,
+                        2000,
+                    );
+                } else {
+                    // Non-safe tools require explicit user approval
+                    state.process_permission_asked(&session_id, &perm_id, &tool_name, &desc);
                 }
             }
             None
