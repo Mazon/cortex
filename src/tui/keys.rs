@@ -23,6 +23,8 @@ pub enum Action {
     EditTask,
     MoveForward,
     MoveBackward,
+    MoveTaskUp,
+    MoveTaskDown,
     DeleteTask,
     ViewTask,
     AbortSession,
@@ -63,6 +65,8 @@ impl KeyMatcher {
             &config.kanban_move_backward,
             Action::MoveBackward,
         );
+        parse_and_add(&mut bindings, &config.task_move_up, Action::MoveTaskUp);
+        parse_and_add(&mut bindings, &config.task_move_down, Action::MoveTaskDown);
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);

@@ -44,6 +44,7 @@ pub fn render_help_overlay(f: &mut Frame) {
    E             Edit selected task
    M             Move task forward (→ column)
    Shift+M       Move task backward (← column)
+    Ctrl+↑ / ↓    Reorder task up / down within column
    X             Delete selected task
    V             View task detail
    R             Rename project

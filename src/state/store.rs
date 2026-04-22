@@ -204,6 +204,64 @@ impl AppState {
         }
     }
 
+    /// Reorder a task within its column by swapping it with the task above.
+    /// Returns `true` if the swap was performed, `false` if already at top
+    /// or task not found. Marks state dirty on success.
+    pub fn reorder_task_up(&mut self, task_id: &str) -> bool {
+        let (col_id, idx) = match self.find_task_position(task_id) {
+            Some(pos) => pos,
+            None => return false,
+        };
+        if idx == 0 {
+            return false;
+        }
+        if let Some(tasks) = self.kanban.columns.get_mut(&col_id) {
+            tasks.swap(idx, idx - 1);
+        }
+        if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
+            *focused_idx -= 1;
+        }
+        self.mark_dirty();
+        true
+    }
+
+    /// Reorder a task within its column by swapping it with the task below.
+    /// Returns `true` if the swap was performed, `false` if already at bottom
+    /// or task not found. Marks state dirty on success.
+    pub fn reorder_task_down(&mut self, task_id: &str) -> bool {
+        let (col_id, idx) = match self.find_task_position(task_id) {
+            Some(pos) => pos,
+            None => return false,
+        };
+        let count = self
+            .kanban
+            .columns
+            .get(&col_id)
+            .map(|t| t.len())
+            .unwrap_or(0);
+        if idx + 1 >= count {
+            return false;
+        }
+        if let Some(tasks) = self.kanban.columns.get_mut(&col_id) {
+            tasks.swap(idx, idx + 1);
+        }
+        if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
+            *focused_idx += 1;
+        }
+        self.mark_dirty();
+        true
+    }
+
+    /// Find a task's column ID and position index within that column.
+    fn find_task_position(&self, task_id: &str) -> Option<(String, usize)> {
+        for (col_id, tasks) in &self.kanban.columns {
+            if let Some(idx) = tasks.iter().position(|id| id == task_id) {
+                return Some((col_id.clone(), idx));
+            }
+        }
+        None
+    }
+
     /// Update a task's agent status and bump `last_activity_at`. Marks state dirty.
     pub fn update_task_agent_status(&mut self, task_id: &str, status: AgentStatus) {
         if let Some(task) = self.tasks.get_mut(task_id) {
