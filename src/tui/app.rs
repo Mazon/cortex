@@ -258,6 +258,68 @@ impl App {
                 return;
             }
 
+            // Handle Up/Down arrows and G/g for scrolling output in task detail view
+            if matches!(
+                key.code,
+                KeyCode::Up | KeyCode::Down | KeyCode::Char('G') | KeyCode::Char('g')
+            ) && key.modifiers.is_empty()
+            {
+                let in_detail = {
+                    let state = self.state.lock().unwrap();
+                    state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                };
+                if in_detail {
+                    let mut state = self.state.lock().unwrap();
+                    let total_lines = state
+                        .ui
+                        .viewing_task_id
+                        .as_ref()
+                        .and_then(|tid| state.cached_streaming_lines.get(tid))
+                        .map(|(_, lines)| lines.len())
+                        .unwrap_or(0);
+
+                    let max_offset = total_lines.saturating_sub(1);
+
+                    match key.code {
+                        KeyCode::Up => {
+                            if total_lines > 0 {
+                                let current = state.ui.user_scroll_offset.unwrap_or(0);
+                                let new_offset = current.saturating_sub(1);
+                                state.ui.user_scroll_offset = Some(new_offset);
+                                state.mark_render_dirty();
+                            }
+                            return;
+                        }
+                        KeyCode::Down => {
+                            if total_lines > 0 {
+                                let current = state.ui.user_scroll_offset.unwrap_or(max_offset);
+                                let new_offset = (current + 1).min(max_offset);
+                                if new_offset >= max_offset {
+                                    state.ui.user_scroll_offset = None;
+                                } else {
+                                    state.ui.user_scroll_offset = Some(new_offset);
+                                }
+                                state.mark_render_dirty();
+                            }
+                            return;
+                        }
+                        KeyCode::Char('G') => {
+                            state.ui.user_scroll_offset = None;
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        KeyCode::Char('g') => {
+                            if total_lines > 0 {
+                                state.ui.user_scroll_offset = Some(0);
+                                state.mark_render_dirty();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             // Handle y/n for permission approval when in task detail view
             if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('n')) {
                 let approve = key.code == KeyCode::Char('y');

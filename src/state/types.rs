@@ -301,6 +301,10 @@ pub struct UIState {
     pub task_editor: Option<TaskEditorState>,
     /// Pending destructive action awaiting confirmation in `AppMode::ConfirmDialog`.
     pub confirm_action: Option<ConfirmableAction>,
+    /// User-controlled scroll offset for the streaming output in task detail view.
+    /// `None` means auto-scroll (always show the bottom). `Some(n)` means the
+    /// user has manually scrolled and the view is pinned to offset `n`.
+    pub user_scroll_offset: Option<usize>,
 }
 
 impl Default for UIState {
@@ -318,6 +322,7 @@ impl Default for UIState {
             prompt_context: None,
             task_editor: None,
             confirm_action: None,
+            user_scroll_offset: None,
         }
     }
 }

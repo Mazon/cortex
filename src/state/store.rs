@@ -356,12 +356,14 @@ impl AppState {
     pub fn open_task_detail(&mut self, task_id: &str) {
         self.ui.viewing_task_id = Some(task_id.to_string());
         self.ui.focused_panel = FocusedPanel::TaskDetail;
+        self.ui.user_scroll_offset = None;
     }
 
     /// Close the task detail panel and return focus to the kanban board.
     pub fn close_task_detail(&mut self) {
         self.ui.viewing_task_id = None;
         self.ui.focused_panel = FocusedPanel::Kanban;
+        self.ui.user_scroll_offset = None;
     }
 
     // ─── Task Editor Mode ────────────────────────────────────────────────

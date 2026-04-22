@@ -134,7 +134,12 @@ pub fn render_task_detail(
     }
 
     // ── 5. Footer key hints ──────────────────────────────────────────
-    render_footer(f, v_layout[5]);
+    let has_scrollable_output = state
+        .cached_streaming_lines
+        .get(task_id)
+        .map(|(_, lines)| lines.len() > v_layout[3].height as usize)
+        .unwrap_or(false);
+    render_footer(f, v_layout[5], has_scrollable_output);
 }
 
 /// Render the metadata line: status icon, status text, timer, agent name.
@@ -316,20 +321,50 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         return;
     }
 
-    // Calculate scroll: show the last N lines that fit in the visible area
+    // Calculate scroll: respect user_scroll_offset if set (manual scroll mode),
+    // otherwise auto-scroll to the bottom.
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
 
-    let scroll_offset = if total_lines > visible_height {
+    let auto_scroll_offset = if total_lines > visible_height {
         total_lines - visible_height
     } else {
         0
     };
 
+    let scroll_offset = match state.ui.user_scroll_offset {
+        Some(user_offset) => {
+            let max_offset = total_lines.saturating_sub(visible_height);
+            user_offset.min(max_offset)
+        }
+        None => auto_scroll_offset,
+    };
+
+    let is_manual_scroll = state.ui.user_scroll_offset.is_some()
+        && scroll_offset < auto_scroll_offset;
+
     let para = Paragraph::new(lines)
         .scroll((scroll_offset as u16, 0))
         .wrap(Wrap { trim: false });
     f.render_widget(para, inner);
+
+    // ── Manual scroll indicator ──────────────────────────────────────
+    if is_manual_scroll {
+        let manual_label = "── manual scroll (press G to resume) ──";
+        let label_width = manual_label.len() as u16;
+        if label_width <= inner.width {
+            let x = inner.x + (inner.width - label_width) / 2;
+            let y = inner.y;
+            let area = Rect::new(x, y, label_width, 1);
+            let indicator = Paragraph::new(Span::styled(
+                manual_label,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            f.render_widget(indicator, area);
+        }
+    }
 
     // ── Scroll indicator ────────────────────────────────────────────
     if total_lines > visible_height {
@@ -532,8 +567,12 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
 }
 
 /// Render the footer with key hints.
-fn render_footer(f: &mut Frame, area: Rect) {
-    let hints = "Esc: back  y: approve  n: reject  1-9: answer question";
+fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool) {
+    let hints = if has_scrollable_output {
+        "Esc: back  Up/Down: scroll  G: bottom  g: top  y: approve  n: reject  1-9: answer"
+    } else {
+        "Esc: back  y: approve  n: reject  1-9: answer question"
+    };
     let para = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     f.render_widget(para, area);
 }
