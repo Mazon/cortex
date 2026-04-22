@@ -27,6 +27,7 @@ pub async fn sse_event_loop(
 ) {
     let mut backoff_ms: u64 = 2000;
     let mut reconnect_count: u64 = 0;
+    let mut reconnect_attempt: u32 = 0;
 
     loop {
         // Check shutdown before each connection attempt.
@@ -43,6 +44,14 @@ pub async fn sse_event_loop(
                 reconnect_count += 1;
                 let mut stream = stream;
 
+                // Mark reconnection complete — we have a live stream.
+                {
+                    let mut state = state.lock().unwrap();
+                    state.connected = true;
+                    state.reconnecting = false;
+                    state.reconnect_attempt = 0;
+                }
+
                 if reconnect_count > 1 {
                     debug!(
                         "SSE reconnected successfully (reconnect #{})",
@@ -56,6 +65,10 @@ pub async fn sse_event_loop(
                             let Some(event_result) = event_result else {
                                 // Stream closed by the server.
                                 warn!("SSE stream ended, reconnecting...");
+                                {
+                                    let mut state = state.lock().unwrap();
+                                    state.reconnecting = true;
+                                }
                                 break;
                             };
 
@@ -102,10 +115,21 @@ pub async fn sse_event_loop(
             }
             Err(e) => {
                 warn!("Failed to subscribe to SSE events: {}", e);
+                {
+                    let mut state = state.lock().unwrap();
+                    state.reconnecting = true;
+                }
             }
         }
 
         // Exponential backoff with max 30s, but also break on shutdown.
+        reconnect_attempt += 1;
+        {
+            let mut state = state.lock().unwrap();
+            state.reconnecting = true;
+            state.reconnect_attempt = reconnect_attempt;
+            state.mark_render_dirty();
+        }
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
             _ = shutdown.changed() => {

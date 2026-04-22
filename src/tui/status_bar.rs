@@ -7,15 +7,17 @@ use ratatui::widgets::Paragraph;
 /// Render the status bar at the bottom of the kanban area.
 pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     // Connection status (left)
-    let conn_text = if state.connected {
-        "● connected"
+    let (conn_text, conn_color) = if state.reconnecting {
+        let attempt = state.reconnect_attempt;
+        if attempt > 0 {
+            (format!("◐ reconnecting ({})...", attempt), Color::Yellow)
+        } else {
+            ("◐ reconnecting...".to_string(), Color::Yellow)
+        }
+    } else if state.connected {
+        ("● connected".to_string(), Color::Green)
     } else {
-        "○ disconnected"
-    };
-    let conn_color = if state.connected {
-        Color::Green
-    } else {
-        Color::DarkGray
+        ("○ disconnected".to_string(), Color::DarkGray)
     };
 
     // Notification (center)
@@ -35,12 +37,14 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     let hints = "?:help  n:new  e:edit  m:move  x:del  r:rename  d:dir  ^j/^k:proj  ^q:quit";
 
     // Build the status bar using a horizontal layout
+    // Connection status width is dynamic: "● connected" (13) to "◐ reconnecting (99)..." (23)
+    let conn_width = conn_text.chars().count().max(14) as u16;
     let h_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(14), // Connection status
-            Constraint::Min(0),     // Notification (center)
-            Constraint::Length(52), // Key hints
+            Constraint::Length(conn_width), // Connection status (dynamic)
+            Constraint::Min(0),             // Notification (center)
+            Constraint::Length(52),         // Key hints
         ])
         .split(area);
 

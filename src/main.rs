@@ -152,6 +152,16 @@ fn main() -> Result<()> {
     }
     let _terminal_guard = TerminalGuard;
 
+    // Render initial loading screen so users see feedback immediately
+    // instead of a blank alternate screen while servers start up.
+    let mut loading_terminal = tui::Terminal::new(tui::CrosstermBackend::new(std::io::stdout()))?;
+    let mut spinner_idx: usize = 0;
+    tui::loading::render_loading_frame(
+        &mut loading_terminal,
+        "Starting Cortex...",
+        spinner_idx,
+    )?;
+
     // === Phase 2: Async runtime ===
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -220,10 +230,26 @@ fn main() -> Result<()> {
         let mut server_manager = opencode::server::ServerManager::new(config.opencode.port);
 
         // Start servers for each project (optional — only if opencode is available)
-        for project in state.lock().unwrap().projects.iter() {
+        // Collect project info first so we don't hold the state lock during await.
+        let projects_snapshot: Vec<(String, String, String)> = state
+            .lock()
+            .unwrap()
+            .projects
+            .iter()
+            .map(|p| (p.id.clone(), p.name.clone(), p.working_directory.clone()))
+            .collect();
+
+        for (project_id, project_name, working_dir) in projects_snapshot.iter() {
+            spinner_idx = tui::loading::advance_spinner(spinner_idx);
+            tui::loading::render_loading_frame(
+                &mut loading_terminal,
+                &format!("Starting server for {}...", project_name),
+                spinner_idx,
+            )?;
+
             match start_project_server(
-                &project.id,
-                &project.working_directory,
+                project_id,
+                working_dir,
                 &mut config.opencode,
                 &mut server_manager,
                 &mut opencode_clients,
@@ -231,17 +257,25 @@ fn main() -> Result<()> {
             .await
             {
                 Ok(_) => {
-                    tracing::info!("Server started for project: {}", project.name);
+                    tracing::info!("Server started for project: {}", project_name);
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to start server for project {}: {}. Continuing without server.",
-                        project.name,
+                        project_name,
                         e
                     );
                 }
             }
         }
+
+        // Show "connected" status after all servers have been started
+        spinner_idx = tui::loading::advance_spinner(spinner_idx);
+        tui::loading::render_loading_frame(
+            &mut loading_terminal,
+            "Connected. Loading...",
+            spinner_idx,
+        )?;
 
         // Spawn SSE event loops for active clients
         // Create a shared shutdown watch channel for SSE event loops.
@@ -268,6 +302,10 @@ fn main() -> Result<()> {
         if !opencode_clients.is_empty() {
             state.lock().unwrap().connected = true;
         }
+
+        // Drop the loading terminal before creating the App, which
+        // constructs its own Terminal wrapping stdout.
+        drop(loading_terminal);
 
         // Spawn periodic persistence save task.
         // Opens a fresh Db connection each cycle (no lock contention with AppState).
