@@ -348,6 +348,11 @@ impl AppState {
                     task.description = description;
                     task.updated_at = now;
                     self.mark_dirty();
+                    // Reset unsaved changes flags after successful save
+                    if let Some(ed) = self.ui.task_editor.as_mut() {
+                        ed.has_unsaved_changes = false;
+                        ed.discard_warning_shown = false;
+                    }
                     Ok(task_id.clone())
                 } else {
                     anyhow::bail!("Task not found: {}", task_id)
@@ -363,6 +368,11 @@ impl AppState {
                 // Move to target column if not todo
                 if column_id != KanbanColumn::TODO {
                     self.move_task(&task.id, KanbanColumn(column_id.to_string()));
+                }
+                // Reset unsaved changes flags after successful save
+                if let Some(ed) = self.ui.task_editor.as_mut() {
+                    ed.has_unsaved_changes = false;
+                    ed.discard_warning_shown = false;
                 }
                 Ok(task.id)
             }

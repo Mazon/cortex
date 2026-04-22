@@ -340,6 +340,11 @@ pub struct TaskEditorState {
     pub column_id: Option<String>,
     /// Agent type to assign when creating a new task.
     pub agent_type: TaskAgentType,
+    /// Whether the user has made unsaved edits since the last save or open.
+    pub has_unsaved_changes: bool,
+    /// Whether the "unsaved changes" discard warning is currently displayed.
+    /// Set on first Esc with unsaved changes; cleared on any edit or save.
+    pub discard_warning_shown: bool,
 }
 
 impl TaskEditorState {
@@ -356,6 +361,8 @@ impl TaskEditorState {
             scroll_offset: 0,
             column_id: Some(default_column.to_string()),
             agent_type: TaskAgentType::None,
+            has_unsaved_changes: false,
+            discard_warning_shown: false,
         }
     }
 
@@ -382,6 +389,8 @@ impl TaskEditorState {
             scroll_offset: 0,
             column_id: Some(task.column.0.clone()),
             agent_type: task.agent_type.clone(),
+            has_unsaved_changes: false,
+            discard_warning_shown: false,
         }
     }
 
@@ -428,8 +437,15 @@ impl TaskEditorState {
         self.cached_description = None;
     }
 
+    /// Marks the editor as having unsaved changes and clears any discard warning.
+    fn mark_edited(&mut self) {
+        self.has_unsaved_changes = true;
+        self.discard_warning_shown = false;
+    }
+
     /// Inserts a character at cursor position in the focused field.
     pub fn insert_char(&mut self, ch: char) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 // Convert char index to byte offset for String::insert.
@@ -464,6 +480,7 @@ impl TaskEditorState {
 
     /// Deletes character before cursor (backspace).
     pub fn delete_char_back(&mut self) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 if self.cursor_col > 0 {
@@ -505,6 +522,7 @@ impl TaskEditorState {
 
     /// Deletes character at cursor (delete key).
     pub fn delete_char_forward(&mut self) {
+        self.mark_edited();
         match self.focused_field {
             EditorField::Title => {
                 if self.cursor_col < self.title.chars().count() {
@@ -545,6 +563,7 @@ impl TaskEditorState {
         if self.focused_field != EditorField::Description {
             return;
         }
+        self.mark_edited();
         let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
         let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
         let col = self.cursor_col.min(line_len);
