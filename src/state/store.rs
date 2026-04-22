@@ -596,6 +596,44 @@ impl AppState {
         }
     }
 
+
+    /// Add a question request to a task's session.
+    /// Updates the task's `pending_question_count`.
+    pub fn add_question_request(&mut self, task_id: &str, request: QuestionRequest) {
+        let session = self
+            .task_sessions
+            .entry(task_id.to_string())
+            .or_insert_with(|| TaskDetailSession {
+                task_id: task_id.to_string(),
+                ..Default::default()
+            });
+        session.pending_questions.push(request);
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.pending_question_count = session.pending_questions.len() as u32;
+        }
+    }
+
+    /// Resolve (dismiss) a question request from a task's session.
+    /// Updates the task's `pending_question_count`.
+    pub fn resolve_question_request(
+        &mut self,
+        task_id: &str,
+        question_id: &str,
+    ) {
+        let session = self
+            .task_sessions
+            .entry(task_id.to_string())
+            .or_insert_with(|| TaskDetailSession {
+                task_id: task_id.to_string(),
+                ..Default::default()
+            });
+        session
+            .pending_questions
+            .retain(|q| q.id != question_id);
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.pending_question_count = session.pending_questions.len() as u32;
+        }
+    }
     // ─── SSE Processing Helpers ──────────────────────────────────────────
 
     /// Handle a `SessionStatus` SSE event — map the status string to

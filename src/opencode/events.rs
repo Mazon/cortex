@@ -245,18 +245,56 @@ fn process_event(
         EventListResponse::QuestionAsked { properties } => {
             let session_id = properties.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(task_id) = state.get_task_id_by_session(session_id).map(|s| s.to_string()) {
-                let question: String = properties
+                let question_id: String = properties
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let question_text: String = properties
                     .get("question")
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string();
+                let answers: Vec<String> = properties
+                    .get("answers")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let request = crate::state::types::QuestionRequest {
+                    id: question_id,
+                    session_id: session_id.to_string(),
+                    question: question_text.clone(),
+                    answers,
+                    status: "pending".to_string(),
+                };
+                state.add_question_request(&task_id, request);
                 state.update_project_status(&task_id);
-                let preview: String = question.chars().take(50).collect();
+
+                let preview: String = question_text.chars().take(50).collect();
                 state.set_notification(
                     format!("Question pending: {}", preview),
                     crate::state::types::NotificationVariant::Warning,
                     10000,
                 );
+            }
+            None
+        }
+
+        EventListResponse::QuestionReplied { properties } => {
+            if let Some(task_id) = state.get_task_id_by_session(&properties.session_id).map(|s| s.to_string()) {
+                state.resolve_question_request(&task_id, &properties.request_id);
+            }
+            None
+        }
+
+        EventListResponse::QuestionRejected { properties } => {
+            if let Some(task_id) = state.get_task_id_by_session(&properties.session_id).map(|s| s.to_string()) {
+                state.resolve_question_request(&task_id, &properties.request_id);
             }
             None
         }
@@ -661,22 +699,46 @@ mod tests {
 
     #[test]
     fn question_asked_sets_warning_notification() {
-        let (mut state, _task_id, session_id) = make_test_state();
+        let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
         let columns_config = make_columns_config();
-
         let event = EventListResponse::QuestionAsked {
             properties: serde_json::json!({
                 "sessionID": session_id,
+                "id": "q-001",
                 "question": "Which approach should I use for the refactoring?"
             }),
         };
         process_event(&event, &mut state, &client, &columns_config);
-
         let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("Question pending"));
         assert!(notif.message.contains("Which approach"));
         assert_eq!(notif.variant, NotificationVariant::Warning);
+        let session = state.task_sessions.get(&task_id).unwrap();
+        assert_eq!(session.pending_questions.len(), 1);
+        assert_eq!(session.pending_questions[0].id, "q-001");
+        assert_eq!(session.pending_questions[0].question, "Which approach should I use for the refactoring?");
+        assert_eq!(session.pending_questions[0].status, "pending");
+        assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 1);
+    }
+
+    #[test]
+    fn question_asked_stores_answer_options() {
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+        let event = EventListResponse::QuestionAsked {
+            properties: serde_json::json!({
+                "sessionID": session_id,
+                "id": "q-002",
+                "question": "Which approach should I use?",
+                "answers": ["Option A", "Option B", "Option C"]
+            }),
+        };
+        process_event(&event, &mut state, &client, &columns_config);
+        let session = state.task_sessions.get(&task_id).unwrap();
+        assert_eq!(session.pending_questions.len(), 1);
+        assert_eq!(session.pending_questions[0].answers, vec!["Option A", "Option B", "Option C"]);
     }
 
     #[test]
@@ -684,19 +746,45 @@ mod tests {
         let (mut state, _task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
         let columns_config = make_columns_config();
-
         let long_question = "a".repeat(100);
         let event = EventListResponse::QuestionAsked {
             properties: serde_json::json!({
                 "sessionID": session_id,
+                "id": "q-003",
                 "question": long_question
             }),
         };
         process_event(&event, &mut state, &client, &columns_config);
-
         let notif = state.ui.notifications.back().unwrap();
-        // The preview should be truncated to ~50 chars
         assert!(notif.message.len() < long_question.len() + 30);
+    }
+
+    #[test]
+    fn question_replied_removes_from_pending() {
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+        let event = EventListResponse::QuestionAsked {
+            properties: serde_json::json!({
+                "sessionID": session_id,
+                "id": "q-004",
+                "question": "Should I proceed?",
+                "answers": ["Yes", "No"]
+            }),
+        };
+        process_event(&event, &mut state, &client, &columns_config);
+        assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 1);
+        let reply_event = EventListResponse::QuestionReplied {
+            properties: opencode_sdk_rs::resources::event::QuestionRepliedProps {
+                session_id: session_id.clone(),
+                request_id: "q-004".to_string(),
+                answers: vec![],
+            },
+        };
+        process_event(&reply_event, &mut state, &client, &columns_config);
+        let session = state.task_sessions.get(&task_id).unwrap();
+        assert!(session.pending_questions.is_empty());
+        assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 0);
     }
 
     // ── Ignored events ──────────────────────────────────────────────────

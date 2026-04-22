@@ -492,8 +492,9 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
 
     // Questions
     for question in &session.pending_questions {
+        // Show question label and text
         spans.push(Span::styled(
-            format!(" ?{} ", question.id),
+            " ? ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
@@ -503,11 +504,24 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
             Style::default().fg(Color::White),
         ));
         if !question.answers.is_empty() {
-            let answers_str = question.answers.join(", ");
+            // Show numbered answer options: [1] option1  [2] option2
             spans.push(Span::styled(
-                format!("[{}]", answers_str),
+                "Answers: ",
                 Style::default().fg(Color::DarkGray),
             ));
+            for (i, answer) in question.answers.iter().enumerate() {
+                let key = format!("{}", i + 1);
+                spans.push(Span::styled(
+                    format!("[{}]", key),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(
+                    format!("{} ", answer),
+                    Style::default().fg(Color::White),
+                ));
+            }
         }
     }
 
@@ -519,7 +533,7 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
 
 /// Render the footer with key hints.
 fn render_footer(f: &mut Frame, area: Rect) {
-    let hints = "Esc: back  y: approve  n: reject";
+    let hints = "Esc: back  y: approve  n: reject  1-9: answer question";
     let para = Paragraph::new(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     f.render_widget(para, area);
 }
