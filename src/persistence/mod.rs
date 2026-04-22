@@ -219,6 +219,7 @@ mod tests {
                     m.insert("running".to_string(), 0);
                     m
                 },
+                kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
             connected: true,

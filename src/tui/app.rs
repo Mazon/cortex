@@ -5,7 +5,7 @@ use crate::opencode::client::OpenCodeClient;
 use crate::state::types::AppState;
 use crate::tui::{CrosstermBackend, Terminal};
 use crossterm::event::{self, Event, KeyEventKind};
-use ratatui::prelude::Rect;
+use ratatui::prelude::Size;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -502,7 +502,7 @@ impl App {
     }
 
     fn handle_delete_project(&mut self) {
-        let (project_id, project_name) = {
+        let (project_id, _project_name) = {
             let state = self.state.lock().unwrap();
             match state.active_project_id.as_ref() {
                 Some(pid) => {
@@ -850,8 +850,9 @@ impl App {
                             state.remove_project(&project_id);
 
                             // If there are remaining projects, select the first one.
-                            if let Some(first) = state.projects.first() {
-                                state.select_project(&first.id);
+                            let first_id = state.projects.first().map(|p| p.id.clone());
+                            if let Some(id) = first_id {
+                                state.select_project(&id);
                             }
 
                             state.set_notification(
@@ -1091,7 +1092,7 @@ impl App {
     fn max_visible_columns(config: &CortexConfig, terminal: &Terminal) -> usize {
         let term_width = terminal
             .size()
-            .unwrap_or(Rect::new(0, 0, 80, 24))
+            .unwrap_or(Size::new(80, 24))
             .width;
         let sidebar_width = config.theme.sidebar_width;
         let kanban_width = term_width.saturating_sub(sidebar_width);
