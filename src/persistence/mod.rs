@@ -3,7 +3,7 @@
 pub mod db;
 
 use crate::error::AppResult;
-use crate::state::types::{AppState, KanbanColumn};
+use crate::state::types::{AppState, CortexTask, KanbanColumn};
 use db::Db;
 use std::collections::HashMap;
 

@@ -688,6 +688,31 @@ impl AppState {
             .is_ok()
     }
 
+    /// Evict stale entries from the streaming render cache.
+    ///
+    /// Removes cached lines for task IDs that no longer exist in `self.tasks`,
+    /// and if the cache still exceeds `max_entries`, clears the oldest half
+    /// (by insertion order, which roughly correlates with least-recently-viewed).
+    pub fn prune_streaming_cache(&mut self, max_entries: usize) {
+        // Remove entries for deleted tasks
+        self.cached_streaming_lines
+            .retain(|task_id, _| self.tasks.contains_key(task_id));
+
+        // If still too large, remove the oldest half (first N/2 entries)
+        if self.cached_streaming_lines.len() > max_entries {
+            let to_remove = self.cached_streaming_lines.len() / 2;
+            let keys: Vec<String> = self
+                .cached_streaming_lines
+                .keys()
+                .take(to_remove)
+                .cloned()
+                .collect();
+            for key in keys {
+                self.cached_streaming_lines.remove(&key);
+            }
+        }
+    }
+
     // ─── Persistence Restore ─────────────────────────────────────────────
 
     /// Bulk-restore state from persistence (projects, tasks, kanban order,
