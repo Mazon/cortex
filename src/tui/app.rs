@@ -589,6 +589,7 @@ impl App {
 
         match key.code {
             KeyCode::Char('y') => {
+                // Confirm the pending action
                 let action = {
                     let mut state = self.state.lock().unwrap();
                     state.ui.confirm_action.take()
@@ -608,11 +609,12 @@ impl App {
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc => {
+                // Cancel — return to Normal mode
                 let mut state = self.state.lock().unwrap();
                 state.ui.confirm_action = None;
                 state.ui.mode = crate::state::types::AppMode::Normal;
             }
-            _ => {}
+            _ => {} // Ignore other keys
         }
     }
 

@@ -795,6 +795,10 @@ pub struct AppState {
     pub ui: UIState,
     /// Whether at least one OpenCode client is connected.
     pub connected: bool,
+    /// Whether an SSE reconnection is in progress (exponential backoff).
+    pub reconnecting: bool,
+    /// Current reconnect attempt number (0 when not reconnecting, 1-based during reconnect).
+    pub reconnect_attempt: u32,
     /// ID of the currently active project.
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
@@ -822,6 +826,8 @@ impl Default for AppState {
             kanban: KanbanState::default(),
             ui: UIState::default(),
             connected: false,
+            reconnecting: false,
+            reconnect_attempt: 0,
             active_project_id: None,
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),
