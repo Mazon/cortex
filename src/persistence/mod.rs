@@ -2,7 +2,7 @@
 
 pub mod db;
 
-use crate::error::AppResult;
+use anyhow::Result;
 use crate::state::types::{AppState, CortexTask, KanbanColumn};
 use db::Db;
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 ///
 /// All writes are performed inside a single SQLite transaction so that a
 /// crash mid-save never leaves the database in an inconsistent state.
-pub fn save_state(state: &AppState, db: &Db) -> AppResult<()> {
+pub fn save_state(state: &AppState, db: &Db) -> Result<()> {
     let tx = db.conn.unchecked_transaction()?;
 
     // Save all projects
@@ -44,7 +44,7 @@ pub fn save_state(state: &AppState, db: &Db) -> AppResult<()> {
 }
 
 /// Restore state from the database into AppState.
-pub fn restore_state(state: &mut AppState, db: &Db) -> AppResult<()> {
+pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
     // Load projects
     let projects = db.load_projects()?;
     let mut counters: HashMap<String, u32> = HashMap::new();

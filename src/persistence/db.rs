@@ -1,6 +1,6 @@
 //! SQLite database operations for persistence.
 
-use crate::error::AppResult;
+use anyhow::Result;
 use crate::state::types::{
     AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, TaskAgentType,
 };
@@ -15,7 +15,7 @@ pub struct Db {
 
 impl Db {
     /// Open a database connection and run migrations.
-    pub fn new(path: &Path) -> AppResult<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -46,7 +46,7 @@ impl Db {
 
     // ─── Task CRUD ─────────────────────────────────────────────────────
 
-    pub fn save_task(&self, task: &CortexTask) -> AppResult<()> {
+    pub fn save_task(&self, task: &CortexTask) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
@@ -73,7 +73,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn load_tasks(&self, project_id: &str) -> AppResult<Vec<CortexTask>> {
+    pub fn load_tasks(&self, project_id: &str) -> Result<Vec<CortexTask>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at FROM tasks WHERE project_id = ?1 ORDER BY number",
         )?;
@@ -105,7 +105,7 @@ impl Db {
         Ok(tasks)
     }
 
-    pub fn delete_task(&self, task_id: &str) -> AppResult<()> {
+    pub fn delete_task(&self, task_id: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM kanban_order WHERE task_id = ?1",
             params![task_id],
@@ -117,7 +117,7 @@ impl Db {
 
     // ─── Project CRUD ──────────────────────────────────────────────────
 
-    pub fn save_project(&self, project: &CortexProject) -> AppResult<()> {
+    pub fn save_project(&self, project: &CortexProject) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO projects (id, name, working_directory, status, position) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -131,7 +131,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn load_projects(&self) -> AppResult<Vec<CortexProject>> {
+    pub fn load_projects(&self) -> Result<Vec<CortexProject>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, working_directory, status, position FROM projects ORDER BY position",
         )?;
@@ -151,7 +151,7 @@ impl Db {
         Ok(projects)
     }
 
-    pub fn delete_project(&self, project_id: &str) -> AppResult<()> {
+    pub fn delete_project(&self, project_id: &str) -> Result<()> {
         // Delete tasks and kanban order for this project
         let tasks = self.load_tasks(project_id)?;
         for task in &tasks {
@@ -164,7 +164,7 @@ impl Db {
 
     // ─── Kanban Order ──────────────────────────────────────────────────
 
-    pub fn save_kanban_order(&self, column: &KanbanColumn, task_ids: &[String]) -> AppResult<()> {
+    pub fn save_kanban_order(&self, column: &KanbanColumn, task_ids: &[String]) -> Result<()> {
         self.conn.execute(
             "DELETE FROM kanban_order WHERE column_id = ?1",
             params![column.0],
@@ -178,7 +178,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn load_kanban_order(&self) -> AppResult<HashMap<String, Vec<String>>> {
+    pub fn load_kanban_order(&self) -> Result<HashMap<String, Vec<String>>> {
         let mut stmt = self
             .conn
             .prepare("SELECT column_id, task_id FROM kanban_order ORDER BY column_id, position")?;
@@ -198,7 +198,7 @@ impl Db {
 
     // ─── Metadata ──────────────────────────────────────────────────────
 
-    pub fn get_metadata(&self, key: &str) -> AppResult<Option<String>> {
+    pub fn get_metadata(&self, key: &str) -> Result<Option<String>> {
         let mut stmt = self
             .conn
             .prepare("SELECT value FROM metadata WHERE key = ?1")?;
@@ -210,7 +210,7 @@ impl Db {
         }
     }
 
-    pub fn set_metadata(&self, key: &str, value: &str) -> AppResult<()> {
+    pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -218,7 +218,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_next_task_number(&self, project_id: &str) -> AppResult<u32> {
+    pub fn get_next_task_number(&self, project_id: &str) -> Result<u32> {
         let max: Option<u32> = self.conn.query_row(
             "SELECT MAX(number) FROM tasks WHERE project_id = ?1",
             params![project_id],
@@ -233,7 +233,7 @@ impl Db {
         &self,
         project: &CortexProject,
         tx: &Transaction,
-    ) -> AppResult<()> {
+    ) -> Result<()> {
         tx.execute(
             "INSERT OR REPLACE INTO projects (id, name, working_directory, status, position) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -247,7 +247,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn save_task_with_conn(&self, task: &CortexTask, tx: &Transaction) -> AppResult<()> {
+    pub fn save_task_with_conn(&self, task: &CortexTask, tx: &Transaction) -> Result<()> {
         tx.execute(
             "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
@@ -279,7 +279,7 @@ impl Db {
         column: &KanbanColumn,
         task_ids: &[String],
         tx: &Transaction,
-    ) -> AppResult<()> {
+    ) -> Result<()> {
         tx.execute(
             "DELETE FROM kanban_order WHERE column_id = ?1",
             params![column.0],
@@ -298,7 +298,7 @@ impl Db {
         key: &str,
         value: &str,
         tx: &Transaction,
-    ) -> AppResult<()> {
+    ) -> Result<()> {
         tx.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
             params![key, value],
