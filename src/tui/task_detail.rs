@@ -1,6 +1,5 @@
 //! Task detail view — full-screen panel for viewing task metadata, streaming output, messages, and permissions.
 
-use crate::config::types::parse_hex_color_or;
 use crate::state::types::{
     AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
 };
@@ -152,10 +151,10 @@ fn render_metadata_line(
     let status_icon = task.agent_status.icon();
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
-        AgentStatus::Running => parse_hex_color_or(&theme.status_working, Color::Blue),
-        AgentStatus::Complete => parse_hex_color_or(&theme.status_done, Color::Green),
-        AgentStatus::Error => parse_hex_color_or(&theme.status_error, Color::Red),
-        AgentStatus::Hung => Color::Rgb(255, 87, 34),
+        AgentStatus::Running => theme.working_color(),
+        AgentStatus::Complete => theme.done_color(),
+        AgentStatus::Error => theme.error_color(),
+        AgentStatus::Hung => theme.question_color(),
         AgentStatus::Pending => Color::DarkGray,
     };
 

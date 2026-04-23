@@ -509,6 +509,30 @@ impl ThemeConfig {
     pub fn color_or(&self, hex: &str, default: ratatui::prelude::Color) -> ratatui::prelude::Color {
         parse_hex_color_or(hex, default)
     }
+
+    /// Status color for running/working agents.
+    /// Uses the configured `status_working` hex color, falling back to blue.
+    pub fn working_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_working, ratatui::prelude::Color::Rgb(33, 150, 243))
+    }
+
+    /// Status color for completed agents.
+    /// Uses the configured `status_done` hex color, falling back to green.
+    pub fn done_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_done, ratatui::prelude::Color::Rgb(76, 175, 80))
+    }
+
+    /// Status color for question/hung states.
+    /// Uses the configured `status_question` hex color, falling back to orange.
+    pub fn question_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_question, ratatui::prelude::Color::Rgb(255, 152, 0))
+    }
+
+    /// Status color for error states.
+    /// Uses the configured `status_error` hex color, falling back to red.
+    pub fn error_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_error, ratatui::prelude::Color::Rgb(244, 67, 54))
+    }
 }
 
 /// Parse a `#RRGGBB` hex string into a [`ratatui::prelude::Color::Rgb`].
