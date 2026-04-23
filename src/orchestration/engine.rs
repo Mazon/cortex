@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::OpenCodeClient;
-use crate::state::types::{AgentStatus, AppState, KanbanColumn, TaskAgentType};
+use crate::state::types::{AgentStatus, AppState, KanbanColumn};
 
 /// Called when a task is moved to a new column.
 /// Starts an agent if the column has one configured.
@@ -193,7 +193,7 @@ mod tests {
             description: String::new(),
             column: KanbanColumn(column.to_string()),
             session_id: None,
-            agent_type: TaskAgentType::Planning,
+            agent_type: Some("planning".to_string()),
             agent_status: AgentStatus::Complete,
             entered_column_at: 1000,
             last_activity_at: 1000,

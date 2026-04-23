@@ -365,7 +365,7 @@ mod tests {
             description: String::new(),
             column: KanbanColumn("planning".to_string()),
             session_id: Some(session_id.clone()),
-            agent_type: TaskAgentType::Planning,
+            agent_type: Some("planning".to_string()),
             agent_status: AgentStatus::Running,
             entered_column_at: 1000,
             last_activity_at: 1000,

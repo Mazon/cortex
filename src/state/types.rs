@@ -26,43 +26,6 @@ impl From<&str> for KanbanColumn {
     }
 }
 
-/// Task agent type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TaskAgentType {
-    None,
-    Planning,
-    Do,
-    ReviewerAlpha,
-    ReviewerBeta,
-    ReviewerGamma,
-}
-
-impl TaskAgentType {
-    /// Parse an agent type from a string slice. Unrecognized values return [`TaskAgentType::None`].
-    pub fn from_str_opt(s: &str) -> Self {
-        match s {
-            "planning" => TaskAgentType::Planning,
-            "do" => TaskAgentType::Do,
-            "reviewer-alpha" => TaskAgentType::ReviewerAlpha,
-            "reviewer-beta" => TaskAgentType::ReviewerBeta,
-            "reviewer-gamma" => TaskAgentType::ReviewerGamma,
-            _ => TaskAgentType::None,
-        }
-    }
-
-    /// Return the string representation of this agent type.
-    pub fn as_str(&self) -> &str {
-        match self {
-            TaskAgentType::None => "none",
-            TaskAgentType::Planning => "planning",
-            TaskAgentType::Do => "do",
-            TaskAgentType::ReviewerAlpha => "reviewer-alpha",
-            TaskAgentType::ReviewerBeta => "reviewer-beta",
-            TaskAgentType::ReviewerGamma => "reviewer-gamma",
-        }
-    }
-}
-
 /// Agent execution status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentStatus {
@@ -219,8 +182,8 @@ pub struct CortexTask {
     pub column: KanbanColumn,
     /// OpenCode session ID, if an agent is currently working on this task.
     pub session_id: Option<String>,
-    /// Which agent type is assigned to this task.
-    pub agent_type: TaskAgentType,
+    /// Which agent type is assigned to this task. `None` means no agent assigned.
+    pub agent_type: Option<String>,
     /// Current execution status of the assigned agent.
     pub agent_status: AgentStatus,
     /// Unix timestamp (seconds) when the task entered its current column.
@@ -365,7 +328,7 @@ pub struct TaskEditorState {
     /// Target column ID when creating a new task.
     pub column_id: Option<String>,
     /// Agent type to assign when creating a new task.
-    pub agent_type: TaskAgentType,
+    pub agent_type: Option<String>,
     /// Whether the user has made unsaved edits since the last save or open.
     pub has_unsaved_changes: bool,
     /// Whether the "unsaved changes" discard warning is currently displayed.
@@ -393,7 +356,7 @@ impl TaskEditorState {
             cursor_col: 0,
             scroll_offset: 0,
             column_id: Some(default_column.to_string()),
-            agent_type: TaskAgentType::None,
+            agent_type: None,
             has_unsaved_changes: false,
             discard_warning_shown: false,
             validation_error: None,

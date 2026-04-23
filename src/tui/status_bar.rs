@@ -377,7 +377,7 @@ fn current_rotation_index(count: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::types::{KanbanColumn, KanbanState, TaskAgentType, UIState};
+    use crate::state::types::{KanbanColumn, KanbanState, UIState};
     use std::collections::HashMap;
 
     fn base_state() -> AppState {
@@ -406,9 +406,9 @@ mod tests {
                 None
             },
             agent_type: if status == AgentStatus::Running {
-                TaskAgentType::Do
+                Some("do".to_string())
             } else {
-                TaskAgentType::None
+                None
             },
             agent_status: status,
             entered_column_at: 0,

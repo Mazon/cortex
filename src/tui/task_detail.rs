@@ -160,7 +160,7 @@ fn render_metadata_line(
     };
 
     let elapsed = format_elapsed_time(task.entered_column_at);
-    let agent_name = task.agent_type.as_str();
+    let agent_name = task.agent_type.as_deref().unwrap_or("none");
 
     let mut spans: Vec<Span> = vec![
         Span::styled("Status: ", Style::default().fg(Color::DarkGray)),

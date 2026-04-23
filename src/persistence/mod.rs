@@ -91,7 +91,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
 mod tests {
     use super::*;
     use crate::state::types::{
-        AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, TaskAgentType,
+        AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
     };
     use std::collections::HashMap;
 
@@ -111,7 +111,7 @@ mod tests {
             description: "Save the task, load it back, assert every field matches exactly.\nMultiline description line 2.".to_string(),
             column: KanbanColumn("running".to_string()),
             session_id: Some("sess-xyz-999".to_string()),
-            agent_type: TaskAgentType::Do,
+            agent_type: Some("do".to_string()),
             agent_status: AgentStatus::Running,
             entered_column_at: 1_710_000_000_000,
             last_activity_at: 1_710_001_000_000,

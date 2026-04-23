@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use crate::state::types::{
-    AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, TaskAgentType,
+    AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
 };
 use rusqlite::{params, Connection, Transaction};
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ impl Db {
                 task.description,
                 task.column.0,
                 task.session_id,
-                task.agent_type.as_str(),
+                task.agent_type.as_deref().unwrap_or("none"),
                 task.agent_status.to_string(),
                 task.error_message,
                 task.plan_output,
@@ -87,7 +87,7 @@ impl Db {
                     description: row.get(3)?,
                     column: KanbanColumn(row.get::<_, String>(4)?),
                     session_id: row.get(5)?,
-                    agent_type: TaskAgentType::from_str_opt(&row.get::<_, String>(6)?),
+                    agent_type: row.get::<_, Option<String>>(6)?.filter(|s| s != "none"),
                     agent_status: parse_agent_status(&row.get::<_, String>(7)?),
                     error_message: row.get(8)?,
                     plan_output: row.get(9)?,
@@ -258,7 +258,7 @@ impl Db {
                 task.description,
                 task.column.0,
                 task.session_id,
-                task.agent_type.as_str(),
+                task.agent_type.as_deref().unwrap_or("none"),
                 task.agent_status.to_string(),
                 task.error_message,
                 task.plan_output,
