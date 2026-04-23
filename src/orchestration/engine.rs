@@ -33,6 +33,7 @@ fn start_agent(
     {
         let mut s = state.lock().unwrap();
         s.update_task_agent_status(task_id, AgentStatus::Running);
+        s.set_task_agent_type(task_id, Some(agent.to_string()));
     }
 
     // Clone what we need, spawn async work

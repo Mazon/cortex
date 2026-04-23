@@ -300,6 +300,16 @@ impl AppState {
         }
     }
 
+    /// Set the agent type on a task (e.g., when an agent is started from
+    /// column config). This is informational — it's displayed in the
+    /// task detail view and persisted to the database. Marks state dirty.
+    pub fn set_task_agent_type(&mut self, task_id: &str, agent_type: Option<String>) {
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.agent_type = agent_type;
+            self.mark_dirty();
+        }
+    }
+
     /// Look up the task ID associated with a given OpenCode session ID.
     pub fn get_task_id_by_session(&self, session_id: &str) -> Option<&str> {
         self.session_to_task.get(session_id).map(|s| s.as_str())
