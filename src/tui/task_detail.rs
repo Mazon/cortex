@@ -246,11 +246,56 @@ fn render_description_block(f: &mut Frame, area: Rect, task: &CortexTask) {
 /// Uses a render version cache on `AppState` to avoid rebuilding `Vec<Line>`
 /// on every frame when the session data hasn't changed.
 fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_id: &str) {
+    // ── Pre-compute scroll metrics for block title ──────────────────
+    // We estimate the inner height (area minus 2 for borders) to compute
+    // scroll info before rendering the block itself.
+    let total_lines = state
+        .cached_streaming_lines
+        .get(task_id)
+        .map(|(_, lines)| lines.len())
+        .unwrap_or(0);
+    let inner_height_est = area.height.saturating_sub(2);
+    let visible_height = inner_height_est as usize;
+    let can_scroll = total_lines > visible_height && visible_height > 0;
+
+    let auto_scroll_offset = if can_scroll {
+        total_lines - visible_height
+    } else {
+        0
+    };
+
+    let scroll_offset = match state.ui.user_scroll_offset {
+        Some(user_offset) if can_scroll => {
+            let max_offset = total_lines.saturating_sub(visible_height);
+            user_offset.min(max_offset)
+        }
+        Some(_) => 0,
+        None => auto_scroll_offset,
+    };
+
+    let is_manual_scroll = state.ui.user_scroll_offset.is_some()
+        && scroll_offset < auto_scroll_offset;
+
+    // ── Block title with scroll position indicator ───────────────────
+    let has_session = state.task_sessions.contains_key(task_id);
+    let block_title = if can_scroll && has_session {
+        let first_visible = scroll_offset + 1;
+        let last_visible = (scroll_offset + visible_height).min(total_lines);
+        let at_bottom = scroll_offset + visible_height >= total_lines;
+        if at_bottom {
+            format!(" Agent Output ▼ {}/{} ", last_visible, total_lines)
+        } else {
+            format!(" Agent Output ║ {}-{}/{} ", first_visible, last_visible, total_lines)
+        }
+    } else {
+        " Agent Output ".to_string()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
-            " Agent Output ",
+            block_title,
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
@@ -264,7 +309,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
     }
 
     // Early return if no session data — avoids cache logic for non-existent sessions.
-    if !state.task_sessions.contains_key(task_id) {
+    if !has_session {
         let para = Paragraph::new(Span::styled(
             "No session data available. Start an agent to see output here.",
             Style::default().fg(Color::DarkGray),
@@ -321,28 +366,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         return;
     }
 
-    // Calculate scroll: respect user_scroll_offset if set (manual scroll mode),
-    // otherwise auto-scroll to the bottom.
-    let visible_height = inner.height as usize;
-    let total_lines = lines.len();
-
-    let auto_scroll_offset = if total_lines > visible_height {
-        total_lines - visible_height
-    } else {
-        0
-    };
-
-    let scroll_offset = match state.ui.user_scroll_offset {
-        Some(user_offset) => {
-            let max_offset = total_lines.saturating_sub(visible_height);
-            user_offset.min(max_offset)
-        }
-        None => auto_scroll_offset,
-    };
-
-    let is_manual_scroll = state.ui.user_scroll_offset.is_some()
-        && scroll_offset < auto_scroll_offset;
-
+    // Use pre-computed scroll values for rendering
     let para = Paragraph::new(lines)
         .scroll((scroll_offset as u16, 0))
         .wrap(Wrap { trim: false });
@@ -362,35 +386,6 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ));
-            f.render_widget(indicator, area);
-        }
-    }
-
-    // ── Scroll indicator ────────────────────────────────────────────
-    if total_lines > visible_height {
-        let first_visible = scroll_offset + 1;
-        let last_visible = (scroll_offset + visible_height).min(total_lines);
-
-        let at_bottom = scroll_offset + visible_height >= total_lines;
-        let scrollbar_char = if at_bottom { "▼" } else { "║" };
-
-        let full_indicator = format!("{} {}-{}", scrollbar_char, first_visible, last_visible);
-        let total_text = format!("/{}", total_lines);
-        let indicator_width = (full_indicator.len() + total_text.len()) as u16;
-
-        if indicator_width <= inner.width {
-            let x = inner.x + inner.width - indicator_width;
-            let y = inner.y + inner.height - 1;
-            let area = Rect::new(x, y, indicator_width, 1);
-            let indicator = Paragraph::new(Line::from(vec![
-                Span::styled(full_indicator, Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    total_text,
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ]));
             f.render_widget(indicator, area);
         }
     }
