@@ -857,6 +857,836 @@ impl Default for AppState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TaskEditorState: insert_char (Title) ─────────────────────────────
+
+    #[test]
+    fn insert_char_title_appends_at_end() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        assert_eq!(editor.title, "abc");
+        assert_eq!(editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn insert_char_title_in_middle() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "acd".to_string();
+        editor.cursor_col = 1;
+        editor.insert_char('b');
+        assert_eq!(editor.title, "abcd");
+        assert_eq!(editor.cursor_col, 2);
+    }
+
+    #[test]
+    fn insert_char_title_at_beginning() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "bc".to_string();
+        editor.cursor_col = 0;
+        editor.insert_char('a');
+        assert_eq!(editor.title, "abc");
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn insert_char_title_emoji_multibyte() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.insert_char('🎉');
+        editor.insert_char('🚀');
+        assert_eq!(editor.title, "🎉🚀");
+        assert_eq!(editor.cursor_col, 2); // char-based index
+    }
+
+    #[test]
+    fn insert_char_title_cjk_multibyte() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "你好".to_string();
+        editor.cursor_col = 1;
+        editor.insert_char('世');
+        assert_eq!(editor.title, "你世好");
+        assert_eq!(editor.cursor_col, 2);
+    }
+
+    #[test]
+    fn insert_char_title_clears_validation_error() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.validation_error = Some("Title cannot be empty".to_string());
+        editor.insert_char('x');
+        assert!(editor.validation_error.is_none());
+    }
+
+    #[test]
+    fn insert_char_title_marks_edited() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        assert!(!editor.has_unsaved_changes);
+        editor.insert_char('x');
+        assert!(editor.has_unsaved_changes);
+    }
+
+    // ── TaskEditorState: insert_char (Description) ───────────────────────
+
+    #[test]
+    fn insert_char_description_appends_at_end() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.insert_char('a');
+        editor.insert_char('b');
+        assert_eq!(editor.desc_lines, vec!["ab"]);
+        assert_eq!(editor.cursor_col, 2);
+        assert_eq!(editor.cursor_row, 0);
+    }
+
+    #[test]
+    fn insert_char_description_multibyte() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.insert_char('🎉');
+        assert_eq!(editor.desc_lines[0], "🎉");
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn insert_char_description_invalidates_cache() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cached_description = Some("old".to_string());
+        editor.insert_char('x');
+        assert!(editor.cached_description.is_none());
+    }
+
+    #[test]
+    fn insert_char_description_on_second_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["line1".to_string(), "line2".to_string()];
+        editor.cursor_row = 1;
+        editor.cursor_col = 0;
+        editor.insert_char('X');
+        assert_eq!(editor.desc_lines[1], "Xline2");
+        assert_eq!(editor.cursor_row, 1);
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    // ── TaskEditorState: insert_char (Column — no-op) ────────────────────
+
+    #[test]
+    fn insert_char_column_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Column;
+        let has_unsaved = editor.has_unsaved_changes;
+        editor.insert_char('x');
+        // Column field doesn't accept char input — marks edited regardless
+        assert!(editor.has_unsaved_changes || !has_unsaved);
+    }
+
+    // ── TaskEditorState: delete_char_back (Title) ────────────────────────
+
+    #[test]
+    fn delete_char_back_title_removes_last_char() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "abc".to_string();
+        editor.cursor_col = 3;
+        editor.delete_char_back();
+        assert_eq!(editor.title, "ab");
+        assert_eq!(editor.cursor_col, 2);
+    }
+
+    #[test]
+    fn delete_char_back_title_at_beginning_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "abc".to_string();
+        editor.cursor_col = 0;
+        editor.delete_char_back();
+        assert_eq!(editor.title, "abc");
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_char_back_title_multibyte_emoji() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "a🎉b".to_string();
+        editor.cursor_col = 2; // between 🎉 and b
+        editor.delete_char_back();
+        assert_eq!(editor.title, "ab");
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn delete_char_back_title_empty_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.delete_char_back();
+        assert_eq!(editor.title, "");
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_char_back_title_clears_validation_error() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.validation_error = Some("error".to_string());
+        editor.title = "x".to_string();
+        editor.cursor_col = 1;
+        editor.delete_char_back();
+        assert!(editor.validation_error.is_none());
+    }
+
+    // ── TaskEditorState: delete_char_back (Description) ──────────────────
+
+    #[test]
+    fn delete_char_back_description_removes_char_on_same_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 5;
+        editor.delete_char_back();
+        assert_eq!(editor.desc_lines[0], "hell");
+        assert_eq!(editor.cursor_col, 4);
+    }
+
+    #[test]
+    fn delete_char_back_description_at_beginning_of_line_merges_with_previous() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string(), "world".to_string()];
+        editor.cursor_row = 1;
+        editor.cursor_col = 0;
+        editor.delete_char_back();
+        assert_eq!(editor.desc_lines, vec!["helloworld"]);
+        assert_eq!(editor.cursor_row, 0);
+        assert_eq!(editor.cursor_col, 5); // cursor at end of merged line
+    }
+
+    #[test]
+    fn delete_char_back_description_at_beginning_of_first_line_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 0;
+        editor.delete_char_back();
+        assert_eq!(editor.desc_lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn delete_char_back_description_multibyte_emoji() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["🎉🚀".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 2;
+        editor.delete_char_back();
+        assert_eq!(editor.desc_lines[0], "🎉");
+        assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn delete_char_back_description_invalidates_cache() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cached_description = Some("cached".to_string());
+        editor.delete_char_back();
+        assert!(editor.cached_description.is_none());
+    }
+
+    #[test]
+    fn delete_char_back_description_empty_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec![String::new()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 0;
+        editor.delete_char_back();
+        assert_eq!(editor.desc_lines, vec![String::new()]);
+        assert_eq!(editor.cursor_row, 0);
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    // ── TaskEditorState: delete_char_forward (Title) ─────────────────────
+
+    #[test]
+    fn delete_char_forward_title_removes_char_at_cursor() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "abc".to_string();
+        editor.cursor_col = 1; // between a and b
+        editor.delete_char_forward();
+        assert_eq!(editor.title, "ac");
+        assert_eq!(editor.cursor_col, 1); // cursor doesn't move
+    }
+
+    #[test]
+    fn delete_char_forward_title_at_end_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "abc".to_string();
+        editor.cursor_col = 3;
+        editor.delete_char_forward();
+        assert_eq!(editor.title, "abc");
+    }
+
+    #[test]
+    fn delete_char_forward_title_empty_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.delete_char_forward();
+        assert_eq!(editor.title, "");
+    }
+
+    #[test]
+    fn delete_char_forward_title_multibyte() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "a🎉b".to_string();
+        editor.cursor_col = 0; // before 'a'
+        editor.delete_char_forward();
+        assert_eq!(editor.title, "🎉b");
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn delete_char_forward_title_clears_validation_error() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.validation_error = Some("error".to_string());
+        editor.title = "ab".to_string();
+        editor.cursor_col = 0;
+        editor.delete_char_forward();
+        assert!(editor.validation_error.is_none());
+    }
+
+    // ── TaskEditorState: delete_char_forward (Description) ───────────────
+
+    #[test]
+    fn delete_char_forward_description_removes_char_on_same_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["abc".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 1;
+        editor.delete_char_forward();
+        assert_eq!(editor.desc_lines[0], "ac");
+    }
+
+    #[test]
+    fn delete_char_forward_description_at_end_of_line_merges_with_next() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string(), "world".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 5; // end of first line
+        editor.delete_char_forward();
+        assert_eq!(editor.desc_lines, vec!["helloworld"]);
+    }
+
+    #[test]
+    fn delete_char_forward_description_at_end_of_last_line_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 5;
+        editor.delete_char_forward();
+        assert_eq!(editor.desc_lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn delete_char_forward_description_invalidates_cache() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cached_description = Some("cached".to_string());
+        editor.delete_char_forward();
+        assert!(editor.cached_description.is_none());
+    }
+
+    // ── TaskEditorState: insert_newline ──────────────────────────────────
+
+    #[test]
+    fn insert_newline_splits_line_at_cursor() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello world".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 5;
+        editor.insert_newline();
+        assert_eq!(editor.desc_lines, vec!["hello", " world"]);
+        assert_eq!(editor.cursor_row, 1);
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn insert_newline_at_end_of_line_adds_empty_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 5;
+        editor.insert_newline();
+        assert_eq!(editor.desc_lines, vec!["hello", ""]);
+        assert_eq!(editor.cursor_row, 1);
+    }
+
+    #[test]
+    fn insert_newline_at_beginning_of_line_adds_empty_line_before() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 0;
+        editor.insert_newline();
+        assert_eq!(editor.desc_lines, vec!["", "hello"]);
+        assert_eq!(editor.cursor_row, 1);
+    }
+
+    #[test]
+    fn insert_newline_on_title_field_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "hello".to_string();
+        editor.cursor_col = 3;
+        editor.insert_newline();
+        assert_eq!(editor.title, "hello");
+        assert_eq!(editor.cursor_col, 3);
+    }
+
+    #[test]
+    fn insert_newline_marks_edited_and_invalidates_cache() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cached_description = Some("old".to_string());
+        assert!(!editor.has_unsaved_changes);
+        editor.insert_newline();
+        assert!(editor.has_unsaved_changes);
+        assert!(editor.cached_description.is_none());
+    }
+
+    // ── TaskEditorState: move_cursor (Title) ─────────────────────────────
+
+    #[test]
+    fn move_cursor_title_left_clamps_to_zero() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.cursor_col = 0;
+        editor.move_cursor(CursorDirection::Left);
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn move_cursor_title_right_clamps_to_length() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "ab".to_string();
+        editor.cursor_col = 2;
+        editor.move_cursor(CursorDirection::Right);
+        assert_eq!(editor.cursor_col, 2);
+    }
+
+    #[test]
+    fn move_cursor_title_home_goes_to_start() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "hello".to_string();
+        editor.cursor_col = 3;
+        editor.move_cursor(CursorDirection::Home);
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn move_cursor_title_end_goes_to_end() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "hello".to_string();
+        editor.cursor_col = 0;
+        editor.move_cursor(CursorDirection::End);
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    #[test]
+    fn move_cursor_title_up_down_are_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.cursor_row = 0;
+        editor.move_cursor(CursorDirection::Up);
+        editor.move_cursor(CursorDirection::Down);
+        assert_eq!(editor.cursor_row, 0);
+    }
+
+    #[test]
+    fn move_cursor_title_right_increments() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "abc".to_string();
+        editor.cursor_col = 0;
+        editor.move_cursor(CursorDirection::Right);
+        assert_eq!(editor.cursor_col, 1);
+        editor.move_cursor(CursorDirection::Right);
+        assert_eq!(editor.cursor_col, 2);
+        editor.move_cursor(CursorDirection::Right);
+        assert_eq!(editor.cursor_col, 3);
+    }
+
+    // ── TaskEditorState: move_cursor (Description) ───────────────────────
+
+    #[test]
+    fn move_cursor_description_up_clamps_to_first_row() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string()];
+        editor.cursor_row = 0;
+        editor.move_cursor(CursorDirection::Up);
+        assert_eq!(editor.cursor_row, 0);
+    }
+
+    #[test]
+    fn move_cursor_description_down_clamps_to_last_row() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string()];
+        editor.cursor_row = 1;
+        editor.move_cursor(CursorDirection::Down);
+        assert_eq!(editor.cursor_row, 1);
+    }
+
+    #[test]
+    fn move_cursor_description_up_decrements_row() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        editor.cursor_row = 2;
+        editor.move_cursor(CursorDirection::Up);
+        assert_eq!(editor.cursor_row, 1);
+    }
+
+    #[test]
+    fn move_cursor_description_down_increments_row() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        editor.cursor_row = 0;
+        editor.move_cursor(CursorDirection::Down);
+        assert_eq!(editor.cursor_row, 1);
+    }
+
+    #[test]
+    fn move_cursor_description_left_clamps_to_zero() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cursor_col = 0;
+        editor.move_cursor(CursorDirection::Left);
+        assert_eq!(editor.cursor_col, 0);
+    }
+
+    #[test]
+    fn move_cursor_description_right_clamps_to_line_length() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["ab".to_string()];
+        editor.cursor_col = 2;
+        editor.move_cursor(CursorDirection::Right);
+        assert_eq!(editor.cursor_col, 2);
+    }
+
+    #[test]
+    fn move_cursor_description_up_clamps_col_to_shorter_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["ab".to_string(), "c".to_string()];
+        editor.cursor_row = 1;
+        editor.cursor_col = 1;
+        editor.move_cursor(CursorDirection::Up);
+        assert_eq!(editor.cursor_row, 0);
+        assert_eq!(editor.cursor_col, 1); // clamped to min(1, 2) = 1
+    }
+
+    #[test]
+    fn move_cursor_description_down_clamps_col_to_shorter_line() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["abc".to_string(), "d".to_string()];
+        editor.cursor_row = 0;
+        editor.cursor_col = 3;
+        editor.move_cursor(CursorDirection::Down);
+        assert_eq!(editor.cursor_row, 1);
+        assert_eq!(editor.cursor_col, 1); // clamped to min(3, 1) = 1
+    }
+
+    #[test]
+    fn move_cursor_description_home_end() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["hello".to_string()];
+        editor.cursor_col = 3;
+        editor.move_cursor(CursorDirection::Home);
+        assert_eq!(editor.cursor_col, 0);
+        editor.move_cursor(CursorDirection::End);
+        assert_eq!(editor.cursor_col, 5);
+    }
+
+    // ── TaskEditorState: ensure_cursor_visible ───────────────────────────
+
+    #[test]
+    fn ensure_cursor_visible_adjusts_scroll_down() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string()];
+        editor.cursor_row = 3;
+        editor.scroll_offset = 0;
+        editor.ensure_cursor_visible(3); // visible rows 0-2
+        assert_eq!(editor.scroll_offset, 1); // now visible rows 1-3
+    }
+
+    #[test]
+    fn ensure_cursor_visible_adjusts_scroll_up() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string(), "e".to_string()];
+        editor.cursor_row = 0;
+        editor.scroll_offset = 2;
+        editor.ensure_cursor_visible(3); // visible rows 2-4
+        assert_eq!(editor.scroll_offset, 0); // now visible rows 0-2
+    }
+
+    #[test]
+    fn ensure_cursor_visible_zero_height_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.cursor_row = 5;
+        editor.scroll_offset = 0;
+        editor.ensure_cursor_visible(0);
+        assert_eq!(editor.scroll_offset, 0);
+    }
+
+    // ── TaskEditorState: description cache ───────────────────────────────
+
+    #[test]
+    fn description_returns_cached_when_available() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.desc_lines = vec!["hello".to_string(), "world".to_string()];
+        editor.cached_description = Some("hello\nworld".to_string());
+        assert_eq!(editor.description(), "hello\nworld");
+    }
+
+    #[test]
+    fn description_joins_lines_when_no_cache() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.desc_lines = vec!["hello".to_string(), "world".to_string()];
+        editor.cached_description = None;
+        assert_eq!(editor.description(), "hello\nworld");
+    }
+
+    #[test]
+    fn set_description_splits_on_newlines() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.set_description("line1\nline2\nline3");
+        assert_eq!(editor.desc_lines, vec!["line1", "line2", "line3"]);
+        assert_eq!(editor.cached_description, Some("line1\nline2\nline3".to_string()));
+    }
+
+    #[test]
+    fn set_description_empty_clears_lines() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.set_description("hello");
+        editor.set_description("");
+        assert_eq!(editor.desc_lines, vec![String::new()]);
+        assert!(editor.cached_description.is_none());
+    }
+
+    // ── TaskEditorState: current_line ────────────────────────────────────
+
+    #[test]
+    fn current_line_title() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "hello world".to_string();
+        assert_eq!(editor.current_line(), "hello world");
+    }
+
+    #[test]
+    fn current_line_description() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Description;
+        editor.desc_lines = vec!["abc".to_string(), "def".to_string()];
+        editor.cursor_row = 1;
+        assert_eq!(editor.current_line(), "def");
+    }
+
+    #[test]
+    fn current_line_column_is_empty() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.focused_field = EditorField::Column;
+        assert_eq!(editor.current_line(), "");
+    }
+
+    // ── TaskEditorState: to_task_fields ──────────────────────────────────
+
+    #[test]
+    fn to_task_fields_returns_title_and_description() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.title = "My Task".to_string();
+        editor.set_description("line1\nline2");
+        let (title, desc) = editor.to_task_fields();
+        assert_eq!(title, "My Task");
+        assert_eq!(desc, "line1\nline2");
+    }
+
+    // ── TaskEditorState: new_for_edit ────────────────────────────────────
+
+    #[test]
+    fn new_for_edit_prepopulates_from_task() {
+        let task = CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: "Existing Task".to_string(),
+            description: "Line 1\nLine 2".to_string(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: Some("planning".to_string()),
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        let editor = TaskEditorState::new_for_edit(&task);
+        assert_eq!(editor.task_id, Some("task-1".to_string()));
+        assert_eq!(editor.title, "Existing Task");
+        assert_eq!(editor.desc_lines, vec!["Line 1", "Line 2"]);
+        assert_eq!(editor.cursor_col, "Existing Task".chars().count());
+        assert!(!editor.has_unsaved_changes);
+    }
+
+    #[test]
+    fn new_for_edit_empty_description() {
+        let task = CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: "Task".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        let editor = TaskEditorState::new_for_edit(&task);
+        assert_eq!(editor.desc_lines, vec![String::new()]);
+        assert!(editor.cached_description.is_none());
+    }
+
+    // ── TaskEditorState: cycle_column ────────────────────────────────────
+
+    #[test]
+    fn cycle_column_advances_to_next() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string(), "planning".to_string(), "done".to_string()]);
+        assert_eq!(editor.column_id, Some("todo".to_string()));
+        editor.cycle_column();
+        assert_eq!(editor.column_id, Some("planning".to_string()));
+        editor.cycle_column();
+        assert_eq!(editor.column_id, Some("done".to_string()));
+        editor.cycle_column(); // wraps
+        assert_eq!(editor.column_id, Some("todo".to_string()));
+    }
+
+    #[test]
+    fn cycle_column_single_column_is_noop() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.cycle_column();
+        assert_eq!(editor.column_id, Some("todo".to_string()));
+    }
+
+    // ── extract_tool_summary ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_tool_summary_read_with_file_path() {
+        let input = r#"{"file_path": "/home/user/project/src/main.rs"}"#;
+        assert_eq!(extract_tool_summary("read", input), "main.rs");
+    }
+
+    #[test]
+    fn extract_tool_summary_read_with_file_path_key() {
+        let input = r#"{"filePath": "/home/user/project/src/main.rs"}"#;
+        assert_eq!(extract_tool_summary("Read", input), "main.rs");
+    }
+
+    #[test]
+    fn extract_tool_summary_read_with_path() {
+        let input = r#"{"path": "/home/user/project/src/main.rs"}"#;
+        assert_eq!(extract_tool_summary("read", input), "main.rs");
+    }
+
+    #[test]
+    fn extract_tool_summary_write_with_file_path() {
+        let input = r#"{"file_path": "/home/user/project/Cargo.toml"}"#;
+        assert_eq!(extract_tool_summary("write", input), "Cargo.toml");
+    }
+
+    #[test]
+    fn extract_tool_summary_write_with_path() {
+        let input = r#"{"path": "/home/user/project/docs/README.md"}"#;
+        assert_eq!(extract_tool_summary("Write", input), "README.md");
+    }
+
+    #[test]
+    fn extract_tool_summary_bash_short_command() {
+        let input = r#"{"command": "cargo build"}"#;
+        assert_eq!(extract_tool_summary("bash", input), "cargo build");
+    }
+
+    #[test]
+    fn extract_tool_summary_bash_long_command_truncated() {
+        let long_cmd = "x".repeat(100);
+        let input = format!(r#"{{"command": "{}"}}"#, long_cmd);
+        let summary = extract_tool_summary("Bash", &input);
+        assert_eq!(summary.len(), 60); // 57 chars + "..."
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn extract_tool_summary_bash_no_command_field() {
+        let input = r#"{"something": "else"}"#;
+        assert_eq!(extract_tool_summary("bash", input), "...");
+    }
+
+    #[test]
+    fn extract_tool_summary_grep_with_pattern() {
+        let input = r#"{"pattern": "TODO", "include": "*.rs"}"#;
+        assert_eq!(extract_tool_summary("grep", input), "TODO");
+    }
+
+    #[test]
+    fn extract_tool_summary_glob_with_pattern() {
+        let input = r#"{"pattern": "src/**/*.ts"}"#;
+        assert_eq!(extract_tool_summary("glob", input), "src/**/*.ts");
+    }
+
+    #[test]
+    fn extract_tool_summary_grep_uppercase() {
+        let input = r#"{"pattern": "fn\\s+\\w+"}"#;
+        assert_eq!(extract_tool_summary("Grep", input), "fn\\s+\\w+");
+    }
+
+    #[test]
+    fn extract_tool_summary_unknown_tool() {
+        let input = r#"{"something": "value"}"#;
+        assert_eq!(extract_tool_summary("custom_tool", input), "...");
+    }
+
+    #[test]
+    fn extract_tool_summary_invalid_json() {
+        assert_eq!(extract_tool_summary("read", "not json"), "...");
+        assert_eq!(extract_tool_summary("bash", ""), "...");
+    }
+
+    #[test]
+    fn extract_tool_summary_empty_json() {
+        assert_eq!(extract_tool_summary("read", "{}"), "...");
+    }
+}
+
 /// Try to extract a short summary from tool input JSON.
 ///
 /// This is called once when a `TaskMessagePart::Tool` is created (in

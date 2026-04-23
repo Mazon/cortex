@@ -1,1 +1,15 @@
 cognitive-complexity-threshold = 30
+
+# Disallowed methods — common footguns that should be avoided.
+# Enforced as warnings so existing code doesn't break CI, but new code
+# should follow the recommended patterns.
+#
+# Recommended patterns:
+# - Mutex/RwLock: use .lock().unwrap_or_else(|e| e.into_inner()) for poison recovery
+# - unwrap/expect: avoid in non-test code; use ? or proper error handling
+
+disallowed-methods = [
+    { path = "std::sync::Mutex::lock", reason = "use .lock().unwrap_or_else(|e| e.into_inner()) for poison recovery" },
+    { path = "std::sync::RwLock::read", reason = "use .read().unwrap_or_else(|e| e.into_inner()) for poison recovery" },
+    { path = "std::sync::RwLock::write", reason = "use .write().unwrap_or_else(|e| e.into_inner()) for poison recovery" },
+]

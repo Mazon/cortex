@@ -22,7 +22,44 @@ impl AppState {
     /// falls back to the first remaining project. Marks state dirty.
     pub fn remove_project(&mut self, project_id: &str) {
         self.projects.retain(|p| p.id != project_id);
+
+        // Collect task IDs for this project before removing them
+        let project_task_ids: Vec<String> = self
+            .tasks
+            .values()
+            .filter(|t| t.project_id == project_id)
+            .map(|t| t.id.clone())
+            .collect();
+
+        // Remove tasks and clean up associated data
+        for task_id in &project_task_ids {
+            // Remove session mapping
+            if let Some(task) = self.tasks.get(task_id) {
+                if let Some(ref sid) = task.session_id {
+                    self.session_to_task.remove(sid);
+                }
+            }
+            // Remove session data and streaming cache
+            self.task_sessions.remove(task_id);
+            self.cached_streaming_lines.remove(task_id);
+            self.dirty_tasks.remove(task_id);
+        }
+
+        // Remove tasks
         self.tasks.retain(|_, t| t.project_id != project_id);
+
+        // Remove tasks from kanban columns
+        for tasks in self.kanban.columns.values_mut() {
+            tasks.retain(|id| !project_task_ids.contains(id));
+        }
+
+        // Clear focused task if it was removed
+        if let Some(ref focused_id) = self.ui.focused_task_id {
+            if project_task_ids.contains(focused_id) {
+                self.ui.focused_task_id = None;
+            }
+        }
+
         if self.active_project_id.as_deref() == Some(project_id) {
             self.active_project_id = self.projects.first().map(|p| p.id.clone());
         }
@@ -1940,5 +1977,518 @@ mod tests {
         assert!(text.is_char_boundary(text.len()));
         // All characters should be complete emojis
         assert!(text.chars().all(|c| c == '🎉'));
+    }
+
+    // ── restore_state ────────────────────────────────────────────────────
+
+    #[test]
+    fn restore_state_empty_input_clears_existing_data() {
+        let mut state = make_state_with_tasks();
+        assert!(!state.tasks.is_empty());
+        assert!(!state.projects.is_empty());
+
+        state.restore_state(vec![], vec![], HashMap::new(), None, HashMap::new());
+
+        assert!(state.tasks.is_empty());
+        assert!(state.projects.is_empty());
+        assert!(state.active_project_id.is_none());
+        assert!(state.task_number_counters.is_empty());
+        assert!(state.session_to_task.is_empty());
+    }
+
+    #[test]
+    fn restore_state_fully_populated() {
+        let mut state = AppState::default();
+
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "Test Project".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let task = CortexTask {
+            id: "task-1".to_string(),
+            number: 5,
+            title: "Restored Task".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: Some("sess-1".to_string()),
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        let mut kanban = HashMap::new();
+        kanban.insert("todo".to_string(), vec!["task-1".to_string()]);
+        let mut counters = HashMap::new();
+        counters.insert("proj-1".to_string(), 5u32);
+
+        state.restore_state(
+            vec![project],
+            vec![task],
+            kanban,
+            Some("proj-1".to_string()),
+            counters,
+        );
+
+        assert_eq!(state.projects.len(), 1);
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.active_project_id, Some("proj-1".to_string()));
+        assert_eq!(state.task_number_counters.get("proj-1"), Some(&5));
+        assert_eq!(
+            state.session_to_task.get("sess-1"),
+            Some(&"task-1".to_string())
+        );
+        assert_eq!(state.tasks.get("task-1").unwrap().title, "Restored Task");
+    }
+
+    #[test]
+    fn restore_state_rebuilds_kanban_for_active_project() {
+        let mut state = AppState::default();
+
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "P1".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let project2 = CortexProject {
+            id: "proj-2".to_string(),
+            name: "P2".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+        };
+        let task1 = CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: "Task 1".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        let task2 = CortexTask {
+            id: "task-2".to_string(),
+            number: 1,
+            title: "Task 2".to_string(),
+            description: String::new(),
+            column: KanbanColumn("done".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Complete,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-2".to_string(),
+        };
+
+        state.restore_state(
+            vec![project, project2],
+            vec![task1, task2],
+            HashMap::new(),
+            Some("proj-1".to_string()),
+            HashMap::new(),
+        );
+
+        // Kanban should only contain proj-1's tasks
+        assert_eq!(state.kanban.columns.get("todo").unwrap().len(), 1);
+        assert_eq!(state.kanban.columns.get("todo").unwrap()[0], "task-1");
+        assert!(!state.kanban.columns.contains_key("done"));
+    }
+
+    #[test]
+    fn restore_state_no_active_project_skips_kanban_rebuild() {
+        let mut state = AppState::default();
+
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "P1".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let task = CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: "Task".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+
+        state.restore_state(
+            vec![project],
+            vec![task],
+            HashMap::new(),
+            None,
+            HashMap::new(),
+        );
+
+        assert!(state.active_project_id.is_none());
+        // Kanban columns should be empty since no active project triggered a rebuild
+        assert!(state.kanban.columns.is_empty());
+    }
+
+    #[test]
+    fn restore_state_session_index_rebuilt_from_tasks() {
+        let mut state = AppState::default();
+
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "P1".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let task1 = CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: "T1".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: Some("sess-a".to_string()),
+            agent_type: None,
+            agent_status: AgentStatus::Running,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        let task2 = CortexTask {
+            id: "task-2".to_string(),
+            number: 2,
+            title: "T2".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: Some("sess-b".to_string()),
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+
+        state.restore_state(
+            vec![project],
+            vec![task1, task2],
+            HashMap::new(),
+            Some("proj-1".to_string()),
+            HashMap::new(),
+        );
+
+        assert_eq!(state.session_to_task.get("sess-a"), Some(&"task-1".to_string()));
+        assert_eq!(state.session_to_task.get("sess-b"), Some(&"task-2".to_string()));
+    }
+
+    #[test]
+    fn restore_state_counter_restoration() {
+        let mut state = AppState::default();
+
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "P1".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+        };
+        let mut counters = HashMap::new();
+        counters.insert("proj-1".to_string(), 42u32);
+        counters.insert("proj-2".to_string(), 7u32);
+
+        state.restore_state(
+            vec![project],
+            vec![],
+            HashMap::new(),
+            Some("proj-1".to_string()),
+            counters,
+        );
+
+        assert_eq!(state.task_number_counters.get("proj-1"), Some(&42));
+        assert_eq!(state.task_number_counters.get("proj-2"), Some(&7));
+    }
+
+    // ── remove_project ───────────────────────────────────────────────────
+
+    #[test]
+    fn remove_project_deletes_project_and_its_tasks() {
+        let mut state = make_state_with_tasks();
+        // Add another project
+        let p2 = CortexProject {
+            id: "proj-2".to_string(),
+            name: "Project 2".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+        };
+        state.add_project(p2);
+        let p2_task = CortexTask {
+            id: "task-p2".to_string(),
+            number: 1,
+            title: "P2 Task".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-2".to_string(),
+        };
+        state.tasks.insert("task-p2".to_string(), p2_task);
+
+        assert_eq!(state.projects.len(), 2);
+        assert_eq!(state.tasks.len(), 4); // 3 from proj-1 + 1 from proj-2
+
+        state.remove_project("proj-1");
+
+        assert_eq!(state.projects.len(), 1);
+        assert_eq!(state.projects[0].id, "proj-2");
+        // Only the proj-2 task should remain
+        assert_eq!(state.tasks.len(), 1);
+        assert!(state.tasks.contains_key("task-p2"));
+        assert!(!state.tasks.contains_key("task-0"));
+    }
+
+    #[test]
+    fn remove_project_clears_session_data_for_removed_tasks() {
+        let mut state = make_state_with_tasks();
+        // Add session data for a task in proj-1
+        state.tasks.get_mut("task-0").unwrap().session_id = Some("sess-1".to_string());
+        state.session_to_task.insert("sess-1".to_string(), "task-0".to_string());
+        state.task_sessions.insert("task-0".to_string(), TaskDetailSession {
+            task_id: "task-0".to_string(),
+            session_id: Some("sess-1".to_string()),
+            ..Default::default()
+        });
+        state.cached_streaming_lines.insert("task-0".to_string(), (0, vec![]));
+
+        state.remove_project("proj-1");
+
+        // session_to_task should be cleaned
+        assert!(!state.session_to_task.contains_key("sess-1"));
+        // task_sessions should be cleaned
+        assert!(!state.task_sessions.contains_key("task-0"));
+        // cached_streaming_lines should be cleaned
+        assert!(!state.cached_streaming_lines.contains_key("task-0"));
+        // All tasks should be gone
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
+    fn remove_project_clears_tasks_from_kanban() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.kanban.columns.get("todo").unwrap().len(), 3);
+
+        state.remove_project("proj-1");
+
+        // All proj-1 tasks should be removed from the kanban
+        let todo_tasks = state.kanban.columns.get("todo").cloned().unwrap_or_default();
+        assert!(todo_tasks.is_empty(), "Expected empty todo column after removing project, got: {:?}", todo_tasks);
+    }
+
+    #[test]
+    fn remove_active_project_falls_back_to_first_remaining() {
+        let mut state = make_state_with_tasks();
+        state.active_project_id = Some("proj-1".to_string());
+
+        let p2 = CortexProject {
+            id: "proj-2".to_string(),
+            name: "Project 2".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+        };
+        state.add_project(p2);
+
+        state.remove_project("proj-1");
+
+        assert_eq!(state.active_project_id, Some("proj-2".to_string()));
+    }
+
+    #[test]
+    fn remove_only_project_clears_active_project() {
+        let mut state = make_state_with_tasks();
+        state.active_project_id = Some("proj-1".to_string());
+
+        state.remove_project("proj-1");
+
+        assert!(state.active_project_id.is_none());
+    }
+
+    #[test]
+    fn remove_nonexistent_project_is_noop() {
+        let mut state = make_state_with_tasks();
+        let project_count = state.projects.len();
+        let task_count = state.tasks.len();
+
+        state.remove_project("nonexistent");
+
+        assert_eq!(state.projects.len(), project_count);
+        assert_eq!(state.tasks.len(), task_count);
+    }
+
+    #[test]
+    fn remove_project_clears_focused_task_if_removed() {
+        let mut state = make_state_with_tasks();
+        state.ui.focused_task_id = Some("task-1".to_string());
+
+        state.remove_project("proj-1");
+
+        // Focused task was in the removed project, should be cleared
+        assert!(state.ui.focused_task_id.is_none());
+    }
+
+    // ── Notification: boundary conditions ────────────────────────────────
+
+    #[test]
+    fn clear_expired_notifications_mixed_expired_and_fresh() {
+        let mut state = AppState::default();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        // Two expired, one fresh
+        state.ui.notifications.push_back(Notification {
+            message: "Expired1".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now - 2000,
+        });
+        state.ui.notifications.push_back(Notification {
+            message: "Expired2".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now - 1000,
+        });
+        state.ui.notifications.push_back(Notification {
+            message: "Fresh".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now + 10000,
+        });
+
+        let removed = state.clear_expired_notifications();
+        assert!(removed);
+        assert_eq!(state.ui.notifications.len(), 1);
+        assert_eq!(state.ui.notifications.front().unwrap().message, "Fresh");
+    }
+
+    #[test]
+    fn clear_expired_notifications_empty_queue_returns_false() {
+        let mut state = AppState::default();
+        let removed = state.clear_expired_notifications();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn clear_expired_notifications_all_expired() {
+        let mut state = AppState::default();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        state.ui.notifications.push_back(Notification {
+            message: "A".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now - 5000,
+        });
+        state.ui.notifications.push_back(Notification {
+            message: "B".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now - 3000,
+        });
+
+        let removed = state.clear_expired_notifications();
+        assert!(removed);
+        assert!(state.ui.notifications.is_empty());
+    }
+
+    #[test]
+    fn clear_expired_notifications_none_expired_returns_false() {
+        let mut state = AppState::default();
+        let now = chrono::Utc::now().timestamp_millis();
+
+        state.ui.notifications.push_back(Notification {
+            message: "Future".to_string(),
+            variant: NotificationVariant::Info,
+            expires_at: now + 60000,
+        });
+
+        let removed = state.clear_expired_notifications();
+        assert!(!removed);
+        assert_eq!(state.ui.notifications.len(), 1);
+    }
+
+    #[test]
+    fn set_notification_exactly_at_max() {
+        let mut state = AppState::default();
+        state.set_notification("A".to_string(), NotificationVariant::Info, 5000);
+        state.set_notification("B".to_string(), NotificationVariant::Info, 5000);
+        state.set_notification("C".to_string(), NotificationVariant::Info, 5000);
+        assert_eq!(state.ui.notifications.len(), MAX_NOTIFICATIONS);
+
+        // Adding one more evicts oldest
+        state.set_notification("D".to_string(), NotificationVariant::Info, 5000);
+        assert_eq!(state.ui.notifications.len(), MAX_NOTIFICATIONS);
+        assert_eq!(state.ui.notifications.front().unwrap().message, "B");
+        assert_eq!(state.ui.notifications.back().unwrap().message, "D");
+    }
+
+    #[test]
+    fn set_notification_multiple_evictions() {
+        let mut state = AppState::default();
+        for i in 0..10 {
+            state.set_notification(format!("N{}", i), NotificationVariant::Info, 5000);
+        }
+        assert_eq!(state.ui.notifications.len(), MAX_NOTIFICATIONS);
+        // Should have the last MAX_NOTIFICATIONS
+        assert_eq!(state.ui.notifications.front().unwrap().message, "N7");
+        assert_eq!(state.ui.notifications.back().unwrap().message, "N9");
     }
 }

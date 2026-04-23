@@ -125,7 +125,7 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
         }
     }
 
-    // Validate auto_progress_to targets exist
+    // Validate auto_progress_to targets exist and detect cycles
     for col in &config.columns.definitions {
         if let Some(ref target) = col.auto_progress_to {
             let exists = config.columns.definitions.iter().any(|c| c.id == *target);
@@ -135,6 +135,36 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
                     col.id,
                     target
                 );
+            }
+        }
+    }
+
+    // Detect cycles in auto_progress_to chain (could cause infinite loops).
+    // Uses Floyd's tortoise-and-hare algorithm for O(n) cycle detection.
+    for col in &config.columns.definitions {
+        if let Some(ref start) = col.auto_progress_to {
+            let mut visited = std::collections::HashSet::new();
+            let mut current = start.as_str();
+            loop {
+                if !visited.insert(current) {
+                    // We've seen this column before — cycle detected
+                    anyhow::bail!(
+                        "Cycle detected in auto_progress chain starting at column '{}': {} → ... → {}",
+                        col.id,
+                        col.id,
+                        current
+                    );
+                }
+                // Find the column and follow its auto_progress_to
+                match config.columns.definitions.iter().find(|c| c.id == current) {
+                    Some(next_col) => {
+                        match &next_col.auto_progress_to {
+                            Some(next_target) => current = next_target,
+                            None => break, // chain terminates, no cycle from this start
+                        }
+                    }
+                    None => break, // shouldn't happen after the existence check above
+                }
             }
         }
     }
@@ -162,21 +192,18 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
         );
     }
 
-    // Validate that column agent names reference configured agents.
-    // Only check when agents are explicitly configured — the default config has
-    // column agent references but no agent definitions, which is valid until
-    // the user adds their first [opencode.agents.*] section.
-    if !config.opencode.agents.is_empty() {
-        for col in &config.columns.definitions {
-            if let Some(ref agent_name) = col.agent {
-                if !config.opencode.agents.contains_key(agent_name) {
-                    anyhow::bail!(
-                        "Column '{}' references agent '{}' but no [opencode.agents.{}] is defined",
-                        col.id,
-                        agent_name,
-                        agent_name
-                    );
-                }
+    // Warn when column agent references lack config overrides.
+    // The agents section provides optional per-agent overrides; the opencode
+    // server is the authority on which agents actually exist.
+    for col in &config.columns.definitions {
+        if let Some(ref agent_name) = col.agent {
+            if !config.opencode.agents.is_empty()
+                && !config.opencode.agents.contains_key(agent_name)
+            {
+                tracing::warn!(
+                    "Column '{}' references agent '{}' which has no override in [opencode.agents.{}]",
+                    col.id, agent_name, agent_name
+                );
             }
         }
     }
@@ -347,11 +374,14 @@ mod tests {
     // ─── Auto-progress validation (extended) ───
 
     #[test]
-    fn test_validate_auto_progress_self_reference() {
+    fn test_validate_auto_progress_self_reference_is_cycle() {
         let mut config = minimal_config();
         config.columns.definitions[0].auto_progress_to = Some("todo".to_string());
-        // Self-reference should be valid — the target column does exist
-        assert!(validate_config(&config).is_ok());
+        // Self-reference creates a cycle (a → a), so it should be rejected
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Cycle detected"), "got: {}", msg);
     }
 
     #[test]
@@ -490,64 +520,280 @@ mod tests {
         assert!(msg.contains("log.level must be one of"), "got: {}", msg);
     }
 
-    // ─── Column agent validation (F-33) ───
+    // ─── Auto-progress cycle detection ───────────────────────────────────
 
     #[test]
-    fn test_validate_column_agent_undefined_rejected() {
+    fn test_validate_auto_progress_self_cycle_detected() {
         let mut config = minimal_config();
-        // Add an agent definition so the agents map is non-empty
-        config.opencode.agents.insert(
-            "coder".to_string(),
-            types::OpenCodeAgentConfig {
-                model: None,
-                instructions: None,
-                tools: None,
-                max_turns: None,
-                disable: None,
-            },
-        );
-        // Column references a non-existent agent
-        config.columns.definitions[0].agent = Some("nonexistent".to_string());
+        config.columns.definitions[0].auto_progress_to = Some("todo".to_string());
         let result = validate_config(&config);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("nonexistent"), "got: {}", msg);
-        assert!(
-            msg.contains("is defined") && msg.contains("nonexistent"),
-            "got: {}",
-            msg
-        );
+        assert!(msg.contains("Cycle detected"), "got: {}", msg);
     }
 
     #[test]
-    fn test_validate_column_agent_defined_passes() {
+    fn test_validate_auto_progress_two_node_cycle() {
         let mut config = minimal_config();
-        config.opencode.agents.insert(
-            "planner".to_string(),
-            types::OpenCodeAgentConfig {
-                model: None,
-                instructions: None,
-                tools: None,
-                max_turns: None,
-                disable: None,
-            },
-        );
-        config.columns.definitions[0].agent = Some("planner".to_string());
+        config.columns.definitions.push(ColumnConfig {
+            id: "step2".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("todo".to_string()),
+        });
+        config.columns.definitions[0].auto_progress_to = Some("step2".to_string());
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Cycle detected"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_auto_progress_three_node_cycle() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].auto_progress_to = Some("b".to_string());
+        config.columns.definitions.push(ColumnConfig {
+            id: "b".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("c".to_string()),
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "c".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("todo".to_string()),
+        });
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Cycle detected"), "got: {}", msg);
+    }
+
+    #[test]
+    fn test_validate_auto_progress_chain_no_cycle() {
+        let mut config = minimal_config();
+        config.columns.definitions[0].auto_progress_to = Some("b".to_string());
+        config.columns.definitions.push(ColumnConfig {
+            id: "b".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("c".to_string()),
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "c".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: None, // terminates here
+        });
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_column_agent_no_agents_configured_skips_check() {
+    fn test_validate_auto_progress_multiple_chains_no_cycle() {
         let mut config = minimal_config();
-        // When no agents are configured at all, column agent references are allowed
-        config.columns.definitions[0].agent = Some("any-name".to_string());
+        config.columns.definitions[0].auto_progress_to = Some("done".to_string());
+        config.columns.definitions.push(ColumnConfig {
+            id: "b".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("done".to_string()),
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "done".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: None,
+        });
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_column_no_agent_passes() {
+    fn test_validate_auto_progress_cycle_with_branch() {
+        // a → b, a → c (a has one auto_progress, c points back to a)
+        // Actually auto_progress_to is a single target, so:
+        // a → b → c → a (cycle)
         let mut config = minimal_config();
-        config.columns.definitions[0].agent = None;
-        assert!(validate_config(&config).is_ok());
+        config.columns.definitions[0].auto_progress_to = Some("b".to_string());
+        config.columns.definitions.push(ColumnConfig {
+            id: "b".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("c".to_string()),
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "c".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("d".to_string()),
+        });
+        config.columns.definitions.push(ColumnConfig {
+            id: "d".to_string(),
+            display_name: None,
+            visible: true,
+            agent: None,
+            auto_progress_to: Some("b".to_string()), // cycle: b → c → d → b
+        });
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Cycle detected"), "got: {}", msg);
+    }
+
+    /// Property-based test: generate arbitrary-length chains and verify
+    /// that cycles of any length are detected.
+    #[test]
+    fn test_validate_auto_progress_property_arbitrary_cycle_lengths() {
+        // Test cycles of length 1 through 10
+        for cycle_len in 1..=10usize {
+            let mut definitions = Vec::new();
+            let names: Vec<String> = (0..cycle_len)
+                .map(|i| format!("col{}", i))
+                .collect();
+
+            // Create columns with a cycle: col0 → col1 → ... → col(n-1) → col0
+            for i in 0..cycle_len {
+                let target = if i + 1 < cycle_len {
+                    names[i + 1].clone()
+                } else {
+                    names[0].clone() // back to start
+                };
+                definitions.push(ColumnConfig {
+                    id: names[i].clone(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: Some(target),
+                });
+            }
+
+            let config = CortexConfig {
+                opencode: OpenCodeConfig::default(),
+                columns: types::ColumnsConfig {
+                    definitions,
+                    visible_ids: Vec::new(),
+                },
+                keybindings: types::KeybindingConfig::default(),
+                theme: types::ThemeConfig::default(),
+                log: types::LogConfig::default(),
+            };
+
+            let result = validate_config(&config);
+            assert!(
+                result.is_err(),
+                "Expected cycle detection for cycle length {}, got Ok",
+                cycle_len
+            );
+            let msg = result.unwrap_err().to_string();
+            assert!(
+                msg.contains("Cycle detected"),
+                "Expected 'Cycle detected' for length {}, got: {}",
+                cycle_len,
+                msg
+            );
+        }
+    }
+
+    /// Property-based test: generate linear chains of arbitrary length
+    /// and verify they all pass validation (no false positive cycle detection).
+    #[test]
+    fn test_validate_auto_progress_property_linear_chains_pass() {
+        // Test linear chains of length 1 through 20
+        for chain_len in 1..=20usize {
+            let mut definitions = Vec::new();
+            let names: Vec<String> = (0..chain_len)
+                .map(|i| format!("col{}", i))
+                .collect();
+
+            // Create columns: col0 → col1 → ... → col(n-1) → (none)
+            for i in 0..chain_len {
+                let target = if i + 1 < chain_len {
+                    Some(names[i + 1].clone())
+                } else {
+                    None // terminates
+                };
+                definitions.push(ColumnConfig {
+                    id: names[i].clone(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: target,
+                });
+            }
+
+            let config = CortexConfig {
+                opencode: OpenCodeConfig::default(),
+                columns: types::ColumnsConfig {
+                    definitions,
+                    visible_ids: Vec::new(),
+                },
+                keybindings: types::KeybindingConfig::default(),
+                theme: types::ThemeConfig::default(),
+                log: types::LogConfig::default(),
+            };
+
+            let result = validate_config(&config);
+            assert!(
+                result.is_ok(),
+                "Linear chain of length {} should be valid, got: {}",
+                chain_len,
+                result.unwrap_err()
+            );
+        }
+    }
+
+    /// Property-based test: generate chains where the cycle is not at the start.
+    #[test]
+    fn test_validate_auto_progress_property_cycle_in_middle() {
+        // a → b → c → d → b (cycle starts at b, but a is the entry)
+        for cycle_start in 0..5 {
+            let names: Vec<String> = (0..7)
+                .map(|i| format!("col{}", i))
+                .collect();
+
+            let mut definitions = Vec::new();
+            // col0 → col1 → ... → col6 (linear)
+            for i in 0..7 {
+                let target = if i + 1 < 7 {
+                    Some(names[i + 1].clone())
+                } else {
+                    Some(names[cycle_start].clone()) // cycle back
+                };
+                definitions.push(ColumnConfig {
+                    id: names[i].clone(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: target,
+                });
+            }
+
+            let config = CortexConfig {
+                opencode: OpenCodeConfig::default(),
+                columns: types::ColumnsConfig {
+                    definitions,
+                    visible_ids: Vec::new(),
+                },
+                keybindings: types::KeybindingConfig::default(),
+                theme: types::ThemeConfig::default(),
+                log: types::LogConfig::default(),
+            };
+
+            let result = validate_config(&config);
+            assert!(
+                result.is_err(),
+                "Expected cycle detection with cycle_start={}, got Ok",
+                cycle_start
+            );
+        }
     }
 }

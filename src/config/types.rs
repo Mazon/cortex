@@ -556,3 +556,224 @@ pub fn parse_hex_color(hex: &str) -> Option<ratatui::prelude::Color> {
     let b = u8::from_str_radix(&hex[5..7], 16).ok()?;
     Some(ratatui::prelude::Color::Rgb(r, g, b))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ColumnsConfig::finalize ──────────────────────────────────────────
+
+    #[test]
+    fn finalize_all_visible() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "b".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert_eq!(config.visible_ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn finalize_skips_hidden_columns() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "c".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert_eq!(config.visible_ids, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn finalize_all_hidden() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "a".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert!(config.visible_ids.is_empty());
+    }
+
+    #[test]
+    fn finalize_empty_definitions() {
+        let mut config = ColumnsConfig {
+            definitions: vec![],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert!(config.visible_ids.is_empty());
+    }
+
+    #[test]
+    fn finalize_overwrites_previous_visible_ids() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "x".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: vec!["old1".to_string(), "old2".to_string()],
+        };
+        config.finalize();
+        assert_eq!(config.visible_ids, vec!["x"]);
+    }
+
+    #[test]
+    fn finalize_preserves_definition_order() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "z".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "m".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert_eq!(config.visible_ids, vec!["z", "a", "m"]);
+    }
+
+    #[test]
+    fn visible_column_ids_returns_cached_slice() {
+        let mut config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: Vec::new(),
+        };
+        config.finalize();
+        assert_eq!(config.visible_column_ids(), &["a"]);
+    }
+
+    #[test]
+    fn all_column_ids_returns_all() {
+        let config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: vec!["a".to_string()],
+        };
+        assert_eq!(config.all_column_ids(), vec!["a", "b"]);
+    }
+
+    // ── parse_hex_color ──────────────────────────────────────────────────
+
+    #[test]
+    fn parse_hex_color_valid_black() {
+        assert_eq!(parse_hex_color("#000000"), Some(ratatui::prelude::Color::Rgb(0, 0, 0)));
+    }
+
+    #[test]
+    fn parse_hex_color_valid_white() {
+        assert_eq!(parse_hex_color("#FFFFFF"), Some(ratatui::prelude::Color::Rgb(255, 255, 255)));
+    }
+
+    #[test]
+    fn parse_hex_color_valid_mixed() {
+        assert_eq!(parse_hex_color("#2196F3"), Some(ratatui::prelude::Color::Rgb(0x21, 0x96, 0xF3)));
+    }
+
+    #[test]
+    fn parse_hex_color_valid_lowercase() {
+        assert_eq!(parse_hex_color("#ff00aa"), Some(ratatui::prelude::Color::Rgb(255, 0, 170)));
+    }
+
+    #[test]
+    fn parse_hex_color_valid_mixed_case() {
+        assert_eq!(parse_hex_color("#AbCdEf"), Some(ratatui::prelude::Color::Rgb(0xAB, 0xCD, 0xEF)));
+    }
+
+    #[test]
+    fn parse_hex_color_empty_string() {
+        assert_eq!(parse_hex_color(""), None);
+    }
+
+    #[test]
+    fn parse_hex_color_too_short() {
+        assert_eq!(parse_hex_color("#FFF"), None);
+        assert_eq!(parse_hex_color("#FF"), None);
+        assert_eq!(parse_hex_color("#"), None);
+    }
+
+    #[test]
+    fn parse_hex_color_too_long() {
+        assert_eq!(parse_hex_color("#FFFFFF00"), None);
+    }
+
+    #[test]
+    fn parse_hex_color_wrong_prefix() {
+        assert_eq!(parse_hex_color("FFFFFF"), None);
+        assert_eq!(parse_hex_color("0xFFFFFF"), None);
+        assert_eq!(parse_hex_color("0xFFFFFF"), None);
+    }
+
+    #[test]
+    fn parse_hex_color_invalid_hex_chars() {
+        assert_eq!(parse_hex_color("#GGHHII"), None);
+        assert_eq!(parse_hex_color("#ZZZZZZ"), None);
+        assert_eq!(parse_hex_color("#12345G"), None);
+    }
+
+    // ── parse_hex_color_or ───────────────────────────────────────────────
+
+    #[test]
+    fn parse_hex_color_or_valid_returns_parsed() {
+        let result = parse_hex_color_or("#FF0000", ratatui::prelude::Color::Blue);
+        assert_eq!(result, ratatui::prelude::Color::Rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn parse_hex_color_or_invalid_returns_default() {
+        let default = ratatui::prelude::Color::Rgb(33, 150, 243);
+        let result = parse_hex_color_or("not-a-color", default);
+        assert_eq!(result, default);
+    }
+
+    #[test]
+    fn parse_hex_color_or_empty_returns_default() {
+        let default = ratatui::prelude::Color::Rgb(76, 175, 80);
+        let result = parse_hex_color_or("", default);
+        assert_eq!(result, default);
+    }
+
+    // ── display_name_for ─────────────────────────────────────────────────
+
+    #[test]
+    fn display_name_for_with_display_name() {
+        let config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "todo".into(), display_name: Some("Todo List".into()), visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: vec!["todo".into()],
+        };
+        assert_eq!(config.display_name_for("todo"), "Todo List");
+    }
+
+    #[test]
+    fn display_name_for_falls_back_to_id() {
+        let config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig { id: "custom".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+            ],
+            visible_ids: vec!["custom".into()],
+        };
+        assert_eq!(config.display_name_for("custom"), "custom");
+    }
+
+    #[test]
+    fn display_name_for_unknown_column() {
+        let config = ColumnsConfig {
+            definitions: vec![],
+            visible_ids: vec![],
+        };
+        assert_eq!(config.display_name_for("nonexistent"), "nonexistent");
+    }
+}
