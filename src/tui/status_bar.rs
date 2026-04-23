@@ -62,7 +62,9 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
     };
 
     // Connection status (left)
-    let (conn_text, conn_color) = if state.reconnecting {
+    let (conn_text, conn_color) = if state.permanently_disconnected {
+        ("✕ disconnected (max retries exceeded — restart to retry)".to_string(), Color::Red)
+    } else if state.reconnecting {
         let attempt = state.reconnect_attempt;
         if attempt > 0 {
             (format!("◐ reconnecting ({})...", attempt), Color::Yellow)

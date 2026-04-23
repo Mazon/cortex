@@ -207,6 +207,14 @@ pub struct OpenCodeConfig {
     /// HTTP request timeout in seconds.
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    /// Maximum consecutive SSE reconnection attempts before giving up.
+    /// Set to 0 to retry forever (not recommended). Defaults to 50.
+    #[serde(default = "default_sse_max_retries")]
+    pub sse_max_retries: u32,
+}
+
+fn default_sse_max_retries() -> u32 {
+    50
 }
 
 fn default_hostname() -> String {
@@ -226,6 +234,7 @@ impl Default for OpenCodeConfig {
             agents: HashMap::new(),
             mcp_servers: HashMap::new(),
             request_timeout_secs: default_request_timeout_secs(),
+            sse_max_retries: default_sse_max_retries(),
         }
     }
 }

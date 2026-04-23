@@ -236,6 +236,7 @@ mod tests {
             cached_streaming_lines: HashMap::new(),
             reconnecting: false,
             reconnect_attempt: 0,
+            permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };

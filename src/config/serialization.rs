@@ -252,6 +252,7 @@ mod tests {
             agents: HashMap::new(),
             mcp_servers: HashMap::new(),
             request_timeout_secs: 0,
+            sse_max_retries: 50,
         }
     }
 
