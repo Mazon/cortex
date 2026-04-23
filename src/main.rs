@@ -1,5 +1,4 @@
 pub mod config;
-pub mod error;
 pub mod opencode;
 pub mod orchestration;
 pub mod persistence;
