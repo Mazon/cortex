@@ -11,7 +11,10 @@ use std::collections::HashMap;
 ///
 /// All writes are performed inside a single SQLite transaction so that a
 /// crash mid-save never leaves the database in an inconsistent state.
-pub fn save_state(state: &AppState, db: &Db) -> Result<()> {
+///
+/// Only tasks whose IDs are in `state.dirty_tasks` are written; unchanged
+/// tasks are skipped. The dirty set is cleared on successful commit.
+pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     let tx = db.conn.unchecked_transaction()?;
 
     // Save all projects
@@ -19,9 +22,20 @@ pub fn save_state(state: &AppState, db: &Db) -> Result<()> {
         db.save_project_with_conn(project, &tx)?;
     }
 
-    // Save all tasks (depends on projects — saved above)
-    for task in state.tasks.values() {
-        db.save_task_with_conn(task, &tx)?;
+    // Save only dirty tasks (depends on projects — saved above)
+    if state.dirty_tasks.is_empty() {
+        // No tasks changed — skip task writes but still save kanban/metadata.
+        tracing::debug!("save_state: no dirty tasks, skipping task writes");
+    } else {
+        for task_id in &state.dirty_tasks {
+            if let Some(task) = state.tasks.get(task_id) {
+                db.save_task_with_conn(task, &tx)?;
+            }
+        }
+        tracing::debug!(
+            "save_state: wrote {} dirty tasks",
+            state.dirty_tasks.len()
+        );
     }
 
     // Save kanban order (depends on tasks — saved above)
@@ -40,6 +54,10 @@ pub fn save_state(state: &AppState, db: &Db) -> Result<()> {
     }
 
     tx.commit()?;
+
+    // Clear the dirty set after successful commit
+    state.dirty_tasks.clear();
+
     Ok(())
 }
 
@@ -208,7 +226,7 @@ mod tests {
         let mut counters: HashMap<String, u32> = HashMap::new();
         counters.insert("proj-1".to_string(), 8);
 
-        let original = AppState {
+        let mut original = AppState {
             projects: vec![project.clone()],
             tasks,
             kanban: crate::state::types::KanbanState {
@@ -239,10 +257,13 @@ mod tests {
             permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dirty_tasks: std::collections::HashSet::new(),
         };
 
         // ── Save ──
-        save_state(&original, &db).expect("save_state failed");
+        // Mark the task as dirty so it gets written
+        original.dirty_tasks.insert(task.id.clone());
+        save_state(&mut original, &db).expect("save_state failed");
 
         // ── Restore into a fresh AppState ──
         let mut restored = AppState::default();

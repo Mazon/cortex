@@ -323,9 +323,9 @@ fn main() -> Result<()> {
                         continue;
                     }
                 };
-                let state = state_for_save.lock().unwrap();
+                let mut state = state_for_save.lock().unwrap();
                 if state.take_dirty() {
-                    if let Err(e) = persistence::save_state(&state, &db) {
+                    if let Err(e) = persistence::save_state(&mut state, &db) {
                         tracing::error!("Failed to save state: {}", e);
                     } else {
                         tracing::debug!("State saved (periodic)");
@@ -356,10 +356,10 @@ fn main() -> Result<()> {
 
         // Force-save state before exit
         {
-            let state = state.lock().unwrap();
+            let mut state = state.lock().unwrap();
             let db_path = persistence::db::default_db_path();
             if let Ok(db) = Db::new(&db_path) {
-                if let Err(e) = persistence::save_state(&state, &db) {
+                if let Err(e) = persistence::save_state(&mut state, &db) {
                     tracing::error!("Failed to save state on shutdown: {}", e);
                 } else {
                     tracing::info!("State saved on shutdown");

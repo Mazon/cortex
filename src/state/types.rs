@@ -1,7 +1,7 @@
 //! Core domain types for the Cortex application.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // ─── Enums ────────────────────────────────────────────────────────────────
 
@@ -829,6 +829,9 @@ pub struct AppState {
     /// Dirty flag for render optimization — set when state changes,
     /// checked by the TUI event loop to skip unnecessary full re-renders.
     pub render_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set of task IDs that have been modified since the last save.
+    /// Used by `save_state` to skip writing unchanged tasks to the database.
+    pub dirty_tasks: HashSet<String>,
 }
 
 impl Default for AppState {
@@ -849,6 +852,7 @@ impl Default for AppState {
             cached_streaming_lines: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dirty_tasks: HashSet::new(),
         }
     }
 }

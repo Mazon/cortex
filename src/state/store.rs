@@ -146,7 +146,7 @@ impl AppState {
             .entry(KanbanColumn::TODO.to_string())
             .or_default()
             .push(id.clone());
-        self.mark_dirty();
+        self.mark_task_dirty(&id);
         task
     }
 
@@ -179,7 +179,7 @@ impl AppState {
         // Clamp focused_task_index for source column (may be stale after removal)
         self.clamp_focused_task_index(&from_column.0);
 
-        self.mark_dirty();
+        self.mark_task_dirty(task_id);
         true
     }
 
@@ -197,6 +197,8 @@ impl AppState {
             }
             // Remove render cache for deleted task
             self.cached_streaming_lines.remove(task_id);
+            // Remove from dirty set (task no longer exists)
+            self.dirty_tasks.remove(task_id);
             self.mark_dirty();
             true
         } else {
@@ -221,7 +223,7 @@ impl AppState {
         if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
             *focused_idx -= 1;
         }
-        self.mark_dirty();
+        self.mark_task_dirty(task_id);
         true
     }
 
@@ -248,7 +250,7 @@ impl AppState {
         if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
             *focused_idx += 1;
         }
-        self.mark_dirty();
+        self.mark_task_dirty(task_id);
         true
     }
 
@@ -267,7 +269,7 @@ impl AppState {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.agent_status = status;
             task.last_activity_at = chrono::Utc::now().timestamp();
-            self.mark_dirty();
+            self.mark_task_dirty(task_id);
         }
     }
 
@@ -285,7 +287,7 @@ impl AppState {
                 self.session_to_task
                     .insert(sid.clone(), task_id.to_string());
             }
-            self.mark_dirty();
+            self.mark_task_dirty(task_id);
         }
     }
 
@@ -296,7 +298,7 @@ impl AppState {
             task.error_message = Some(error);
             task.agent_status = AgentStatus::Error;
             task.last_activity_at = chrono::Utc::now().timestamp();
-            self.mark_dirty();
+            self.mark_task_dirty(task_id);
         }
     }
 
@@ -306,7 +308,7 @@ impl AppState {
     pub fn set_task_agent_type(&mut self, task_id: &str, agent_type: Option<String>) {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.agent_type = agent_type;
-            self.mark_dirty();
+            self.mark_task_dirty(task_id);
         }
     }
 
@@ -429,7 +431,7 @@ impl AppState {
                     task.title = title;
                     task.description = description;
                     task.updated_at = now;
-                    self.mark_dirty();
+                    self.mark_task_dirty(task_id);
                     // Reset unsaved changes flags after successful save
                     if let Some(ed) = self.ui.task_editor.as_mut() {
                         ed.has_unsaved_changes = false;
@@ -803,6 +805,13 @@ impl AppState {
 
     /// Set the persistence dirty flag.
     pub fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Mark a specific task as needing to be persisted on the next save.
+    /// Also sets the global dirty flag so the persistence loop knows to run.
+    pub fn mark_task_dirty(&mut self, task_id: &str) {
+        self.dirty_tasks.insert(task_id.to_string());
         self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
