@@ -323,31 +323,32 @@ impl App {
             // Handle y/n for permission approval when in task detail view
             if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('n')) {
                 let approve = key.code == KeyCode::Char('y');
-                let (pending_perm, task_id) = {
+                // Batch read: get pending permission, task_id, and client in one lock.
+                let (pending_perm, task_id, client): (
+                    Option<crate::state::types::PermissionRequest>,
+                    Option<String>,
+                    Option<OpenCodeClient>,
+                ) = {
                     let state = self.state.lock().unwrap();
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
-                        (None, None)
+                        (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let perm = state
                             .task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_permissions.first().cloned());
-                        (perm, Some(tid.clone()))
+                        let client = state
+                            .active_project_id
+                            .as_ref()
+                            .and_then(|pid| self.opencode_clients.get(pid))
+                            .cloned();
+                        (perm, Some(tid.clone()), client)
                     } else {
-                        (None, None)
+                        (None, None, None)
                     }
                 };
 
                 if let (Some(perm), Some(tid)) = (pending_perm, task_id) {
-                    let client = {
-                        let state = self.state.lock().unwrap();
-                        state
-                            .active_project_id
-                            .as_ref()
-                            .and_then(|pid| self.opencode_clients.get(pid))
-                            .cloned()
-                    };
-
                     if let Some(client) = client {
                         let state = self.state.clone();
                         let perm_id = perm.id.clone();
@@ -398,33 +399,34 @@ impl App {
         if let KeyCode::Char(c) = key.code {
             if c.is_ascii_digit() && c != '0' {
                 let answer_index = (c as usize) - ('1' as usize);
-                let (pending_question, task_id) = {
+                // Batch read: get pending question, task_id, and client in one lock.
+                let (pending_question, task_id, client): (
+                    Option<crate::state::types::QuestionRequest>,
+                    Option<String>,
+                    Option<OpenCodeClient>,
+                ) = {
                     let state = self.state.lock().unwrap();
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
-                        (None, None)
+                        (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let question = state
                             .task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_questions.first().cloned())
                             .filter(|q| answer_index < q.answers.len());
-                        (question, Some(tid.clone()))
+                        let client = state
+                            .active_project_id
+                            .as_ref()
+                            .and_then(|pid| self.opencode_clients.get(pid))
+                            .cloned();
+                        (question, Some(tid.clone()), client)
                     } else {
-                        (None, None)
+                        (None, None, None)
                     }
                 };
 
                 if let (Some(question), Some(tid)) = (pending_question, task_id) {
                     let answer = question.answers[answer_index].clone();
-                    let client = {
-                        let state = self.state.lock().unwrap();
-                        state
-                            .active_project_id
-                            .as_ref()
-                            .and_then(|pid| self.opencode_clients.get(pid))
-                            .cloned()
-                    };
-
                     if let Some(client) = client {
                         let state = self.state.clone();
                         let question_id = question.id.clone();
@@ -580,18 +582,20 @@ impl App {
             }
         };
 
-        if let Some(pid) = project_id {
-            let mut state = self.state.lock().unwrap();
-            state.ui.confirm_action =
-                Some(crate::state::types::ConfirmableAction::DeleteProject(pid));
-            state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
-                "No active project to delete".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                2000,
-            );
+        let mut state = self.state.lock().unwrap();
+        match project_id {
+            Some(pid) => {
+                state.ui.confirm_action =
+                    Some(crate::state::types::ConfirmableAction::DeleteProject(pid));
+                state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
+            }
+            None => {
+                state.set_notification(
+                    "No active project to delete".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                );
+            }
         }
     }
 
@@ -630,13 +634,9 @@ impl App {
     }
 
     fn handle_create_task(&mut self) {
-        let (col_id, available_columns) = {
-            let state = self.state.lock().unwrap();
-            let col_id = state.ui.focused_column.clone();
-            let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
-            (col_id, available_columns)
-        };
         let mut state = self.state.lock().unwrap();
+        let col_id = state.ui.focused_column.clone();
+        let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
         state.open_task_editor_create(&col_id, available_columns);
     }
 
@@ -645,16 +645,14 @@ impl App {
             let state = self.state.lock().unwrap();
             state.ui.focused_task_id.clone()
         };
-        if let Some(id) = task_id {
-            let mut state = self.state.lock().unwrap();
-            state.open_task_editor_edit(&id);
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
+        let mut state = self.state.lock().unwrap();
+        match task_id {
+            Some(id) => state.open_task_editor_edit(&id),
+            None => state.set_notification(
                 "No task selected to edit".to_string(),
                 crate::state::types::NotificationVariant::Info,
                 2000,
-            );
+            ),
         }
     }
 
@@ -667,32 +665,33 @@ impl App {
             let idx = state.kanban.focused_column_index;
             (tid, idx)
         };
-        if let Some(tid) = task_id {
-            let target_idx = current_col_idx as i32 + direction;
-            if target_idx >= 0 && (target_idx as usize) < visible.len() {
-                let target_col = visible[target_idx as usize].clone();
-                let mut state = self.state.lock().unwrap();
-                state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
-            } else {
-                let msg = if direction > 0 {
-                    "Already at the last column"
+        let mut state = self.state.lock().unwrap();
+        match task_id {
+            Some(tid) => {
+                let target_idx = current_col_idx as i32 + direction;
+                if target_idx >= 0 && (target_idx as usize) < visible.len() {
+                    let target_col = visible[target_idx as usize].clone();
+                    state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
                 } else {
-                    "Already at the first column"
-                };
-                let mut state = self.state.lock().unwrap();
+                    let msg = if direction > 0 {
+                        "Already at the last column"
+                    } else {
+                        "Already at the first column"
+                    };
+                    state.set_notification(
+                        msg.to_string(),
+                        crate::state::types::NotificationVariant::Warning,
+                        2000,
+                    );
+                }
+            }
+            None => {
                 state.set_notification(
-                    msg.to_string(),
+                    "No task selected to move".to_string(),
                     crate::state::types::NotificationVariant::Warning,
                     2000,
                 );
             }
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
-                "No task selected to move".to_string(),
-                crate::state::types::NotificationVariant::Warning,
-                2000,
-            );
         }
     }
 
@@ -704,37 +703,36 @@ impl App {
             let state = self.state.lock().unwrap();
             state.ui.focused_task_id.clone()
         };
-        if let Some(tid) = task_id {
-            let moved = {
-                let mut state = self.state.lock().unwrap();
-                if direction < 0 {
+        let mut state = self.state.lock().unwrap();
+        match task_id {
+            Some(tid) => {
+                let moved = if direction < 0 {
                     state.reorder_task_up(&tid)
                 } else {
                     state.reorder_task_down(&tid)
-                }
-            };
-            let (msg, variant) = if moved {
-                if direction < 0 {
-                    ("Task moved up".to_string(), crate::state::types::NotificationVariant::Info)
+                };
+                let (msg, variant) = if moved {
+                    if direction < 0 {
+                        ("Task moved up".to_string(), crate::state::types::NotificationVariant::Info)
+                    } else {
+                        ("Task moved down".to_string(), crate::state::types::NotificationVariant::Info)
+                    }
                 } else {
-                    ("Task moved down".to_string(), crate::state::types::NotificationVariant::Info)
-                }
-            } else {
-                if direction < 0 {
-                    ("Already at top".to_string(), crate::state::types::NotificationVariant::Warning)
-                } else {
-                    ("Already at bottom".to_string(), crate::state::types::NotificationVariant::Warning)
-                }
-            };
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(msg, variant, 1500);
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
-                "No task selected to reorder".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                2000,
-            );
+                    if direction < 0 {
+                        ("Already at top".to_string(), crate::state::types::NotificationVariant::Warning)
+                    } else {
+                        ("Already at bottom".to_string(), crate::state::types::NotificationVariant::Warning)
+                    }
+                };
+                state.set_notification(msg, variant, 1500);
+            }
+            None => {
+                state.set_notification(
+                    "No task selected to reorder".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                );
+            }
         }
     }
 
@@ -743,18 +741,20 @@ impl App {
             let state = self.state.lock().unwrap();
             state.ui.focused_task_id.clone()
         };
-        if let Some(tid) = task_id {
-            let mut state = self.state.lock().unwrap();
-            state.ui.confirm_action =
-                Some(crate::state::types::ConfirmableAction::DeleteTask(tid));
-            state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
-                "No task selected to delete".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                2000,
-            );
+        let mut state = self.state.lock().unwrap();
+        match task_id {
+            Some(tid) => {
+                state.ui.confirm_action =
+                    Some(crate::state::types::ConfirmableAction::DeleteTask(tid));
+                state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
+            }
+            None => {
+                state.set_notification(
+                    "No task selected to delete".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                );
+            }
         }
     }
 
@@ -763,41 +763,37 @@ impl App {
             let state = self.state.lock().unwrap();
             state.ui.focused_task_id.clone()
         };
-        if let Some(tid) = task_id {
-            let mut state = self.state.lock().unwrap();
-            state.open_task_detail(&tid);
-        } else {
-            let mut state = self.state.lock().unwrap();
-            state.set_notification(
+        let mut state = self.state.lock().unwrap();
+        match task_id {
+            Some(tid) => state.open_task_detail(&tid),
+            None => state.set_notification(
                 "No task selected to view".to_string(),
                 crate::state::types::NotificationVariant::Info,
                 2000,
-            );
+            ),
         }
     }
 
     fn handle_abort_session(&mut self) {
-        let session_id = {
+        // Batch read: extract session_id and client in a single lock hold.
+        let (session_id, client) = {
             let state = self.state.lock().unwrap();
-            state
+            let session_id = state
                 .ui
                 .focused_task_id
                 .as_ref()
                 .and_then(|tid| state.tasks.get(tid))
-                .and_then(|t| t.session_id.clone())
+                .and_then(|t| t.session_id.clone());
+            let client = state
+                .active_project_id
+                .as_ref()
+                .and_then(|pid| self.opencode_clients.get(pid))
+                .cloned();
+            (session_id, client)
         };
+
         if let Some(sid) = session_id {
             tracing::info!("Abort session requested: {}", sid);
-
-            // Find the client for the active project and spawn an abort task.
-            let client = {
-                let state = self.state.lock().unwrap();
-                state
-                    .active_project_id
-                    .as_ref()
-                    .and_then(|pid| self.opencode_clients.get(pid))
-                    .cloned()
-            };
 
             if let Some(client) = client {
                 let state = self.state.clone();
