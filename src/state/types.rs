@@ -845,6 +845,10 @@ pub struct AppState {
     pub reconnecting: bool,
     /// Current reconnect attempt number (0 when not reconnecting, 1-based during reconnect).
     pub reconnect_attempt: u32,
+    /// Whether the SSE event loop has given up after exceeding max retries.
+    /// This is a runtime-only flag (not persisted) — on app restart the
+    /// connection will be retried from scratch.
+    pub permanently_disconnected: bool,
     /// ID of the currently active project.
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
@@ -874,6 +878,7 @@ impl Default for AppState {
             connected: false,
             reconnecting: false,
             reconnect_attempt: 0,
+            permanently_disconnected: false,
             active_project_id: None,
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),

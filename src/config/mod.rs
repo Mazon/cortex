@@ -1,6 +1,7 @@
 //! Configuration loading, saving, and validation.
 
 pub mod defaults;
+pub mod serialization;
 pub mod types;
 
 use anyhow::{Context, Result};

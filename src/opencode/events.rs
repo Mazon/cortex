@@ -12,6 +12,10 @@ use crate::opencode::client::{
 use crate::orchestration::engine::{on_agent_completed, on_task_moved, AutoProgressAction};
 use crate::state::types::AppState;
 
+/// Default maximum consecutive SSE reconnection attempts.
+/// Used when the config field is 0 (which would mean "retry forever").
+const DEFAULT_SSE_MAX_RETRIES: u32 = 50;
+
 /// Run the SSE event loop for a single project's OpenCode client.
 /// This is spawned as a tokio task per active project.
 ///
@@ -29,6 +33,14 @@ pub async fn sse_event_loop(
     let mut reconnect_count: u64 = 0;
     let mut reconnect_attempt: u32 = 0;
 
+    // Effective max retries: use config value, but treat 0 as "use default"
+    // to avoid accidentally retrying forever.
+    let max_retries = if opencode_config.sse_max_retries == 0 {
+        DEFAULT_SSE_MAX_RETRIES
+    } else {
+        opencode_config.sse_max_retries
+    };
+
     loop {
         // Check shutdown before each connection attempt.
         if *shutdown.borrow() {
@@ -42,6 +54,7 @@ pub async fn sse_event_loop(
             Ok(stream) => {
                 backoff_ms = 2000; // Reset backoff on successful connection
                 reconnect_count += 1;
+                reconnect_attempt = 0; // Reset consecutive failure counter on success
                 let mut stream = stream;
 
                 // Mark reconnection complete — we have a live stream.
@@ -50,6 +63,7 @@ pub async fn sse_event_loop(
                     state.connected = true;
                     state.reconnecting = false;
                     state.reconnect_attempt = 0;
+                    state.permanently_disconnected = false;
                 }
 
                 if reconnect_count > 1 {
@@ -120,6 +134,25 @@ pub async fn sse_event_loop(
                     state.reconnecting = true;
                 }
             }
+        }
+
+        // Check if we've exceeded the max retry limit.
+        if reconnect_attempt >= max_retries {
+            warn!(
+                "SSE reconnection failed after {} consecutive attempts (max: {}). \
+                 Giving up — the project will be marked as permanently disconnected. \
+                 Restart the application to retry.",
+                reconnect_attempt, max_retries,
+            );
+            {
+                let mut state = state.lock().unwrap();
+                state.reconnecting = false;
+                state.connected = false;
+                state.permanently_disconnected = true;
+                state.reconnect_attempt = 0;
+                state.mark_render_dirty();
+            }
+            return;
         }
 
         // Exponential backoff with max 30s, but also break on shutdown.
