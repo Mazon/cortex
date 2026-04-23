@@ -3,6 +3,12 @@
 use crate::state::types::*;
 use std::collections::HashMap;
 
+/// Maximum byte size for `TaskDetailSession::streaming_text`.
+/// When a session's streaming buffer exceeds this cap, old text is
+/// truncated from the beginning to keep the most recent content.
+/// Default: 1 MiB (1,048,576 bytes).
+pub const STREAMING_TEXT_CAP_BYTES: usize = 1_048_576;
+
 impl AppState {
     // ─── Project Methods ─────────────────────────────────────────────────
 
@@ -754,6 +760,8 @@ impl AppState {
 
     /// Handle a `MessagePartDelta` SSE event — append text to the
     /// streaming buffer for the corresponding task's session.
+    /// When the buffer exceeds `STREAMING_TEXT_CAP_BYTES`, old text
+    /// is truncated from the beginning (keeping the most recent content).
     pub fn process_message_part_delta(&mut self, session_id: &str, delta: &str) {
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
@@ -767,9 +775,29 @@ impl AppState {
                     ..Default::default()
                 });
             match &mut session.streaming_text {
-                Some(text) => text.push_str(delta),
+                Some(text) => {
+                    text.push_str(delta);
+                }
                 None => {
                     session.streaming_text = Some(delta.to_string());
+                }
+            }
+            // Enforce cap: truncate from the beginning if over limit.
+            // Keep the most recent content (tail of the buffer).
+            if let Some(ref mut text) = session.streaming_text {
+                if text.len() > STREAMING_TEXT_CAP_BYTES {
+                    let excess = text.len() - STREAMING_TEXT_CAP_BYTES;
+                    // Find a valid UTF-8 boundary near the truncation point
+                    // to avoid splitting a multi-byte character.
+                    let mut split_at = excess;
+                    while split_at < text.len() && !text.is_char_boundary(split_at) {
+                        split_at += 1;
+                    }
+                    // If we can't find a boundary within the excess,
+                    // just skip truncation this round (will retry next delta).
+                    if split_at < text.len() {
+                        let _ = text.drain(..split_at);
+                    }
                 }
             }
             session.render_version += 1;
@@ -1846,5 +1874,71 @@ mod tests {
         assert!(state.ui.prompt_context.is_none());
         // Working directory should be unchanged
         assert_eq!(state.projects[0].working_directory, "/tmp");
+    }
+
+    // ── Streaming text cap ─────────────────────────────────────────────
+
+    #[test]
+    fn streaming_text_truncates_when_cap_exceeded() {
+        let mut state = make_state_with_tasks();
+        // Set up a session mapping
+        let session_id = "session-abc";
+        state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
+        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+
+        // Fill buffer well past the 1MB cap (write 1.1MB of ASCII)
+        let chunk_size = STREAMING_TEXT_CAP_BYTES + 100_000;
+        let big_chunk = "x".repeat(chunk_size);
+        state.process_message_part_delta(session_id, &big_chunk);
+
+        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+
+        // Should be truncated to at most the cap size
+        assert!(
+            text.len() <= STREAMING_TEXT_CAP_BYTES + 10,
+            "Expected <= {}, got {}",
+            STREAMING_TEXT_CAP_BYTES,
+            text.len()
+        );
+        // Should be valid UTF-8
+        assert!(text.is_char_boundary(text.len()));
+        // Should contain only the tail (most recent content)
+        assert!(text.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn streaming_text_no_truncation_below_cap() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+        state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
+        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+
+        // Write data well below the cap
+        state.process_message_part_delta(session_id, "hello world");
+        state.process_message_part_delta(session_id, " and more");
+
+        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+        assert_eq!(text, "hello world and more");
+    }
+
+    #[test]
+    fn streaming_text_truncation_preserves_utf8_boundary() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+        state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
+        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+
+        // Fill past the cap with multi-byte characters (emoji are 4 bytes each)
+        let emoji = "🎉"; // 4 bytes
+        let count = (STREAMING_TEXT_CAP_BYTES / 4) + 100_000;
+        let big_chunk = emoji.repeat(count);
+        state.process_message_part_delta(session_id, &big_chunk);
+
+        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+
+        // Should be valid UTF-8 (no panic from invalid boundary)
+        assert!(text.is_char_boundary(text.len()));
+        // All characters should be complete emojis
+        assert!(text.chars().all(|c| c == '🎉'));
     }
 }
