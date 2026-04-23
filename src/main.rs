@@ -309,25 +309,54 @@ fn main() -> Result<()> {
         // Spawn periodic persistence save task.
         // Opens a fresh Db connection each cycle (no lock contention with AppState).
         // Lock ordering: AppState → Db (Db is opened after state is read).
+        // On repeated DB errors, applies exponential backoff (2s → 4s → 8s → max 30s)
+        // instead of retrying every 5 seconds unconditionally.
         let state_for_save = state.clone();
         let db_path_for_save = persistence::db::default_db_path();
         let persistence_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            let mut db_error_backoff_ms: u64 = 0; // 0 = no backoff, use normal interval
+            let mut consecutive_db_errors: u32 = 0;
+
             loop {
                 interval.tick().await;
-                // Open a new connection each time for simplicity
+
+                // If we're in backoff mode, sleep extra before retrying.
+                if db_error_backoff_ms > 0 {
+                    tracing::warn!(
+                        "DB backoff: waiting {}ms before retry (consecutive errors: {})",
+                        db_error_backoff_ms,
+                        consecutive_db_errors,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(db_error_backoff_ms)).await;
+                }
+
                 let db = match Db::new(&db_path_for_save) {
                     Ok(db) => db,
                     Err(e) => {
-                        tracing::error!("Failed to open DB for save: {}", e);
+                        consecutive_db_errors += 1;
+                        db_error_backoff_ms = (2000u64 * (1 << consecutive_db_errors.min(4))).min(30_000);
+                        tracing::error!(
+                            "Failed to open DB for save (attempt {}): {}",
+                            consecutive_db_errors, e,
+                        );
                         continue;
                     }
                 };
+
                 let mut state = state_for_save.lock().unwrap();
                 if state.take_dirty() {
                     if let Err(e) = persistence::save_state(&mut state, &db) {
-                        tracing::error!("Failed to save state: {}", e);
+                        consecutive_db_errors += 1;
+                        db_error_backoff_ms = (2000u64 * (1 << consecutive_db_errors.min(4))).min(30_000);
+                        tracing::error!(
+                            "Failed to save state (attempt {}): {}",
+                            consecutive_db_errors, e,
+                        );
                     } else {
+                        // Success — reset backoff
+                        consecutive_db_errors = 0;
+                        db_error_backoff_ms = 0;
                         tracing::debug!("State saved (periodic)");
                     }
                 }
