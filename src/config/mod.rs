@@ -1,13 +1,11 @@
 //! Configuration loading, saving, and validation.
 
-pub mod defaults;
 pub mod serialization;
 pub mod types;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use defaults::default_config;
 use types::CortexConfig;
 
 /// Returns the default config path: `$XDG_CONFIG_HOME/cortex/cortex.toml`.
@@ -59,7 +57,7 @@ pub fn xdg_data_home() -> PathBuf {
 /// Column definitions are replaced entirely, not merged.
 pub fn load_config(path: &Path) -> Result<CortexConfig> {
     if !path.exists() {
-        let config = default_config();
+        let config = CortexConfig::default();
         save_config(&config, path)
             .with_context(|| format!("Failed to generate default config at {:?}", path))?;
         tracing::info!("Generated default config at {:?}", path);
@@ -213,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let config = default_config();
+        let config = CortexConfig::default();
         assert_eq!(config.columns.definitions.len(), 5);
         assert_eq!(config.columns.definitions[0].id, "todo");
         assert_eq!(config.opencode.port, 11643);
@@ -221,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_validate_duplicate_column() {
-        let mut config = default_config();
+        let mut config = CortexConfig::default();
         let dup = config.columns.definitions[0].clone();
         config.columns.definitions.push(dup);
         let result = validate_config(&config);
@@ -232,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_validate_bad_auto_progress() {
-        let mut config = default_config();
+        let mut config = CortexConfig::default();
         config.columns.definitions[0].auto_progress_to = Some("nonexistent".to_string());
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -374,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_validate_default_config_passes() {
-        let config = default_config();
+        let config = CortexConfig::default();
         assert!(validate_config(&config).is_ok());
     }
 
