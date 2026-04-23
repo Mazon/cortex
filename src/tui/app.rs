@@ -682,7 +682,7 @@ impl App {
                 let mut state = self.state.lock().unwrap();
                 state.set_notification(
                     msg.to_string(),
-                    crate::state::types::NotificationVariant::Info,
+                    crate::state::types::NotificationVariant::Warning,
                     2000,
                 );
             }
@@ -690,7 +690,7 @@ impl App {
             let mut state = self.state.lock().unwrap();
             state.set_notification(
                 "No task selected to move".to_string(),
-                crate::state::types::NotificationVariant::Info,
+                crate::state::types::NotificationVariant::Warning,
                 2000,
             );
         }
