@@ -87,16 +87,14 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     f.render_widget(title_block, v_layout[2]);
 
     // Render title text with cursor
-    let title_para = if title_focused && !editor.title.is_empty() {
-        let col = editor.cursor_col.min(editor.title.len());
-        Paragraph::new(format!("{}▊", editor.title))
-    } else if title_focused {
-        Paragraph::new("▊")
-    } else if editor.title.is_empty() {
+    let title_para = if editor.title.is_empty() {
+        // Empty — show placeholder text (terminal cursor handles focus indication)
         Paragraph::new(Span::styled(
             "Enter title...",
             Style::default().fg(Color::DarkGray),
         ))
+    } else if title_focused {
+        Paragraph::new(format!("{}▊", editor.title))
     } else {
         Paragraph::new(editor.title.clone())
     };
@@ -160,7 +158,8 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     // Render description text with scroll (uses pre-computed lines, no split per frame)
     let visible_height = desc_inner.height as usize;
     let desc_lines = editor.desc_lines();
-    let lines: Vec<Line> = if desc_lines.is_empty() && !desc_focused {
+    let desc_is_empty = desc_lines.len() == 1 && desc_lines[0].is_empty();
+    let lines: Vec<Line> = if desc_is_empty {
         vec![Line::from(Span::styled(
             "Enter description...",
             Style::default().fg(Color::DarkGray),
@@ -174,8 +173,8 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
             .collect()
     };
 
-    // Add cursor character if focused
-    let display_lines = if desc_focused {
+    // Add cursor character if focused and content exists
+    let display_lines = if desc_focused && !desc_is_empty {
         let cursor_row = editor.cursor_row;
         let actual_visible_row = cursor_row.saturating_sub(editor.scroll_offset);
 
