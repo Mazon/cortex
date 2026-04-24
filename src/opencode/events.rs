@@ -181,6 +181,9 @@ pub async fn sse_event_loop(
                                                     "Failed to finalize session {} (task {}): {}",
                                                     session_id, task_id, e
                                                 );
+                                                // Clear streaming_text even on failure to prevent stale data
+                                                let mut s = state_clone.lock().unwrap();
+                                                s.update_streaming_text(&task_id, None);
                                             }
                                         }
                                     });

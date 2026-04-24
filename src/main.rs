@@ -5,7 +5,7 @@ pub mod persistence;
 pub mod state;
 pub mod tui;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -285,7 +285,19 @@ fn main() -> Result<()> {
         let (sse_shutdown_tx, sse_shutdown_rx) = tokio::sync::watch::channel(false);
 
         let mut sse_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        // Group by unique server URL to avoid duplicate SSE subscriptions.
+        // All projects sharing the same server use a single event loop,
+        // preventing text duplication from multiple loops processing identical events.
+        let mut seen_urls: HashSet<String> = HashSet::new();
         for (project_id, client) in &opencode_clients {
+            let url = client.base_url().to_string();
+            if !seen_urls.insert(url) {
+                tracing::debug!(
+                    "Skipping duplicate SSE loop for project {} (server already subscribed)",
+                    project_id
+                );
+                continue;
+            }
             let client = client.clone();
             let state = state.clone();
             let pid = project_id.clone();
