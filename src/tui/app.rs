@@ -744,9 +744,22 @@ impl App {
         let mut state = self.state.lock().unwrap();
         match task_id {
             Some(tid) => {
-                state.ui.confirm_action =
-                    Some(crate::state::types::ConfirmableAction::DeleteTask(tid));
-                state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
+                state.delete_task(&tid);
+
+                // Clamp focused task index for the column
+                let col_id = state.ui.focused_column.clone();
+                state.clamp_focused_task_index(&col_id);
+
+                // Close detail view if viewing the deleted task
+                if state.ui.viewing_task_id.as_deref() == Some(&tid) {
+                    state.close_task_detail();
+                }
+
+                state.set_notification(
+                    "Task deleted".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    3000,
+                );
             }
             None => {
                 state.set_notification(
@@ -880,15 +893,6 @@ impl App {
                 };
                 if let Some(action) = action {
                     match action {
-                        ConfirmableAction::DeleteTask(task_id) => {
-                            let mut state = self.state.lock().unwrap();
-                            state.delete_task(&task_id);
-                            state.set_notification(
-                                "Task deleted".to_string(),
-                                crate::state::types::NotificationVariant::Info,
-                                3000,
-                            );
-                        }
                         ConfirmableAction::DeleteProject(project_id) => {
                             // Remove the OpenCode client for this project.
                             self.opencode_clients.remove(&project_id);
@@ -1112,16 +1116,60 @@ impl App {
                 let mut state = self.state.lock().unwrap();
                 match state.save_task_editor() {
                     Ok(task_id) => {
+                        // Extract column ID before closing editor
+                        let column_id = state.get_task_editor()
+                            .and_then(|ed| ed.column_id.clone());
+
+                        // Close the editor and return to normal mode
+                        state.cancel_task_editor();
                         state.set_notification(
                             format!("Task saved: {}", task_id),
                             crate::state::types::NotificationVariant::Success,
                             3000,
                         );
+
+                        // Focus the newly created/saved task
+                        state.ui.focused_task_id = Some(task_id.clone());
+
+                        // Update focused column to match the saved task's column
+                        if let Some(ref col_id) = column_id {
+                            let visible = self.config.columns.visible_column_ids();
+                            if let Some(idx) = visible.iter().position(|c| c == col_id) {
+                                state.ui.focused_column = col_id.clone();
+                                state.kanban.focused_column_index = idx;
+                            }
+                        }
+
+                        // Auto-launch agent if column has one configured
+                        if let Some(ref col_id) = column_id {
+                            if let Some(_agent) = self.config.columns.agent_for_column(col_id) {
+                                // Check if task already has a running agent
+                                let already_running = state.tasks.get(&task_id)
+                                    .map(|t| matches!(t.agent_status, crate::state::types::AgentStatus::Running))
+                                    .unwrap_or(false);
+
+                                if !already_running {
+                                    if let Some(project_id) = state.active_project_id.clone() {
+                                        if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                            drop(state); // Release lock before spawning async
+                                            crate::orchestration::engine::on_task_moved(
+                                                &task_id,
+                                                &crate::state::types::KanbanColumn(col_id.clone()),
+                                                &self.state,
+                                                &client,
+                                                &self.config.columns,
+                                                &self.config.opencode,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         // Only show a notification toast if there's no inline
                         // validation error (which is already visible in the editor).
-                        // Validation errors (e.g. empty title) are shown inline
+                        // Validation errors (e.g. empty description) are shown inline
                         // and don't need a transient notification.
                         let has_inline_error = state
                             .get_task_editor()
