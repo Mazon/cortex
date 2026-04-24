@@ -686,6 +686,9 @@ impl App {
                         if !already_running {
                             if let Some(project_id) = state.active_project_id.clone() {
                                 if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                    // Set status to Running while holding the lock to close the race window
+                                    state.update_task_agent_status(&tid, crate::state::types::AgentStatus::Running);
+                                    state.set_task_agent_type(&tid, self.config.columns.agent_for_column(&target_col));
                                     drop(state); // Release lock before spawning async
                                     crate::orchestration::engine::on_task_moved(
                                         &tid,
@@ -1210,6 +1213,9 @@ impl App {
                                 if !already_running {
                                     if let Some(project_id) = state.active_project_id.clone() {
                                         if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                            // Set status to Running while holding the lock to close the race window
+                                            state.update_task_agent_status(&task_id, crate::state::types::AgentStatus::Running);
+                                            state.set_task_agent_type(&task_id, self.config.columns.agent_for_column(col_id));
                                             drop(state); // Release lock before spawning async
                                             crate::orchestration::engine::on_task_moved(
                                                 &task_id,

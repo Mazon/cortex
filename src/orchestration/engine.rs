@@ -29,12 +29,8 @@ fn start_agent(
     client: &OpenCodeClient,
     opencode_config: &OpenCodeConfig,
 ) {
-    // Update status immediately for UI feedback
-    {
-        let mut s = state.lock().unwrap();
-        s.update_task_agent_status(task_id, AgentStatus::Running);
-        s.set_task_agent_type(task_id, Some(agent.to_string()));
-    }
+    // Status is already set to Running by the caller (app.rs) to close the race window.
+    // No need to re-acquire the lock here for status update.
 
     // Clone what we need, spawn async work
     let state = state.clone();
