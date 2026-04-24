@@ -683,9 +683,24 @@ impl App {
                                 crate::state::types::AgentStatus::Running
                                 | crate::state::types::AgentStatus::Hung))
                             .unwrap_or(false);
-                        if !already_running {
+                        if already_running {
+                            let status = state.tasks.get(&tid)
+                                .map(|t| t.agent_status)
+                                .unwrap_or(crate::state::types::AgentStatus::Pending);
+                            if status == crate::state::types::AgentStatus::Hung {
+                                state.set_notification(
+                                    "Task is hung — abort the session before re-dispatching".to_string(),
+                                    crate::state::types::NotificationVariant::Warning,
+                                    5000,
+                                );
+                            }
+                        } else {
                             if let Some(project_id) = state.active_project_id.clone() {
                                 if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                    // Capture the PREVIOUS agent type before overwriting it,
+                                    // so start_agent can detect the change and create a fresh session.
+                                    let previous_agent = state.tasks.get(&tid)
+                                        .and_then(|t| t.agent_type.clone());
                                     // Set status to Running while holding the lock to close the race window
                                     state.update_task_agent_status(&tid, crate::state::types::AgentStatus::Running);
                                     state.set_task_agent_type(&tid, self.config.columns.agent_for_column(&target_col));
@@ -697,6 +712,7 @@ impl App {
                                         &client,
                                         &self.config.columns,
                                         &self.config.opencode,
+                                        previous_agent,
                                     );
                                     return; // Lock already dropped
                                 } else {
@@ -1233,9 +1249,24 @@ impl App {
                                         | crate::state::types::AgentStatus::Hung))
                                     .unwrap_or(false);
 
-                                if !already_running {
+                                if already_running {
+                                    let status = state.tasks.get(&task_id)
+                                        .map(|t| t.agent_status)
+                                        .unwrap_or(crate::state::types::AgentStatus::Pending);
+                                    if status == crate::state::types::AgentStatus::Hung {
+                                        state.set_notification(
+                                            "Task is hung — abort the session before re-dispatching".to_string(),
+                                            crate::state::types::NotificationVariant::Warning,
+                                            5000,
+                                        );
+                                    }
+                                } else {
                                     if let Some(project_id) = state.active_project_id.clone() {
                                         if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                            // Capture the PREVIOUS agent type before overwriting it,
+                                            // so start_agent can detect the change and create a fresh session.
+                                            let previous_agent = state.tasks.get(&task_id)
+                                                .and_then(|t| t.agent_type.clone());
                                             // Set status to Running while holding the lock to close the race window
                                             state.update_task_agent_status(&task_id, crate::state::types::AgentStatus::Running);
                                             state.set_task_agent_type(&task_id, self.config.columns.agent_for_column(col_id));
@@ -1247,6 +1278,7 @@ impl App {
                                                 &client,
                                                 &self.config.columns,
                                                 &self.config.opencode,
+                                                previous_agent,
                                             );
                                         } else {
                                             state.set_notification(
