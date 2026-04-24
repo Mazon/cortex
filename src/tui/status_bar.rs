@@ -262,7 +262,7 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
                 .as_ref()
                 .map_or(false, |e| e.validation_error.is_some())
             {
-                groups.push("fix title error or Esc: cancel".to_string());
+                groups.push("fix error above or Esc: cancel".to_string());
             }
             // If there are unsaved changes with the discard warning shown
             if state

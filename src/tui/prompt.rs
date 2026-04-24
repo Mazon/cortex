@@ -121,23 +121,11 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
 
     // Build the confirmation message from the pending action
     let (title, message, hint) = match &state.ui.confirm_action {
-        Some(crate::state::types::ConfirmableAction::DeleteTask(task_id)) => {
-            let task_label = state
-                .tasks
-                .get(task_id)
-                .map(|t| format!("#{}: {}", t.number, t.title))
-                .unwrap_or_else(|| task_id.clone());
-            (
-                " Confirm Delete ".to_string(),
-                format!("Delete task {}?", task_label),
-                "y: delete  |  n/Esc: cancel".to_string(),
-            )
-        }
         Some(crate::state::types::ConfirmableAction::DeleteProject(project_id)) => {
             let project_name = state
                 .projects
                 .iter()
-                .find(|p| &p.id == project_id)
+                .find(|p| p.id == *project_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| project_id.clone());
             (

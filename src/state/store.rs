@@ -145,7 +145,8 @@ impl AppState {
 
     // ─── Task Methods ────────────────────────────────────────────────────
 
-    /// Create a new task in the "todo" column. Returns the created task.
+    /// Create a new task in the "todo" column. Title is auto-derived from the
+    /// first line of description. Returns the created task.
     /// Increments the project's task number counter. Marks state dirty.
     pub fn create_todo(
         &mut self,
@@ -240,6 +241,8 @@ impl AppState {
             }
             // Remove render cache for deleted task
             self.cached_streaming_lines.remove(task_id);
+            // Remove session data for deleted task
+            self.task_sessions.remove(task_id);
             // Remove from dirty set (task no longer exists)
             self.dirty_tasks.remove(task_id);
             self.mark_dirty();
@@ -454,14 +457,14 @@ impl AppState {
         };
 
         let (title, description) = editor.to_task_fields();
-        let title = title.trim().to_string();
-        if title.is_empty() {
+        let description = description.trim().to_string();
+        if description.is_empty() {
             // Set inline validation error so it's visible in the editor UI,
             // instead of relying solely on a transient notification toast.
             if let Some(ed) = self.ui.task_editor.as_mut() {
-                ed.validation_error = Some("Title cannot be empty".to_string());
+                ed.validation_error = Some("Description cannot be empty".to_string());
             }
-            anyhow::bail!("Task title cannot be empty");
+            anyhow::bail!("Task description cannot be empty");
         }
 
         let now = chrono::Utc::now().timestamp();
@@ -469,7 +472,12 @@ impl AppState {
 
         match &editor.task_id {
             Some(task_id) => {
-                // Editing existing task
+                // Editing existing task — check if column changed before mutable borrow
+                let needs_column_move = {
+                    let task = self.tasks.get(task_id);
+                    task.map(|t| t.column.0.as_str() != column_id).unwrap_or(false)
+                };
+
                 if let Some(task) = self.tasks.get_mut(task_id) {
                     task.title = title;
                     task.description = description;
@@ -481,10 +489,15 @@ impl AppState {
                         ed.discard_warning_shown = false;
                         ed.validation_error = None;
                     }
-                    Ok(task_id.clone())
                 } else {
                     anyhow::bail!("Task not found: {}", task_id)
                 }
+
+                // Apply column change if the editor has a different column selected
+                if needs_column_move {
+                    self.move_task(task_id, KanbanColumn(column_id.to_string()));
+                }
+                Ok(task_id.clone())
             }
             None => {
                 // Creating new task
@@ -1331,7 +1344,7 @@ mod tests {
         let editor = state.get_task_editor().unwrap();
         assert_eq!(editor.task_id, None); // creating new
         assert_eq!(editor.column_id, Some("todo".to_string()));
-        assert_eq!(editor.focused_field, EditorField::Title);
+        assert_eq!(editor.focused_field, EditorField::Description);
     }
 
     #[test]
@@ -1342,8 +1355,7 @@ mod tests {
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
         let editor = state.get_task_editor().unwrap();
         assert_eq!(editor.task_id, Some("task-1".to_string()));
-        assert_eq!(editor.title, "Task 1");
-        assert_eq!(editor.focused_field, EditorField::Title);
+        assert_eq!(editor.focused_field, EditorField::Description);
     }
 
     #[test]
@@ -1362,9 +1374,8 @@ mod tests {
         let mut state = make_state_with_tasks();
         state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
-        // Set title and description via editor
+        // Set description via editor
         if let Some(editor) = state.get_task_editor_mut() {
-            editor.title = "New Task".to_string();
             editor.set_description("Some desc");
         }
 
@@ -1372,21 +1383,19 @@ mod tests {
         assert!(result.is_ok());
         let task_id = result.unwrap();
 
-        // Mode should be back to normal (save doesn't change mode, but the
-        // App handle_editor_key method does that after save)
         // Verify task was created
         assert!(state.tasks.contains_key(&task_id));
         let task = state.tasks.get(&task_id).unwrap();
-        assert_eq!(task.title, "New Task");
+        assert_eq!(task.title, "Some desc"); // auto-derived from first line of description
         assert_eq!(task.description, "Some desc");
     }
 
     #[test]
-    fn save_task_editor_empty_title_fails() {
+    fn save_task_editor_empty_description_fails() {
         let mut state = make_state_with_tasks();
         state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
-        // Leave title empty
+        // Leave description empty
         let result = state.save_task_editor();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
@@ -1398,7 +1407,7 @@ mod tests {
         state.open_task_editor_edit("task-1");
 
         if let Some(editor) = state.get_task_editor_mut() {
-            editor.title = "Updated Title".to_string();
+            editor.set_description("Updated Description");
         }
 
         let result = state.save_task_editor();
@@ -1406,7 +1415,8 @@ mod tests {
         assert_eq!(result.unwrap(), "task-1");
 
         let task = state.tasks.get("task-1").unwrap();
-        assert_eq!(task.title, "Updated Title");
+        assert_eq!(task.title, "Updated Description"); // auto-derived from description
+        assert_eq!(task.description, "Updated Description");
     }
 
     #[test]
@@ -1435,12 +1445,12 @@ mod tests {
         state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         if let Some(editor) = state.get_task_editor_mut() {
-            editor.title = "Discard Me".to_string();
+            editor.set_description("Discard Me");
         }
 
         state.cancel_task_editor();
         // The task should NOT have been created
-        assert!(!state.tasks.values().any(|t| t.title == "Discard Me"));
+        assert!(!state.tasks.values().any(|t| t.description == "Discard Me"));
     }
 
     // ── Task operations: delete ─────────────────────────────────────────
@@ -1687,11 +1697,11 @@ mod tests {
         state.open_task_editor_create("todo", vec!["todo".to_string()]);
 
         if let Some(editor) = state.get_task_editor_mut() {
-            editor.title = "Mutated".to_string();
+            editor.set_description("Mutated");
             editor.cursor_col = 7;
         }
 
-        assert_eq!(state.get_task_editor().unwrap().title, "Mutated");
+        assert_eq!(state.get_task_editor().unwrap().description(), "Mutated");
         assert_eq!(state.get_task_editor().unwrap().cursor_col, 7);
     }
 

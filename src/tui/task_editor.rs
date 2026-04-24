@@ -23,19 +23,24 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     let outer_inner = outer_block.inner(area);
     f.render_widget(outer_block, area);
 
-    // Vertical layout: header | title label + input | validation error | spacer | description label + textarea | footer
-    let has_validation_error = editor.validation_error.is_some();
+    // Vertical layout: header | description label + textarea | column selector | footer
     let show_column_selector = !editor.available_columns.is_empty();
-    let v_constraints = [
-        Constraint::Length(1), // Optional header (for edit mode)
-        Constraint::Length(1), // Title label
-        Constraint::Length(3), // Title input field
-        Constraint::Length(if has_validation_error { 1 } else { 0 }), // Validation error
-        Constraint::Length(1), // Spacer
-        Constraint::Length(1), // Description label
-        Constraint::Min(0),    // Description textarea
-        Constraint::Length(1), // Footer hint
-    ];
+    let v_constraints = if show_column_selector {
+        vec![
+            Constraint::Length(1), // Optional header (for edit mode)
+            Constraint::Length(1), // Description label
+            Constraint::Min(0),    // Description textarea
+            Constraint::Length(2), // Column selector (label + pills)
+            Constraint::Length(1), // Footer hint
+        ]
+    } else {
+        vec![
+            Constraint::Length(1), // Optional header (for edit mode)
+            Constraint::Length(1), // Description label
+            Constraint::Min(0),    // Description textarea
+            Constraint::Length(1), // Footer hint
+        ]
+    };
     let v_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints(v_constraints)
@@ -46,82 +51,14 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     // Header (edit mode indicator)
     if let Some(ref task_id) = editor.task_id {
         if let Some(task) = state.tasks.get(task_id) {
-            let header_text = format!("[Editing #{}] {}", task.number, task.title);
+            let display_title = crate::state::types::derive_title_from_description(&task.description);
+            let header_text = format!("[Editing #{}] {}", task.number, display_title);
             let header = Paragraph::new(Span::styled(
                 header_text,
                 Style::default().fg(Color::DarkGray),
             ));
             f.render_widget(header, v_layout[0]);
         }
-    }
-
-    // Title label
-    let title_label = Paragraph::new(Span::styled(
-        "Title:",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    ));
-    f.render_widget(
-        title_label,
-        Rect {
-            x: v_layout[1].x + x_margin,
-            y: v_layout[1].y,
-            width: v_layout[1].width.saturating_sub(x_margin * 2),
-            height: 1,
-        },
-    );
-
-    // Title input field
-    let title_focused = editor.focused_field == EditorField::Title;
-    let title_border_color = if title_focused {
-        Color::Cyan
-    } else {
-        Color::DarkGray
-    };
-    let title_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(title_border_color));
-    let title_inner = title_block.inner(v_layout[2]);
-    f.render_widget(title_block, v_layout[2]);
-
-    // Render title text with cursor
-    let title_para = if editor.title.is_empty() {
-        // Empty — show placeholder text (terminal cursor handles focus indication)
-        Paragraph::new(Span::styled(
-            "Enter title...",
-            Style::default().fg(Color::DarkGray),
-        ))
-    } else if title_focused {
-        Paragraph::new(format!("{}▊", editor.title))
-    } else {
-        Paragraph::new(editor.title.clone())
-    };
-    f.render_widget(title_para, title_inner);
-
-    // Set cursor position for title field
-    if title_focused {
-        let cursor_x = title_inner.x + editor.cursor_col.min(editor.title.len()) as u16;
-        let cursor_y = title_inner.y;
-        f.set_cursor_position((cursor_x, cursor_y));
-    }
-
-    // Validation error (inline, shown below title field)
-    if let Some(ref error_msg) = editor.validation_error {
-        let validation_label = Paragraph::new(Span::styled(
-            format!("✗ {}", error_msg),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ));
-        f.render_widget(
-            validation_label,
-            Rect {
-                x: v_layout[3].x + x_margin,
-                y: v_layout[3].y,
-                width: v_layout[3].width.saturating_sub(x_margin * 2),
-                height: 1,
-            },
-        );
     }
 
     // Description label
@@ -134,9 +71,9 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     f.render_widget(
         desc_label,
         Rect {
-            x: v_layout[5].x + x_margin,
-            y: v_layout[5].y,
-            width: v_layout[5].width.saturating_sub(x_margin * 2),
+            x: v_layout[1].x + x_margin,
+            y: v_layout[1].y,
+            width: v_layout[1].width.saturating_sub(x_margin * 2),
             height: 1,
         },
     );
@@ -152,8 +89,8 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(desc_border_color));
-    let desc_inner = desc_block.inner(v_layout[6]);
-    f.render_widget(desc_block, v_layout[6]);
+    let desc_inner = desc_block.inner(v_layout[2]);
+    f.render_widget(desc_block, v_layout[2]);
 
     // Render description text with scroll (uses pre-computed lines, no split per frame)
     let visible_height = desc_inner.height as usize;
@@ -181,7 +118,7 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
         let mut result = lines;
         if actual_visible_row < result.len() {
             let line = desc_lines.get(cursor_row).map_or("", |l| l.as_str());
-            let col = editor.cursor_col.min(line.len());
+            let col = editor.cursor_col.min(line.chars().count());
             let mut chars: Vec<char> = line.chars().collect();
             chars.insert(col, '▊');
             let modified_line: String = chars.into_iter().collect();
@@ -200,7 +137,7 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     // Set cursor position for description field
     if desc_focused {
         let line = desc_lines.get(editor.cursor_row).map_or("", |l| l.as_str());
-        let cursor_x = desc_inner.x + editor.cursor_col.min(line.len()) as u16;
+        let cursor_x = desc_inner.x + editor.cursor_col.min(line.chars().count()) as u16;
         let cursor_y = desc_inner.y + (editor.cursor_row - editor.scroll_offset) as u16;
         if cursor_y < desc_inner.y + desc_inner.height {
             f.set_cursor_position((cursor_x, cursor_y));
@@ -209,25 +146,37 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
 
     // Column selector (only shown in create mode when columns are available)
     if show_column_selector {
-        let col_selector_area = v_layout[v_layout.len() - 2];
-        render_column_selector(f, editor, config, col_selector_area, x_margin);
+        render_column_selector(f, editor, config, v_layout[3], x_margin);
     }
 
-    // Footer hint
-    let (footer_text, footer_style) = if editor.discard_warning_shown {
-        (
-            "Unsaved changes! Press Esc again to discard or Ctrl+S to save",
-            Style::default().fg(Color::Yellow),
-        )
-    } else {
-        (
-            "Ctrl+S: save  Esc: cancel  Tab: next field",
-            Style::default().fg(Color::DarkGray),
-        )
-    };
-    let footer =
-        Paragraph::new(Span::styled(footer_text, footer_style)).alignment(Alignment::Center);
-    f.render_widget(footer, v_layout[7]);
+    // Validation error (shown in footer area when present)
+    if let Some(ref error) = editor.validation_error {
+        let footer_idx = if show_column_selector { 4 } else { 3 };
+        let error_widget = Paragraph::new(Span::styled(
+            format!("⚠ {}", error),
+            Style::default().fg(Color::Red),
+        ));
+        f.render_widget(error_widget, v_layout[footer_idx]);
+    }
+
+    // Footer hint (only when no validation error — validation error replaces it)
+    if editor.validation_error.is_none() {
+        let (footer_text, footer_style) = if editor.discard_warning_shown {
+            (
+                "Unsaved changes! Press Esc again to discard or Ctrl+S to save",
+                Style::default().fg(Color::Yellow),
+            )
+        } else {
+            (
+                "Ctrl+S: save  Esc: cancel  Tab: next field",
+                Style::default().fg(Color::DarkGray),
+            )
+        };
+        let footer_idx = if show_column_selector { 4 } else { 3 };
+        let footer =
+            Paragraph::new(Span::styled(footer_text, footer_style)).alignment(Alignment::Center);
+        f.render_widget(footer, v_layout[footer_idx]);
+    }
 }
 
 fn render_column_selector(

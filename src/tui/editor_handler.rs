@@ -36,30 +36,25 @@ pub fn handle_editor_input(editor: &mut TaskEditorState, key: KeyEvent) -> Edito
         return EditorAction::Cancel;
     }
 
-    // Tab → Cycle focus (or cycle columns when on column field)
+    // Tab → Cycle focus between Description and Column
     if key.code == KeyCode::Tab {
-        if editor.focused_field == EditorField::Column && !editor.available_columns.is_empty() {
-            editor.cycle_column();
-        } else {
-            editor.focused_field = match editor.focused_field {
-                EditorField::Title => EditorField::Description,
-                EditorField::Description => {
-                    if !editor.available_columns.is_empty() { EditorField::Column } else { EditorField::Title }
+        match editor.focused_field {
+            EditorField::Description => {
+                if !editor.available_columns.is_empty() {
+                    editor.cycle_column();
+                    editor.focused_field = EditorField::Column;
                 }
-                EditorField::Column => EditorField::Title,
-            };
+            }
+            EditorField::Column => {
+                editor.focused_field = EditorField::Description;
+            }
         }
         return EditorAction::None;
     }
 
-    // Enter → Next field (from title) or newline (in description)
+    // Enter → Insert newline (in description) — always, since there's no title field
     if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::CONTROL) {
         match editor.focused_field {
-            EditorField::Title => {
-                editor.focused_field = EditorField::Description;
-                editor.cursor_row = 0;
-                editor.cursor_col = 0;
-            }
             EditorField::Description => {
                 editor.insert_newline();
             }
@@ -104,7 +99,8 @@ pub fn handle_editor_input(editor: &mut TaskEditorState, key: KeyEvent) -> Edito
             editor.scroll_offset = editor.scroll_offset.saturating_sub(5);
         }
         KeyCode::PageDown => {
-            editor.scroll_offset = editor.scroll_offset + 5;
+            editor.scroll_offset = (editor.scroll_offset + 5)
+                .min(editor.desc_lines.len().saturating_sub(1));
         }
         _ => {}
     }
@@ -128,7 +124,7 @@ mod tests {
     use super::*;
     use crate::state::types::{EditorField, TaskEditorState};
 
-    /// Helper to create a fresh editor in create mode (title field focused).
+    /// Helper to create a fresh editor in create mode (description field focused).
     fn new_editor() -> TaskEditorState {
         TaskEditorState::new_for_create("todo", Vec::new())
     }
@@ -176,49 +172,46 @@ mod tests {
     // ── Tab focus cycling ───────────────────────────────────────────────
 
     #[test]
-    fn tab_toggles_title_to_description() {
+    fn tab_stays_on_description_when_no_columns() {
         let mut editor = new_editor();
-        assert_eq!(editor.focused_field, EditorField::Title);
+        assert_eq!(editor.focused_field, EditorField::Description);
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(editor.focused_field, EditorField::Description);
     }
 
     #[test]
-    fn tab_toggles_description_to_title() {
-        let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
+    fn tab_cycles_description_to_column() {
+        let mut editor = new_editor_with_columns();
+        assert_eq!(editor.focused_field, EditorField::Description);
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(editor.focused_field, EditorField::Title);
+        assert_eq!(editor.focused_field, EditorField::Column);
+    }
+
+    #[test]
+    fn tab_cycles_column_back_to_description() {
+        let mut editor = new_editor_with_columns();
+        editor.focused_field = EditorField::Column;
+        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(editor.focused_field, EditorField::Description);
     }
 
     #[test]
     fn tab_cycles_back_and_forth() {
-        let mut editor = new_editor();
-        assert_eq!(editor.focused_field, EditorField::Title);
-
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
+        let mut editor = new_editor_with_columns();
         assert_eq!(editor.focused_field, EditorField::Description);
 
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(editor.focused_field, EditorField::Title);
-    }
+        assert_eq!(editor.focused_field, EditorField::Column);
 
-    // ── Enter field switching ───────────────────────────────────────────
-
-    #[test]
-    fn enter_moves_from_title_to_description() {
-        let mut editor = new_editor();
-        assert_eq!(editor.focused_field, EditorField::Title);
-        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
+        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(editor.focused_field, EditorField::Description);
-        assert_eq!(editor.cursor_row, 0);
-        assert_eq!(editor.cursor_col, 0);
     }
+
+    // ── Enter inserts newline in description ────────────────────────────
 
     #[test]
     fn enter_inserts_newline_in_description() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         editor.set_description("line1");
         // Cursor at end of "line1" (col=5)
         editor.cursor_col = 5;
@@ -231,7 +224,6 @@ mod tests {
     #[test]
     fn enter_splits_line_at_cursor() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         editor.set_description("line1");
         // Cursor at position 3 (between "lin" and "e1")
         editor.cursor_col = 3;
@@ -244,18 +236,8 @@ mod tests {
     // ── Character insertion ─────────────────────────────────────────────
 
     #[test]
-    fn char_insert_in_title() {
-        let mut editor = new_editor();
-        handle_editor_input(&mut editor, char_key('H'));
-        handle_editor_input(&mut editor, char_key('i'));
-        assert_eq!(editor.title, "Hi");
-        assert_eq!(editor.cursor_col, 2);
-    }
-
-    #[test]
     fn char_insert_in_description() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         handle_editor_input(&mut editor, char_key('A'));
         handle_editor_input(&mut editor, char_key('B'));
         assert_eq!(editor.description(), "AB");
@@ -266,42 +248,21 @@ mod tests {
     fn ctrl_char_is_ignored() {
         let mut editor = new_editor();
         handle_editor_input(&mut editor, ctrl_char_key('c'));
-        assert_eq!(editor.title, "");
+        assert_eq!(editor.description(), "");
     }
 
     #[test]
     fn alt_char_is_ignored() {
         let mut editor = new_editor();
         handle_editor_input(&mut editor, key(KeyCode::Char('a'), KeyModifiers::ALT));
-        assert_eq!(editor.title, "");
+        assert_eq!(editor.description(), "");
     }
 
     // ── Backspace ───────────────────────────────────────────────────────
 
     #[test]
-    fn backspace_deletes_in_title() {
-        let mut editor = new_editor();
-        editor.title = "abc".to_string();
-        editor.cursor_col = 2;
-        handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(editor.title, "ac");
-        assert_eq!(editor.cursor_col, 1);
-    }
-
-    #[test]
-    fn backspace_at_start_of_title_is_noop() {
-        let mut editor = new_editor();
-        editor.title = "abc".to_string();
-        editor.cursor_col = 0;
-        handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE));
-        assert_eq!(editor.title, "abc");
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
     fn backspace_deletes_in_description() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         editor.set_description("hello");
         editor.cursor_row = 0;
         editor.cursor_col = 3;
@@ -313,30 +274,21 @@ mod tests {
     // ── Delete ──────────────────────────────────────────────────────────
 
     #[test]
-    fn delete_forward_in_title() {
+    fn delete_forward_in_description() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
+        editor.cursor_row = 0;
         editor.cursor_col = 1;
         handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE));
-        assert_eq!(editor.title, "ac");
-        assert_eq!(editor.cursor_col, 1);
-    }
-
-    #[test]
-    fn delete_at_end_of_title_is_noop() {
-        let mut editor = new_editor();
-        editor.title = "abc".to_string();
-        editor.cursor_col = 3; // at end
-        handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE));
-        assert_eq!(editor.title, "abc");
+        assert_eq!(editor.description(), "ac");
     }
 
     // ── Arrow keys ──────────────────────────────────────────────────────
 
     #[test]
-    fn left_arrow_moves_cursor_left_in_title() {
+    fn left_arrow_moves_cursor_left_in_description() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
         editor.cursor_col = 2;
         handle_editor_input(&mut editor, key(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(editor.cursor_col, 1);
@@ -351,9 +303,9 @@ mod tests {
     }
 
     #[test]
-    fn right_arrow_moves_cursor_right_in_title() {
+    fn right_arrow_moves_cursor_right_in_description() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
         editor.cursor_col = 1;
         handle_editor_input(&mut editor, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(editor.cursor_col, 2);
@@ -362,7 +314,7 @@ mod tests {
     #[test]
     fn right_arrow_does_not_exceed_length() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
         editor.cursor_col = 3; // at end
         handle_editor_input(&mut editor, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(editor.cursor_col, 3);
@@ -371,7 +323,7 @@ mod tests {
     #[test]
     fn home_moves_to_start_of_line() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
         editor.cursor_col = 2;
         handle_editor_input(&mut editor, key(KeyCode::Home, KeyModifiers::NONE));
         assert_eq!(editor.cursor_col, 0);
@@ -380,7 +332,7 @@ mod tests {
     #[test]
     fn end_moves_to_end_of_line() {
         let mut editor = new_editor();
-        editor.title = "abc".to_string();
+        editor.set_description("abc");
         editor.cursor_col = 0;
         handle_editor_input(&mut editor, key(KeyCode::End, KeyModifiers::NONE));
         assert_eq!(editor.cursor_col, 3);
@@ -389,7 +341,6 @@ mod tests {
     #[test]
     fn up_down_in_description() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         editor.set_description("line0\nline1\nline2");
         editor.cursor_row = 2;
         editor.cursor_col = 3;
@@ -419,18 +370,6 @@ mod tests {
         assert_eq!(editor.cursor_row, 2);
     }
 
-    #[test]
-    fn up_down_does_nothing_in_title_field() {
-        let mut editor = new_editor();
-        editor.title = "abc".to_string();
-        editor.cursor_row = 0;
-        // Up/Down should be no-ops in title field
-        handle_editor_input(&mut editor, key(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(editor.cursor_row, 0);
-        handle_editor_input(&mut editor, key(KeyCode::Down, KeyModifiers::NONE));
-        assert_eq!(editor.cursor_row, 0);
-    }
-
     // ── PageUp / PageDown scrolling ─────────────────────────────────────
 
     #[test]
@@ -452,9 +391,19 @@ mod tests {
     #[test]
     fn pagedown_increases_scroll_offset() {
         let mut editor = new_editor();
+        editor.desc_lines = (0..20).map(|i| format!("line {}", i)).collect();
         editor.scroll_offset = 0;
         handle_editor_input(&mut editor, key(KeyCode::PageDown, KeyModifiers::NONE));
         assert_eq!(editor.scroll_offset, 5);
+    }
+
+    #[test]
+    fn pagedown_clamps_at_last_line() {
+        let mut editor = new_editor();
+        editor.desc_lines = (0..5).map(|i| format!("line {}", i)).collect();
+        editor.scroll_offset = 0;
+        handle_editor_input(&mut editor, key(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(editor.scroll_offset, 4); // clamped to desc_lines.len() - 1
     }
 
     // ── Unmatched key returns None ──────────────────────────────────────
@@ -466,31 +415,25 @@ mod tests {
         assert_eq!(action, EditorAction::None);
     }
 
-    // ── Integration: type title, switch field, type description ─────────
+    // ── Integration: type description, switch field, type ───────────────
 
     #[test]
     fn full_editing_workflow() {
-        let mut editor = new_editor();
+        let mut editor = new_editor_with_columns();
 
-        // Type a title
+        // Type a description
         for ch in "My Task".chars() {
             handle_editor_input(&mut editor, char_key(ch));
         }
-        assert_eq!(editor.title, "My Task");
+        assert_eq!(editor.description(), "My Task");
 
-        // Enter to switch to description
-        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(editor.focused_field, EditorField::Description);
-
-        // Type description
-        for ch in "Do something".chars() {
-            handle_editor_input(&mut editor, char_key(ch));
-        }
-        assert_eq!(editor.description(), "Do something");
-
-        // Tab back to title
+        // Tab to column
         handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(editor.focused_field, EditorField::Title);
+        assert_eq!(editor.focused_field, EditorField::Column);
+
+        // Tab back to description
+        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(editor.focused_field, EditorField::Description);
 
         // First Esc shows warning (unsaved changes exist)
         let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE));
@@ -561,7 +504,7 @@ mod tests {
     #[test]
     fn backspace_sets_unsaved_changes() {
         let mut editor = new_editor();
-        editor.title = "ab".to_string();
+        editor.set_description("ab");
         editor.cursor_col = 2;
         handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE));
         assert!(editor.has_unsaved_changes);
@@ -570,7 +513,7 @@ mod tests {
     #[test]
     fn delete_forward_sets_unsaved_changes() {
         let mut editor = new_editor();
-        editor.title = "ab".to_string();
+        editor.set_description("ab");
         editor.cursor_col = 0;
         handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE));
         assert!(editor.has_unsaved_changes);
@@ -579,7 +522,6 @@ mod tests {
     #[test]
     fn newline_sets_unsaved_changes() {
         let mut editor = new_editor();
-        editor.focused_field = EditorField::Description;
         handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(editor.has_unsaved_changes);
     }

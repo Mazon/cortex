@@ -100,8 +100,6 @@ pub enum ToolState {
 /// A destructive action awaiting user confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmableAction {
-    /// Delete the task with the given ID.
-    DeleteTask(String),
     /// Delete the project with the given ID.
     DeleteProject(String),
 }
@@ -123,7 +121,6 @@ pub enum AppMode {
 /// Which field is focused in the task editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorField {
-    Title,
     Description,
     Column,
 }
@@ -306,18 +303,19 @@ pub struct Notification {
 /// Description text is stored as a `Vec<String>` of individual lines for O(1)
 /// per-line access during cursor movement and rendering. The joined text is
 /// cached and only recomputed when lines change.
+///
+/// The task title is auto-derived from the first line of the description
+/// (max 80 chars). There is no separate Title input field.
 #[derive(Debug, Clone)]
 pub struct TaskEditorState {
     /// `None` = creating new task, `Some(id)` = editing existing task.
     pub task_id: Option<String>,
-    /// Title text buffer.
-    pub title: String,
     /// Description stored as individual lines for O(1) per-line access.
     /// Always contains at least one element (empty string when description is empty).
     pub desc_lines: Vec<String>,
     /// Cached joined text; `None` when lines have been modified since last join.
     pub cached_description: Option<String>,
-    /// Currently focused field (title or description).
+    /// Currently focused field (description or column selector).
     pub focused_field: EditorField,
     /// Cursor row (0-indexed).
     pub cursor_row: usize,
@@ -334,24 +332,23 @@ pub struct TaskEditorState {
     /// Whether the "unsaved changes" discard warning is currently displayed.
     /// Set on first Esc with unsaved changes; cleared on any edit or save.
     pub discard_warning_shown: bool,
-    /// Inline validation error message displayed below the title field.
-    /// Set when the user tries to save with an empty title; cleared when
-    /// the user types in the title field.
+    /// Inline validation error message displayed below the description field.
+    /// Set when the user tries to save with an empty description; cleared when
+    /// the user types in the description field.
     pub validation_error: Option<String>,
     pub available_columns: Vec<String>,
     pub selected_column_index: usize,
 }
 
 impl TaskEditorState {
-    /// Creates empty state for a new task.
+    /// Creates empty state for a new task. Starts focused on Description.
     pub fn new_for_create(default_column: &str, available_columns: Vec<String>) -> Self {
         let selected_column_index = available_columns.iter().position(|c| c == default_column).unwrap_or(0);
         Self {
             task_id: None,
-            title: String::new(),
             desc_lines: vec![String::new()],
             cached_description: None,
-            focused_field: EditorField::Title,
+            focused_field: EditorField::Description,
             cursor_row: 0,
             cursor_col: 0,
             scroll_offset: 0,
@@ -365,7 +362,7 @@ impl TaskEditorState {
         }
     }
 
-    /// Pre-populates from an existing task for editing.
+    /// Pre-populates from an existing task for editing. Starts focused on Description.
     pub fn new_for_edit(task: &CortexTask) -> Self {
         let lines: Vec<String> = if task.description.is_empty() {
             vec![String::new()]
@@ -379,12 +376,11 @@ impl TaskEditorState {
         };
         Self {
             task_id: Some(task.id.clone()),
-            title: task.title.clone(),
             desc_lines: lines,
             cached_description: cached,
-            focused_field: EditorField::Title,
+            focused_field: EditorField::Description,
             cursor_row: 0,
-            cursor_col: task.title.chars().count(),
+            cursor_col: 0,
             scroll_offset: 0,
             column_id: Some(task.column.0.clone()),
             agent_type: task.agent_type.clone(),
@@ -425,7 +421,6 @@ impl TaskEditorState {
     /// Returns the text of the line the cursor is on.
     pub fn current_line(&self) -> &str {
         match self.focused_field {
-            EditorField::Title => &self.title,
             EditorField::Description => self
                 .desc_lines
                 .get(self.cursor_row)
@@ -447,22 +442,9 @@ impl TaskEditorState {
 
     /// Inserts a character at cursor position in the focused field.
     pub fn insert_char(&mut self, ch: char) {
-        self.mark_edited();
         match self.focused_field {
-            EditorField::Title => {
-                // Clear inline validation error when user edits the title.
-                self.validation_error = None;
-                // Convert char index to byte offset for String::insert.
-                let byte_pos = self
-                    .title
-                    .char_indices()
-                    .nth(self.cursor_col)
-                    .map(|(i, _)| i)
-                    .unwrap_or(self.title.len());
-                self.title.insert(byte_pos, ch);
-                self.cursor_col += 1; // char-based, so +1 is always correct
-            }
             EditorField::Description => {
+                self.mark_edited();
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
                 let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
                 let col = self.cursor_col.min(line_len);
@@ -476,6 +458,8 @@ impl TaskEditorState {
                     line.insert(byte_pos, ch);
                     self.cursor_col = col + 1;
                     self.cursor_row = row;
+                    // Clear inline validation error when user edits the description.
+                    self.validation_error = None;
                 }
                 self.invalidate_cache();
             }
@@ -485,22 +469,9 @@ impl TaskEditorState {
 
     /// Deletes character before cursor (backspace).
     pub fn delete_char_back(&mut self) {
-        self.mark_edited();
         match self.focused_field {
-            EditorField::Title => {
-                // Clear inline validation error when user edits the title.
-                self.validation_error = None;
-                if self.cursor_col > 0 {
-                    // Find byte range of the char at char index (cursor_col - 1).
-                    let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
-                    if let Some(&(byte_start, ch)) = char_indices.get(self.cursor_col - 1) {
-                        let byte_end = byte_start + ch.len_utf8();
-                        self.title.replace_range(byte_start..byte_end, "");
-                    }
-                    self.cursor_col -= 1;
-                }
-            }
             EditorField::Description => {
+                self.mark_edited();
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
                 let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
                 let col = self.cursor_col.min(line_len);
@@ -513,6 +484,8 @@ impl TaskEditorState {
                             line.replace_range(byte_start..byte_end, "");
                         }
                         self.cursor_col = col - 1;
+                        // Clear inline validation error when user edits the description.
+                        self.validation_error = None;
                     }
                 } else if row > 0 {
                     // Merge with previous line
@@ -521,6 +494,7 @@ impl TaskEditorState {
                     self.desc_lines[row - 1].push_str(&current);
                     self.cursor_row = row - 1;
                     self.cursor_col = prev_len;
+                    self.validation_error = None;
                 }
                 self.invalidate_cache();
             }
@@ -530,20 +504,9 @@ impl TaskEditorState {
 
     /// Deletes character at cursor (delete key).
     pub fn delete_char_forward(&mut self) {
-        self.mark_edited();
         match self.focused_field {
-            EditorField::Title => {
-                // Clear inline validation error when user edits the title.
-                self.validation_error = None;
-                if self.cursor_col < self.title.chars().count() {
-                    let char_indices: Vec<(usize, char)> = self.title.char_indices().collect();
-                    if let Some(&(byte_start, ch)) = char_indices.get(self.cursor_col) {
-                        let byte_end = byte_start + ch.len_utf8();
-                        self.title.replace_range(byte_start..byte_end, "");
-                    }
-                }
-            }
             EditorField::Description => {
+                self.mark_edited();
                 let row = self.cursor_row.min(self.desc_lines.len().saturating_sub(1));
                 let line_len = self.desc_lines.get(row).map_or(0, |l| l.chars().count());
                 let col = self.cursor_col.min(line_len);
@@ -557,10 +520,13 @@ impl TaskEditorState {
                             let byte_end = byte_start + ch.len_utf8();
                             line.replace_range(byte_start..byte_end, "");
                         }
+                        // Clear inline validation error when user edits the description.
+                        self.validation_error = None;
                     } else if row + 1 < self.desc_lines.len() {
                         // Merge with next line
                         let next = self.desc_lines.remove(row + 1);
                         self.desc_lines[row].push_str(&next);
+                        self.validation_error = None;
                     }
                 }
                 self.invalidate_cache();
@@ -597,21 +563,6 @@ impl TaskEditorState {
     /// Moves cursor in the given direction, clamped to valid positions.
     pub fn move_cursor(&mut self, direction: CursorDirection) {
         match self.focused_field {
-            EditorField::Title => match direction {
-                CursorDirection::Left => {
-                    self.cursor_col = self.cursor_col.saturating_sub(1);
-                }
-                CursorDirection::Right => {
-                    self.cursor_col = (self.cursor_col + 1).min(self.title.chars().count());
-                }
-                CursorDirection::Home => {
-                    self.cursor_col = 0;
-                }
-                CursorDirection::End => {
-                    self.cursor_col = self.title.chars().count();
-                }
-                _ => {}
-            },
             EditorField::Description => {
                 let num_lines = self.desc_lines.len();
                 let max_row = num_lines.saturating_sub(1);
@@ -676,8 +627,11 @@ impl TaskEditorState {
     }
 
     /// Returns (title, description) for saving.
+    /// Title is auto-derived from the first line of the description (max 80 chars).
     pub fn to_task_fields(&self) -> (String, String) {
-        (self.title.clone(), self.description())
+        let desc = self.description();
+        let title = derive_title_from_description(&desc);
+        (title, desc)
     }
 
     pub fn cycle_column(&mut self) {
@@ -861,79 +815,11 @@ impl Default for AppState {
 mod tests {
     use super::*;
 
-    // ── TaskEditorState: insert_char (Title) ─────────────────────────────
-
-    #[test]
-    fn insert_char_title_appends_at_end() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.insert_char('a');
-        editor.insert_char('b');
-        editor.insert_char('c');
-        assert_eq!(editor.title, "abc");
-        assert_eq!(editor.cursor_col, 3);
-    }
-
-    #[test]
-    fn insert_char_title_in_middle() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "acd".to_string();
-        editor.cursor_col = 1;
-        editor.insert_char('b');
-        assert_eq!(editor.title, "abcd");
-        assert_eq!(editor.cursor_col, 2);
-    }
-
-    #[test]
-    fn insert_char_title_at_beginning() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "bc".to_string();
-        editor.cursor_col = 0;
-        editor.insert_char('a');
-        assert_eq!(editor.title, "abc");
-        assert_eq!(editor.cursor_col, 1);
-    }
-
-    #[test]
-    fn insert_char_title_emoji_multibyte() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.insert_char('🎉');
-        editor.insert_char('🚀');
-        assert_eq!(editor.title, "🎉🚀");
-        assert_eq!(editor.cursor_col, 2); // char-based index
-    }
-
-    #[test]
-    fn insert_char_title_cjk_multibyte() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "你好".to_string();
-        editor.cursor_col = 1;
-        editor.insert_char('世');
-        assert_eq!(editor.title, "你世好");
-        assert_eq!(editor.cursor_col, 2);
-    }
-
-    #[test]
-    fn insert_char_title_clears_validation_error() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.validation_error = Some("Title cannot be empty".to_string());
-        editor.insert_char('x');
-        assert!(editor.validation_error.is_none());
-    }
-
-    #[test]
-    fn insert_char_title_marks_edited() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        assert!(!editor.has_unsaved_changes);
-        editor.insert_char('x');
-        assert!(editor.has_unsaved_changes);
-    }
-
     // ── TaskEditorState: insert_char (Description) ───────────────────────
 
     #[test]
     fn insert_char_description_appends_at_end() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.focused_field = EditorField::Description;
         editor.insert_char('a');
         editor.insert_char('b');
         assert_eq!(editor.desc_lines, vec!["ab"]);
@@ -944,7 +830,6 @@ mod tests {
     #[test]
     fn insert_char_description_multibyte() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.focused_field = EditorField::Description;
         editor.insert_char('🎉');
         assert_eq!(editor.desc_lines[0], "🎉");
         assert_eq!(editor.cursor_col, 1);
@@ -953,7 +838,6 @@ mod tests {
     #[test]
     fn insert_char_description_invalidates_cache() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.focused_field = EditorField::Description;
         editor.cached_description = Some("old".to_string());
         editor.insert_char('x');
         assert!(editor.cached_description.is_none());
@@ -962,7 +846,6 @@ mod tests {
     #[test]
     fn insert_char_description_on_second_line() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.focused_field = EditorField::Description;
         editor.desc_lines = vec!["line1".to_string(), "line2".to_string()];
         editor.cursor_row = 1;
         editor.cursor_col = 0;
@@ -970,6 +853,22 @@ mod tests {
         assert_eq!(editor.desc_lines[1], "Xline2");
         assert_eq!(editor.cursor_row, 1);
         assert_eq!(editor.cursor_col, 1);
+    }
+
+    #[test]
+    fn insert_char_description_clears_validation_error() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        editor.validation_error = Some("Description cannot be empty".to_string());
+        editor.insert_char('x');
+        assert!(editor.validation_error.is_none());
+    }
+
+    #[test]
+    fn insert_char_description_marks_edited() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        assert!(!editor.has_unsaved_changes);
+        editor.insert_char('x');
+        assert!(editor.has_unsaved_changes);
     }
 
     // ── TaskEditorState: insert_char (Column — no-op) ────────────────────
@@ -982,56 +881,6 @@ mod tests {
         editor.insert_char('x');
         // Column field doesn't accept char input — marks edited regardless
         assert!(editor.has_unsaved_changes || !has_unsaved);
-    }
-
-    // ── TaskEditorState: delete_char_back (Title) ────────────────────────
-
-    #[test]
-    fn delete_char_back_title_removes_last_char() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "abc".to_string();
-        editor.cursor_col = 3;
-        editor.delete_char_back();
-        assert_eq!(editor.title, "ab");
-        assert_eq!(editor.cursor_col, 2);
-    }
-
-    #[test]
-    fn delete_char_back_title_at_beginning_is_noop() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "abc".to_string();
-        editor.cursor_col = 0;
-        editor.delete_char_back();
-        assert_eq!(editor.title, "abc");
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
-    fn delete_char_back_title_multibyte_emoji() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "a🎉b".to_string();
-        editor.cursor_col = 2; // between 🎉 and b
-        editor.delete_char_back();
-        assert_eq!(editor.title, "ab");
-        assert_eq!(editor.cursor_col, 1);
-    }
-
-    #[test]
-    fn delete_char_back_title_empty_is_noop() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.delete_char_back();
-        assert_eq!(editor.title, "");
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
-    fn delete_char_back_title_clears_validation_error() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.validation_error = Some("error".to_string());
-        editor.title = "x".to_string();
-        editor.cursor_col = 1;
-        editor.delete_char_back();
-        assert!(editor.validation_error.is_none());
     }
 
     // ── TaskEditorState: delete_char_back (Description) ──────────────────
@@ -1106,51 +955,13 @@ mod tests {
         assert_eq!(editor.cursor_col, 0);
     }
 
-    // ── TaskEditorState: delete_char_forward (Title) ─────────────────────
-
     #[test]
-    fn delete_char_forward_title_removes_char_at_cursor() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "abc".to_string();
-        editor.cursor_col = 1; // between a and b
-        editor.delete_char_forward();
-        assert_eq!(editor.title, "ac");
-        assert_eq!(editor.cursor_col, 1); // cursor doesn't move
-    }
-
-    #[test]
-    fn delete_char_forward_title_at_end_is_noop() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "abc".to_string();
-        editor.cursor_col = 3;
-        editor.delete_char_forward();
-        assert_eq!(editor.title, "abc");
-    }
-
-    #[test]
-    fn delete_char_forward_title_empty_is_noop() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.delete_char_forward();
-        assert_eq!(editor.title, "");
-    }
-
-    #[test]
-    fn delete_char_forward_title_multibyte() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "a🎉b".to_string();
-        editor.cursor_col = 0; // before 'a'
-        editor.delete_char_forward();
-        assert_eq!(editor.title, "🎉b");
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
-    fn delete_char_forward_title_clears_validation_error() {
+    fn delete_char_back_description_clears_validation_error() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
         editor.validation_error = Some("error".to_string());
-        editor.title = "ab".to_string();
-        editor.cursor_col = 0;
-        editor.delete_char_forward();
+        editor.set_description("x");
+        editor.cursor_col = 1;
+        editor.delete_char_back();
         assert!(editor.validation_error.is_none());
     }
 
@@ -1238,13 +1049,12 @@ mod tests {
     }
 
     #[test]
-    fn insert_newline_on_title_field_is_noop() {
+    fn insert_newline_on_column_field_is_noop() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "hello".to_string();
-        editor.cursor_col = 3;
+        editor.focused_field = EditorField::Column;
+        editor.desc_lines = vec!["hello".to_string()];
         editor.insert_newline();
-        assert_eq!(editor.title, "hello");
-        assert_eq!(editor.cursor_col, 3);
+        assert_eq!(editor.desc_lines, vec!["hello"]);
     }
 
     #[test]
@@ -1256,65 +1066,6 @@ mod tests {
         editor.insert_newline();
         assert!(editor.has_unsaved_changes);
         assert!(editor.cached_description.is_none());
-    }
-
-    // ── TaskEditorState: move_cursor (Title) ─────────────────────────────
-
-    #[test]
-    fn move_cursor_title_left_clamps_to_zero() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.cursor_col = 0;
-        editor.move_cursor(CursorDirection::Left);
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
-    fn move_cursor_title_right_clamps_to_length() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "ab".to_string();
-        editor.cursor_col = 2;
-        editor.move_cursor(CursorDirection::Right);
-        assert_eq!(editor.cursor_col, 2);
-    }
-
-    #[test]
-    fn move_cursor_title_home_goes_to_start() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "hello".to_string();
-        editor.cursor_col = 3;
-        editor.move_cursor(CursorDirection::Home);
-        assert_eq!(editor.cursor_col, 0);
-    }
-
-    #[test]
-    fn move_cursor_title_end_goes_to_end() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "hello".to_string();
-        editor.cursor_col = 0;
-        editor.move_cursor(CursorDirection::End);
-        assert_eq!(editor.cursor_col, 5);
-    }
-
-    #[test]
-    fn move_cursor_title_up_down_are_noop() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.cursor_row = 0;
-        editor.move_cursor(CursorDirection::Up);
-        editor.move_cursor(CursorDirection::Down);
-        assert_eq!(editor.cursor_row, 0);
-    }
-
-    #[test]
-    fn move_cursor_title_right_increments() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "abc".to_string();
-        editor.cursor_col = 0;
-        editor.move_cursor(CursorDirection::Right);
-        assert_eq!(editor.cursor_col, 1);
-        editor.move_cursor(CursorDirection::Right);
-        assert_eq!(editor.cursor_col, 2);
-        editor.move_cursor(CursorDirection::Right);
-        assert_eq!(editor.cursor_col, 3);
     }
 
     // ── TaskEditorState: move_cursor (Description) ───────────────────────
@@ -1486,13 +1237,6 @@ mod tests {
     // ── TaskEditorState: current_line ────────────────────────────────────
 
     #[test]
-    fn current_line_title() {
-        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "hello world".to_string();
-        assert_eq!(editor.current_line(), "hello world");
-    }
-
-    #[test]
     fn current_line_description() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
         editor.focused_field = EditorField::Description;
@@ -1511,13 +1255,29 @@ mod tests {
     // ── TaskEditorState: to_task_fields ──────────────────────────────────
 
     #[test]
-    fn to_task_fields_returns_title_and_description() {
+    fn to_task_fields_derives_title_from_description() {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
-        editor.title = "My Task".to_string();
-        editor.set_description("line1\nline2");
+        editor.set_description("My Task Title\nline2");
         let (title, desc) = editor.to_task_fields();
-        assert_eq!(title, "My Task");
-        assert_eq!(desc, "line1\nline2");
+        assert_eq!(title, "My Task Title");
+        assert_eq!(desc, "My Task Title\nline2");
+    }
+
+    #[test]
+    fn to_task_fields_truncates_long_title() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        let long_line = "x".repeat(100);
+        editor.set_description(&long_line);
+        let (title, _) = editor.to_task_fields();
+        assert_eq!(title.len(), 80);
+    }
+
+    #[test]
+    fn to_task_fields_empty_description() {
+        let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        let (title, desc) = editor.to_task_fields();
+        assert_eq!(title, "");
+        assert_eq!(desc, "");
     }
 
     // ── TaskEditorState: new_for_edit ────────────────────────────────────
@@ -1545,9 +1305,9 @@ mod tests {
         };
         let editor = TaskEditorState::new_for_edit(&task);
         assert_eq!(editor.task_id, Some("task-1".to_string()));
-        assert_eq!(editor.title, "Existing Task");
         assert_eq!(editor.desc_lines, vec!["Line 1", "Line 2"]);
-        assert_eq!(editor.cursor_col, "Existing Task".chars().count());
+        assert_eq!(editor.cursor_col, 0);
+        assert_eq!(editor.focused_field, EditorField::Description);
         assert!(!editor.has_unsaved_changes);
     }
 
@@ -1577,6 +1337,14 @@ mod tests {
         assert!(editor.cached_description.is_none());
     }
 
+    // ── TaskEditorState: new_for_create starts on Description ────────────
+
+    #[test]
+    fn new_for_create_starts_on_description() {
+        let editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
+        assert_eq!(editor.focused_field, EditorField::Description);
+    }
+
     // ── TaskEditorState: cycle_column ────────────────────────────────────
 
     #[test]
@@ -1596,6 +1364,62 @@ mod tests {
         let mut editor = TaskEditorState::new_for_create("todo", vec!["todo".to_string()]);
         editor.cycle_column();
         assert_eq!(editor.column_id, Some("todo".to_string()));
+    }
+
+    // ── derive_title_from_description ────────────────────────────────────
+
+    #[test]
+    fn derive_title_simple() {
+        assert_eq!(derive_title_from_description("My Task"), "My Task");
+    }
+
+    #[test]
+    fn derive_title_first_line_only() {
+        assert_eq!(derive_title_from_description("Line 1\nLine 2\nLine 3"), "Line 1");
+    }
+
+    #[test]
+    fn derive_title_truncates_at_80() {
+        let long = "x".repeat(100);
+        let title = derive_title_from_description(&long);
+        assert_eq!(title.len(), 80);
+    }
+
+    #[test]
+    fn derive_title_empty_description() {
+        assert_eq!(derive_title_from_description(""), "");
+    }
+
+    #[test]
+    fn derive_title_skips_empty_lines() {
+        assert_eq!(derive_title_from_description("\n\nActual Title\nMore"), "Actual Title");
+    }
+
+    #[test]
+    fn derive_title_whitespace_only_first_line() {
+        assert_eq!(derive_title_from_description("   \nActual Title"), "Actual Title");
+    }
+
+    // ── display_title_for_task ───────────────────────────────────────────
+
+    #[test]
+    fn display_title_short() {
+        let task = make_test_task("My Task", "My Task\nMore details");
+        assert_eq!(display_title_for_task(&task, 100), "My Task");
+    }
+
+    #[test]
+    fn display_title_truncates() {
+        let task = make_test_task("Long Title", &format!("{}\nMore", "x".repeat(50)));
+        let display = display_title_for_task(&task, 20);
+        assert!(display.ends_with("..."));
+        assert!(display.len() <= 23); // 20 + "..."
+    }
+
+    #[test]
+    fn display_title_empty_description() {
+        let task = make_test_task("", "");
+        assert_eq!(display_title_for_task(&task, 50), "");
     }
 
     // ── extract_tool_summary ─────────────────────────────────────────────
@@ -1684,6 +1508,57 @@ mod tests {
     #[test]
     fn extract_tool_summary_empty_json() {
         assert_eq!(extract_tool_summary("read", "{}"), "...");
+    }
+
+    // ── Helper ───────────────────────────────────────────────────────────
+
+    fn make_test_task(title: &str, description: &str) -> CortexTask {
+        CortexTask {
+            id: "task-1".to_string(),
+            number: 1,
+            title: title.to_string(),
+            description: description.to_string(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        }
+    }
+}
+
+/// Derive a task title from the first line of a description string.
+/// Returns the first non-empty line, truncated to 80 characters.
+pub fn derive_title_from_description(description: &str) -> String {
+    description
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.trim())
+        .unwrap_or("")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+/// Get a display title for a task — first non-empty line of description,
+/// truncated to fit within `max_len` characters.
+pub fn display_title_for_task(task: &CortexTask, max_len: usize) -> String {
+    let title = derive_title_from_description(&task.description);
+    if title.chars().count() > max_len {
+        format!(
+            "{}...",
+            title.chars().take(max_len.saturating_sub(3)).collect::<String>()
+        )
+    } else {
+        title
     }
 }
 

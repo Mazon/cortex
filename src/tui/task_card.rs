@@ -34,18 +34,11 @@ pub fn render_task_card(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Line 1: #<number> <title> (truncated)
+    // Line 1: #<number> <first line of description> (truncated)
+    let prefix_len = format!("#{} ", task.number).chars().count();
     let max_title_len = inner.width as usize;
-    let title_line = format!("#{} {}", task.number, task.title);
-    let truncated_title = if title_line.chars().count() > max_title_len {
-        let truncated: String = title_line
-            .chars()
-            .take(max_title_len.saturating_sub(3))
-            .collect();
-        format!("{}...", truncated)
-    } else {
-        title_line
-    };
+    let display_title = crate::state::types::display_title_for_task(task, max_title_len.saturating_sub(prefix_len));
+    let title_line = format!("#{} {}", task.number, display_title);
 
     // Line 2: status text — use theme colors
     let status_icon = task.agent_status.icon();
@@ -180,7 +173,7 @@ pub fn render_task_card(
     if inner.height >= 1 {
         // Line 1 (title) — always render if we have any space
         let title_para = Paragraph::new(Span::styled(
-            truncated_title,
+            title_line,
             Style::default().fg(Color::White),
         ));
         f.render_widget(

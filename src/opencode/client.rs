@@ -215,12 +215,13 @@ impl OpenCodeClient {
     }
 
     /// Build a prompt string for an agent working on a task.
-    /// Includes the task number, title, description, plan output, and optional context.
+    /// Uses the description as the primary content, with task number for context.
+    /// Includes plan output and optional context if available.
     pub fn build_prompt_for_agent(task: &CortexTask, agent: &str, context: Option<&str>) -> String {
         let mut parts = Vec::new();
-        parts.push(format!("[{}] Working on task #{}: {}", agent, task.number, task.title));
+        parts.push(format!("[{}] Working on task #{}", agent, task.number));
         if !task.description.is_empty() {
-            parts.push(format!("\nDescription:\n{}", task.description));
+            parts.push(format!("\n{}", task.description));
         }
         if let Some(plan) = &task.plan_output {
             if !plan.is_empty() {

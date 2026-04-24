@@ -57,8 +57,9 @@ pub fn render_task_detail(
         .unwrap_or(false);
     let permission_rows: u16 = if has_permissions { 2 } else { 0 };
 
-    // Outer block with task title
-    let title = format!(" #{}: {} ", task.number, task.title);
+    // Outer block with task title (derived from description)
+    let display_title = crate::state::types::derive_title_from_description(&task.description);
+    let title = format!(" #{}: {} ", task.number, display_title);
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -161,7 +162,15 @@ fn render_metadata_line(
     let elapsed = format_elapsed_time(task.entered_column_at);
     let agent_name = task.agent_type.as_deref().unwrap_or("none");
 
+    // Task number badge
+    let badge = format!("#{}", task.number);
+    let badge_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
     let mut spans: Vec<Span> = vec![
+        Span::styled(badge, badge_style),
+        Span::raw("  "),
         Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{} ", status_icon),
@@ -222,22 +231,21 @@ fn render_description_block(f: &mut Frame, area: Rect, task: &CortexTask) {
         return;
     }
 
-    let desc_text = if task.description.is_empty() {
-        "(no description)"
+    if task.description.is_empty() {
+        // Styled placeholder for empty description
+        let placeholder = Paragraph::new(Span::styled(
+            "  (no description)",
+            Style::default()
+                .fg(Color::Rgb(100, 100, 120))
+                .add_modifier(Modifier::ITALIC),
+        ));
+        f.render_widget(placeholder, inner);
     } else {
-        &task.description
-    };
-
-    let style = if task.description.is_empty() {
-        Style::default().fg(Color::DarkGray)
-    } else {
-        Style::default().fg(Color::White)
-    };
-
-    let para = Paragraph::new(desc_text)
-        .style(style)
-        .wrap(Wrap { trim: true });
-    f.render_widget(para, inner);
+        let para = Paragraph::new(task.description.as_str())
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: true });
+        f.render_widget(para, inner);
+    }
 }
 
 /// Render the streaming output block with messages.
@@ -394,7 +402,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
 fn build_streaming_lines(session: &TaskDetailSession) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    for msg in &session.messages {
+    for (msg_idx, msg) in session.messages.iter().enumerate() {
         for part in &msg.parts {
             match part {
                 TaskMessagePart::Text { text } => {
@@ -411,6 +419,13 @@ fn build_streaming_lines(session: &TaskDetailSession) -> Vec<Line<'static>> {
                             Span::styled(prefix.to_owned(), prefix_style),
                             Span::styled(line.to_string(), Style::default().fg(Color::White)),
                         ]));
+                    }
+                    // Add separator after each message for readability
+                    if msg_idx + 1 < session.messages.len() {
+                        lines.push(Line::from(Span::styled(
+                            "  ─────────────────────────────────────────",
+                            Style::default().fg(Color::Rgb(60, 64, 80)),
+                        )));
                     }
                 }
                 TaskMessagePart::Tool {
@@ -456,16 +471,21 @@ fn build_streaming_lines(session: &TaskDetailSession) -> Vec<Line<'static>> {
                 TaskMessagePart::StepStart { .. } => {
                     lines.push(Line::from(Span::styled(
                         "  ── step start ──",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Rgb(60, 64, 80)),
                     )));
                 }
                 TaskMessagePart::StepFinish { .. } => {
                     lines.push(Line::from(Span::styled(
                         "  ── step done ──",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Rgb(60, 64, 80)),
                     )));
                 }
                 TaskMessagePart::Reasoning { text } => {
+                    // Add separator before reasoning block
+                    lines.push(Line::from(Span::styled(
+                        "  ── reasoning ──",
+                        Style::default().fg(Color::Rgb(80, 60, 100)),
+                    )));
                     for line in text.lines() {
                         lines.push(Line::from(vec![
                             Span::styled("  💭 ".to_owned(), Style::default().fg(Color::Magenta)),
