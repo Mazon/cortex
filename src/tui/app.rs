@@ -693,7 +693,19 @@ impl App {
                                         &self.config.opencode,
                                     );
                                     return; // Lock already dropped
+                                } else {
+                                    state.set_notification(
+                                        "No OpenCode client for this project".to_string(),
+                                        crate::state::types::NotificationVariant::Warning,
+                                        3000,
+                                    );
                                 }
+                            } else {
+                                state.set_notification(
+                                    "No active project — agent dispatch skipped".to_string(),
+                                    crate::state::types::NotificationVariant::Warning,
+                                    3000,
+                                );
                             }
                         }
                     }
@@ -1187,7 +1199,19 @@ impl App {
                                                 &self.config.columns,
                                                 &self.config.opencode,
                                             );
+                                        } else {
+                                            state.set_notification(
+                                                "No OpenCode client for this project".to_string(),
+                                                crate::state::types::NotificationVariant::Warning,
+                                                3000,
+                                            );
                                         }
+                                    } else {
+                                        state.set_notification(
+                                            "No active project — agent dispatch skipped".to_string(),
+                                            crate::state::types::NotificationVariant::Warning,
+                                            3000,
+                                        );
                                     }
                                 }
                             }
