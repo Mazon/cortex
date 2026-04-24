@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::OpenCodeClient;
-use crate::state::types::{AgentStatus, AppState, KanbanColumn};
+use crate::state::types::{AppState, KanbanColumn};
 
 /// Called when a task is moved to a new column.
 /// Starts an agent if the column has one configured.
