@@ -60,6 +60,11 @@ fn build_help_text(kb: &KeybindingConfig) -> String {
         "   {:<16} Rename active project",
         format_combo(&kb.rename_project)
     );
+    let _ = writeln!(
+        s,
+        "   {:<16} Delete active project",
+        format_combo(&kb.delete_project)
+    );
 
     let _ = writeln!(s);
     let _ = writeln!(s, " Kanban Keys");
