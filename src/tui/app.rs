@@ -671,7 +671,30 @@ impl App {
                 let target_idx = current_col_idx as i32 + direction;
                 if target_idx >= 0 && (target_idx as usize) < visible.len() {
                     let target_col = visible[target_idx as usize].clone();
-                    state.move_task(&tid, crate::state::types::KanbanColumn(target_col));
+                    state.move_task(&tid, crate::state::types::KanbanColumn(target_col.clone()));
+
+                    // Trigger orchestration engine if the target column has an agent configured
+                    if let Some(_agent) = self.config.columns.agent_for_column(&target_col) {
+                        let already_running = state.tasks.get(&tid)
+                            .map(|t| matches!(t.agent_status, crate::state::types::AgentStatus::Running))
+                            .unwrap_or(false);
+                        if !already_running {
+                            if let Some(project_id) = state.active_project_id.clone() {
+                                if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                    drop(state); // Release lock before spawning async
+                                    crate::orchestration::engine::on_task_moved(
+                                        &tid,
+                                        &crate::state::types::KanbanColumn(target_col),
+                                        &self.state,
+                                        &client,
+                                        &self.config.columns,
+                                        &self.config.opencode,
+                                    );
+                                    return; // Lock already dropped
+                                }
+                            }
+                        }
+                    }
                 } else {
                     let msg = if direction > 0 {
                         "Already at the last column"
