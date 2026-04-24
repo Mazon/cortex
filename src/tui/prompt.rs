@@ -128,9 +128,25 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
                 .find(|p| p.id == *project_id)
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| project_id.clone());
+
+            let task_count = state
+                .tasks
+                .values()
+                .filter(|t| t.project_id == *project_id)
+                .count();
+            let task_info = if task_count > 0 {
+                format!(
+                    " ({} task{} will be deleted)",
+                    task_count,
+                    if task_count == 1 { "" } else { "s" }
+                )
+            } else {
+                String::new()
+            };
+
             (
                 " Delete Project ".to_string(),
-                format!("Delete project \"{}\"?", project_name),
+                format!("Delete project \"{}\"?{}", project_name, task_info),
                 "y: delete  |  n/Esc: cancel".to_string(),
             )
         }
