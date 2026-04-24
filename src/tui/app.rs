@@ -995,6 +995,7 @@ impl App {
                                 .or_insert_with(crate::state::types::TaskDetailSession::default);
                             entry.session_id = Some(session_id.clone());
                             entry.task_id = task_id.clone();
+                            entry.streaming_text = None; // Clear to avoid double-rendering with messages
                             entry.messages = messages;
                             entry.render_version += 1;
                             tracing::debug!(
