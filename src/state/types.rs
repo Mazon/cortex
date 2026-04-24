@@ -265,6 +265,11 @@ pub struct UIState {
     /// `None` means auto-scroll (always show the bottom). `Some(n)` means the
     /// user has manually scrolled and the view is pinned to offset `n`.
     pub user_scroll_offset: Option<usize>,
+    /// Stack of session references for drill-down navigation.
+    /// Bottom = top-level task, top = currently viewed session.
+    /// When empty, the task detail view shows the parent task's output.
+    /// When non-empty, the task detail view shows the top-of-stack session's output.
+    pub session_nav_stack: Vec<SessionRef>,
 }
 
 impl Default for UIState {
@@ -283,6 +288,7 @@ impl Default for UIState {
             task_editor: None,
             confirm_action: None,
             user_scroll_offset: None,
+            session_nav_stack: Vec::new(),
         }
     }
 }
@@ -745,6 +751,46 @@ pub struct TaskDetailSession {
     pub render_version: u64,
 }
 
+/// A subagent session spawned by a parent task's agent.
+///
+/// When a parent agent spawns a subagent (e.g., via `/do`), the OpenCode
+/// server creates a new session. The parent's message stream includes
+/// `TaskMessagePart::Agent { id, agent }` parts that identify the
+/// subagent session. Cortex tracks these relationships so users can
+/// drill down into subagent output via `ctrl+x`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentSession {
+    /// The subagent's OpenCode session ID.
+    pub session_id: String,
+    /// The agent name (e.g., "do", "explore").
+    pub agent_name: String,
+    /// The ID of the parent task that spawned this subagent.
+    pub parent_task_id: String,
+    /// The ID of the parent session that spawned this subagent.
+    pub parent_session_id: String,
+    /// Nesting depth (0 = top-level subagent, 1 = sub-subagent, etc.).
+    pub depth: u32,
+    /// Whether the subagent session is still active.
+    pub active: bool,
+}
+
+/// A reference to a session in the drill-down navigation stack.
+///
+/// Used by the UI to track the user's navigation path when drilling
+/// into subagent sessions. The stack bottom is always the top-level
+/// task; the stack top is the currently viewed session.
+#[derive(Debug, Clone)]
+pub struct SessionRef {
+    /// Task ID (for breadcrumb display).
+    pub task_id: String,
+    /// Session ID.
+    pub session_id: String,
+    /// Display label (e.g., "Task #3", "planning agent", "do agent").
+    pub label: String,
+    /// Nesting depth.
+    pub depth: u32,
+}
+
 // ─── Top-Level State ──────────────────────────────────────────────────────
 
 /// The single source of truth for all application state.
@@ -780,6 +826,16 @@ pub struct AppState {
     /// Maps `task_id → (render_version, lines)`. Only rebuild lines when
     /// the session's `render_version` has changed.
     pub cached_streaming_lines: HashMap<String, (u64, Vec<ratatui::prelude::Line<'static>>)>,
+    /// Subagent sessions keyed by parent task_id.
+    /// Each parent task can have multiple subagent sessions (e.g., a
+    /// planning agent that spawns multiple `do` agents).
+    pub subagent_sessions: HashMap<String, Vec<SubagentSession>>,
+    /// Reverse index: subagent session_id → parent task_id.
+    /// Used to route SSE events for child sessions to the correct parent.
+    pub subagent_to_parent: HashMap<String, String>,
+    /// Session detail data for drilled-down subagents (lazy-loaded).
+    /// Keyed by subagent session_id.
+    pub subagent_session_data: HashMap<String, TaskDetailSession>,
     /// Dirty flag for persistence — set when state changes need to be saved.
     pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Dirty flag for render optimization — set when state changes,
@@ -788,6 +844,12 @@ pub struct AppState {
     /// Set of task IDs that have been modified since the last save.
     /// Used by `save_state` to skip writing unchanged tasks to the database.
     pub dirty_tasks: HashSet<String>,
+    /// Set of task IDs that have been deleted from in-memory state but not yet
+    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
+    pub deleted_tasks: HashSet<String>,
+    /// Set of project IDs that have been removed from in-memory state but not yet
+    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
+    pub deleted_projects: HashSet<String>,
 }
 
 impl Default for AppState {
@@ -806,9 +868,14 @@ impl Default for AppState {
             session_to_task: HashMap::new(),
             task_sessions: HashMap::new(),
             cached_streaming_lines: HashMap::new(),
+            subagent_sessions: HashMap::new(),
+            subagent_to_parent: HashMap::new(),
+            subagent_session_data: HashMap::new(),
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dirty_tasks: HashSet::new(),
+            deleted_tasks: HashSet::new(),
+            deleted_projects: HashSet::new(),
         }
     }
 }

@@ -23,6 +23,9 @@ impl AppState {
     pub fn remove_project(&mut self, project_id: &str) {
         self.projects.retain(|p| p.id != project_id);
 
+        // Track this project for deletion from the database
+        self.deleted_projects.insert(project_id.to_string());
+
         // Collect task IDs for this project before removing them
         let project_task_ids: Vec<String> = self
             .tasks
@@ -30,6 +33,11 @@ impl AppState {
             .filter(|t| t.project_id == project_id)
             .map(|t| t.id.clone())
             .collect();
+
+        // Track tasks for deletion from the database
+        for task_id in &project_task_ids {
+            self.deleted_tasks.insert(task_id.clone());
+        }
 
         // Remove tasks and clean up associated data
         for task_id in &project_task_ids {
@@ -43,6 +51,13 @@ impl AppState {
             self.task_sessions.remove(task_id);
             self.cached_streaming_lines.remove(task_id);
             self.dirty_tasks.remove(task_id);
+            // Clean up subagent data for each task in this project
+            if let Some(sessions) = self.subagent_sessions.remove(task_id) {
+                for sub in &sessions {
+                    self.subagent_to_parent.remove(&sub.session_id);
+                    self.subagent_session_data.remove(&sub.session_id);
+                }
+            }
         }
 
         // Remove tasks
@@ -248,6 +263,20 @@ impl AppState {
             self.task_sessions.remove(task_id);
             // Remove from dirty set (task no longer exists)
             self.dirty_tasks.remove(task_id);
+            // Track deletion for persistence — save_state will DELETE from DB
+            self.deleted_tasks.insert(task_id.to_string());
+            // Clean up subagent data for this task
+            if let Some(sessions) = self.subagent_sessions.remove(task_id) {
+                for sub in &sessions {
+                    self.subagent_to_parent.remove(&sub.session_id);
+                    self.subagent_session_data.remove(&sub.session_id);
+                }
+            }
+            // Also clean up subagent session data keyed by this task's own session_id
+            // (if this task was a subagent of another)
+            if let Some(ref sid) = session_id {
+                self.subagent_session_data.remove(sid);
+            }
             self.mark_dirty();
             session_id
         } else {
@@ -421,10 +450,72 @@ impl AppState {
     }
 
     /// Close the task detail panel and return focus to the kanban board.
+    /// Clears the drill-down navigation stack.
     pub fn close_task_detail(&mut self) {
         self.ui.viewing_task_id = None;
         self.ui.focused_panel = FocusedPanel::Kanban;
         self.ui.user_scroll_offset = None;
+        self.ui.session_nav_stack.clear();
+    }
+
+    // ─── Subagent Drill-Down Navigation ──────────────────────────────────
+
+    /// Push a subagent session onto the drill-down navigation stack.
+    ///
+    /// When the user drills into a subagent (e.g., via `ctrl+x`), the
+    /// session reference is pushed onto the stack. The task detail view
+    /// then renders the top-of-stack session's output instead of the
+    /// parent task's output.
+    pub fn push_subagent_drilldown(&mut self, session_ref: SessionRef) {
+        self.ui.session_nav_stack.push(session_ref);
+        // Reset scroll to auto-scroll when drilling into a new session
+        self.ui.user_scroll_offset = None;
+        self.mark_render_dirty();
+    }
+
+    /// Pop the top session from the drill-down navigation stack.
+    ///
+    /// Returns the popped `SessionRef` if the stack was non-empty,
+    /// or `None` if already at the top level (viewing the parent task).
+    pub fn pop_subagent_drilldown(&mut self) -> Option<SessionRef> {
+        let popped = self.ui.session_nav_stack.pop();
+        if popped.is_some() {
+            // Reset scroll to auto-scroll when navigating back
+            self.ui.user_scroll_offset = None;
+            self.mark_render_dirty();
+        }
+        popped
+    }
+
+    /// Clear the entire drill-down navigation stack.
+    pub fn clear_subagent_drilldown(&mut self) {
+        self.ui.session_nav_stack.clear();
+        self.ui.user_scroll_offset = None;
+    }
+
+    /// Get the session ID of the currently drilled-down subagent, if any.
+    ///
+    /// Returns `None` if the stack is empty (viewing the parent task).
+    pub fn get_drilldown_session_id(&self) -> Option<&str> {
+        self.ui.session_nav_stack.last().map(|r| r.session_id.as_str())
+    }
+
+    /// Check if the user is currently drilled into a subagent.
+    pub fn is_drilled_into_subagent(&self) -> bool {
+        !self.ui.session_nav_stack.is_empty()
+    }
+
+    /// Get the navigation stack as a breadcrumb string (e.g., "Task #3 > planning > do").
+    pub fn get_drilldown_breadcrumb(&self) -> String {
+        if self.ui.session_nav_stack.is_empty() {
+            return String::new();
+        }
+        self.ui
+            .session_nav_stack
+            .iter()
+            .map(|r| r.label.as_str())
+            .collect::<Vec<&str>>()
+            .join(" > ")
     }
 
     // ─── Task Editor Mode ────────────────────────────────────────────────
@@ -669,8 +760,112 @@ impl AppState {
 
     // ─── Session Data ────────────────────────────────────────────────────
 
+    /// Register a subagent session detected from a `TaskMessagePart::Agent`.
+    ///
+    /// When a parent agent spawns a subagent, the parent's message stream
+    /// includes `Agent { id, agent }` parts. This method records the
+    /// parent→child relationship so the UI can offer drill-down navigation.
+    ///
+    /// If the subagent session is already registered for this parent task,
+    /// this is a no-op (idempotent).
+    pub fn register_subagent_session(
+        &mut self,
+        parent_task_id: &str,
+        session_id: &str,
+        agent_name: &str,
+    ) {
+        // Skip if already registered
+        if self.subagent_to_parent.contains_key(session_id) {
+            return;
+        }
+
+        let parent_session_id = self
+            .tasks
+            .get(parent_task_id)
+            .and_then(|t| t.session_id.clone())
+            .unwrap_or_default();
+
+        // Calculate depth based on parent chain
+        let depth = if parent_session_id.is_empty() {
+            1
+        } else {
+            // If the parent session is itself a subagent, find its depth
+            self.subagent_to_parent
+                .get(&parent_session_id)
+                .and_then(|ptid| self.subagent_sessions.get(ptid))
+                .and_then(|sessions| sessions.iter().find(|s| s.session_id == parent_session_id).map(|s| s.depth))
+                .map(|d| d + 1)
+                .unwrap_or(1)
+        };
+
+        let subagent = SubagentSession {
+            session_id: session_id.to_string(),
+            agent_name: agent_name.to_string(),
+            parent_task_id: parent_task_id.to_string(),
+            parent_session_id,
+            depth,
+            active: true,
+        };
+
+        // Store under parent task
+        self.subagent_sessions
+            .entry(parent_task_id.to_string())
+            .or_default()
+            .push(subagent.clone());
+
+        // Reverse index: child session → parent task
+        self.subagent_to_parent
+            .insert(session_id.to_string(), parent_task_id.to_string());
+
+        tracing::debug!(
+            "Registered subagent session {} (agent: {}) under task {} (depth: {})",
+            session_id,
+            agent_name,
+            parent_task_id,
+            depth,
+        );
+    }
+
+    /// Mark a subagent session as inactive (completed or errored).
+    pub fn mark_subagent_inactive(&mut self, session_id: &str) {
+        if let Some(parent_task_id) = self.subagent_to_parent.get(session_id).cloned() {
+            if let Some(sessions) = self.subagent_sessions.get_mut(&parent_task_id) {
+                for sub in sessions.iter_mut() {
+                    if sub.session_id == session_id {
+                        sub.active = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get the parent task ID for a subagent session.
+    pub fn get_parent_task_for_subagent(&self, session_id: &str) -> Option<&str> {
+        self.subagent_to_parent.get(session_id).map(|s| s.as_str())
+    }
+
+    /// Get all subagent sessions for a parent task.
+    pub fn get_subagent_sessions(&self, parent_task_id: &str) -> &[SubagentSession] {
+        self.subagent_sessions
+            .get(parent_task_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Replace the message history for a task's session.
+    /// Also scans for `TaskMessagePart::Agent` entries and registers
+    /// subagent sessions so they can be navigated via drill-down.
     pub fn update_session_messages(&mut self, task_id: &str, messages: Vec<TaskMessage>) {
+        // Register any subagent sessions found in the message parts
+        for msg in &messages {
+            for part in &msg.parts {
+                if let TaskMessagePart::Agent { id, agent } = part {
+                    self.register_subagent_session(task_id, id, agent);
+                }
+            }
+        }
+
         let session = self
             .task_sessions
             .entry(task_id.to_string())
@@ -768,9 +963,38 @@ impl AppState {
 
     // ─── SSE Processing Helpers ──────────────────────────────────────────
 
+    /// Truncate streaming text from the beginning to enforce the cap.
+    /// Keeps the most recent content (tail of the buffer).
+    /// Handles UTF-8 boundary safety.
+    fn enforce_streaming_cap(text: &mut String) {
+        if text.len() <= STREAMING_TEXT_CAP_BYTES {
+            return;
+        }
+        let excess = text.len() - STREAMING_TEXT_CAP_BYTES;
+        let mut split_at = excess;
+        while split_at < text.len() && !text.is_char_boundary(split_at) {
+            split_at += 1;
+        }
+        if split_at < text.len() {
+            let _ = text.drain(..split_at);
+        }
+    }
+
     /// Handle a `SessionStatus` SSE event — map the status string to
     /// [`AgentStatus`] and update the corresponding task.
+    /// Also marks subagent sessions as inactive when they complete.
     pub fn process_session_status(&mut self, session_id: &str, status: &str) {
+        // Check if this is a subagent session completing
+        if matches!(status, "complete" | "completed" | "error") {
+            self.mark_subagent_inactive(session_id);
+        }
+
+        // Route to parent task if this is a subagent session
+        if let Some(parent_task_id) = self.get_parent_task_for_subagent(session_id).map(|s| s.to_string()) {
+            self.process_subagent_status(session_id, &parent_task_id, status);
+            return;
+        }
+
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
             .map(|s| s.to_string())
@@ -786,8 +1010,19 @@ impl AppState {
 
     /// Handle a `SessionIdle` SSE event — mark the task as complete
     /// and show a success notification.
+    /// Also marks any subagent session as inactive.
     /// Returns the task ID if a task was found and marked complete, `None` otherwise.
     pub fn process_session_idle(&mut self, session_id: &str) -> Option<String> {
+        // Mark subagent as inactive if this is a child session
+        self.mark_subagent_inactive(session_id);
+
+        // Route to parent task if this is a subagent session
+        if let Some(parent) = self.get_parent_task_for_subagent(session_id) {
+            let parent_task_id = parent.to_string();
+            self.process_subagent_idle(session_id, &parent_task_id);
+            return None; // Don't trigger auto-progression for subagent sessions
+        }
+
         self.get_task_id_by_session(session_id)
             .map(|s| s.to_string())
             .map(|task_id| {
@@ -815,7 +1050,17 @@ impl AppState {
     /// streaming buffer for the corresponding task's session.
     /// When the buffer exceeds `STREAMING_TEXT_CAP_BYTES`, old text
     /// is truncated from the beginning (keeping the most recent content).
+    ///
+    /// If the session_id belongs to a subagent session, the delta is
+    /// routed to the subagent's session data in `subagent_session_data`.
     pub fn process_message_part_delta(&mut self, session_id: &str, delta: &str) {
+        // Route to subagent session data if this is a child session
+        if let Some(parent) = self.get_parent_task_for_subagent(session_id) {
+            let parent_task_id = parent.to_string();
+            self.process_subagent_message_delta(session_id, &parent_task_id, delta);
+            return;
+        }
+
         if let Some(task_id) = self
             .get_task_id_by_session(session_id)
             .map(|s| s.to_string())
@@ -838,23 +1083,71 @@ impl AppState {
             // Enforce cap: truncate from the beginning if over limit.
             // Keep the most recent content (tail of the buffer).
             if let Some(ref mut text) = session.streaming_text {
-                if text.len() > STREAMING_TEXT_CAP_BYTES {
-                    let excess = text.len() - STREAMING_TEXT_CAP_BYTES;
-                    // Find a valid UTF-8 boundary near the truncation point
-                    // to avoid splitting a multi-byte character.
-                    let mut split_at = excess;
-                    while split_at < text.len() && !text.is_char_boundary(split_at) {
-                        split_at += 1;
-                    }
-                    // If we can't find a boundary within the excess,
-                    // just skip truncation this round (will retry next delta).
-                    if split_at < text.len() {
-                        let _ = text.drain(..split_at);
-                    }
-                }
+                Self::enforce_streaming_cap(text);
             }
             session.render_version += 1;
         }
+    }
+
+    /// Handle a status event for a subagent session.
+    /// Updates the subagent's session data in `subagent_session_data`.
+    fn process_subagent_status(&mut self, session_id: &str, _parent_task_id: &str, status: &str) {
+        // Ensure subagent session data exists
+        let entry = self
+            .subagent_session_data
+            .entry(session_id.to_string())
+            .or_insert_with(TaskDetailSession::default);
+        entry.session_id = Some(session_id.to_string());
+
+        match status {
+            "complete" | "completed" => {
+                tracing::debug!("Subagent session {} completed", session_id);
+            }
+            "error" => {
+                tracing::debug!("Subagent session {} errored", session_id);
+            }
+            _ => {}
+        }
+
+        self.mark_render_dirty();
+    }
+
+    /// Handle an idle event for a subagent session.
+    fn process_subagent_idle(&mut self, session_id: &str, _parent_task_id: &str) {
+        tracing::debug!("Subagent session {} went idle", session_id);
+        self.mark_subagent_inactive(session_id);
+        self.mark_render_dirty();
+    }
+
+    /// Handle a message delta for a subagent session.
+    /// Appends to the subagent's streaming text buffer in `subagent_session_data`.
+    fn process_subagent_message_delta(
+        &mut self,
+        session_id: &str,
+        _parent_task_id: &str,
+        delta: &str,
+    ) {
+        let entry = self
+            .subagent_session_data
+            .entry(session_id.to_string())
+            .or_insert_with(TaskDetailSession::default);
+        entry.session_id = Some(session_id.to_string());
+
+        match &mut entry.streaming_text {
+            Some(text) => {
+                text.push_str(delta);
+            }
+            None => {
+                entry.streaming_text = Some(delta.to_string());
+            }
+        }
+
+        // Enforce cap
+        if let Some(ref mut text) = entry.streaming_text {
+            Self::enforce_streaming_cap(text);
+        }
+
+        entry.render_version += 1;
     }
 
     /// Handle a `PermissionAsked` SSE event — create a pending permission
@@ -866,20 +1159,29 @@ impl AppState {
         tool: &str,
         desc: &str,
     ) {
-        if let Some(task_id) = self
+        // Route to parent task if this is a subagent session
+        let (task_id, effective_session_id) = if let Some(parent_task_id) =
+            self.get_parent_task_for_subagent(session_id).map(|s| s.to_string())
+        {
+            (parent_task_id, session_id.to_string())
+        } else if let Some(task_id) = self
             .get_task_id_by_session(session_id)
             .map(|s| s.to_string())
         {
-            let request = PermissionRequest {
-                id: perm_id.to_string(),
-                session_id: session_id.to_string(),
-                tool_name: tool.to_string(),
-                description: desc.to_string(),
-                status: "pending".to_string(),
-                details: None,
-            };
-            self.add_permission_request(&task_id, request);
-        }
+            (task_id, session_id.to_string())
+        } else {
+            return;
+        };
+
+        let request = PermissionRequest {
+            id: perm_id.to_string(),
+            session_id: effective_session_id,
+            tool_name: tool.to_string(),
+            description: desc.to_string(),
+            status: "pending".to_string(),
+            details: None,
+        };
+        self.add_permission_request(&task_id, request);
     }
 
     // ─── Dirty Flag ──────────────────────────────────────────────────────
@@ -937,6 +1239,11 @@ impl AppState {
         // Remove entries for deleted tasks
         self.cached_streaming_lines
             .retain(|task_id, _| self.tasks.contains_key(task_id));
+
+        // Also evict subagent session data for sessions whose parent task no longer exists
+        self.subagent_session_data.retain(|session_id, _| {
+            self.subagent_to_parent.contains_key(session_id)
+        });
 
         // If still too large, remove the oldest half (first N/2 entries)
         if self.cached_streaming_lines.len() > max_entries {

@@ -38,6 +38,28 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
         );
     }
 
+    // Delete tasks that were removed from in-memory state
+    if !state.deleted_tasks.is_empty() {
+        for task_id in &state.deleted_tasks {
+            db.delete_task_with_conn(task_id, &tx)?;
+        }
+        tracing::debug!(
+            "save_state: deleted {} tasks from database",
+            state.deleted_tasks.len()
+        );
+    }
+
+    // Delete projects that were removed from in-memory state
+    if !state.deleted_projects.is_empty() {
+        for project_id in &state.deleted_projects {
+            db.delete_project_with_conn(project_id, &tx)?;
+        }
+        tracing::debug!(
+            "save_state: deleted {} projects from database",
+            state.deleted_projects.len()
+        );
+    }
+
     // Save kanban order (depends on tasks — saved above)
     for (column_id, task_ids) in &state.kanban.columns {
         db.save_kanban_order_with_conn(&KanbanColumn(column_id.clone()), task_ids, &tx)?;
@@ -57,6 +79,10 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
 
     // Clear the dirty set after successful commit
     state.dirty_tasks.clear();
+    // Clear the deleted set after successful commit
+    state.deleted_tasks.clear();
+    // Clear the deleted projects set after successful commit
+    state.deleted_projects.clear();
 
     Ok(())
 }
@@ -252,12 +278,17 @@ mod tests {
             },
             task_sessions: HashMap::new(),
             cached_streaming_lines: HashMap::new(),
+            subagent_sessions: HashMap::new(),
+            subagent_to_parent: HashMap::new(),
+            subagent_session_data: HashMap::new(),
             reconnecting: false,
             reconnect_attempt: 0,
             permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dirty_tasks: std::collections::HashSet::new(),
+            deleted_tasks: std::collections::HashSet::new(),
+            deleted_projects: std::collections::HashSet::new(),
         };
 
         // ── Save ──
@@ -351,6 +382,93 @@ mod tests {
         let loaded = db.load_kanban_order().expect("load_kanban_order failed");
         let loaded_running = loaded.get("running").expect("running column missing");
         assert_eq!(loaded_running, &vec![task2.id, task1.id]);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // ─── Deleted task persistence ─────────────────────────────────────────
+
+    #[test]
+    fn deleted_task_removed_from_db_after_save_and_restore() {
+        let db_path = temp_db_path("delete_task_persist");
+        let _ = std::fs::remove_file(&db_path);
+
+        let db = db::Db::new(&db_path).expect("failed to open test db");
+
+        // ── Build AppState with two tasks ──
+        let project = make_project();
+        let task1 = make_task(); // keep this one
+        let mut task2 = make_task();
+        task2.id = "task-def-456".to_string();
+        task2.number = 8;
+        task2.title = "To be deleted".to_string();
+
+        let mut tasks: HashMap<String, CortexTask> = HashMap::new();
+        tasks.insert(task1.id.clone(), task1.clone());
+        tasks.insert(task2.id.clone(), task2.clone());
+
+        let mut kanban_columns: HashMap<String, Vec<String>> = HashMap::new();
+        kanban_columns.insert("running".to_string(), vec![task1.id.clone(), task2.id.clone()]);
+
+        let mut original = AppState {
+            projects: vec![project.clone()],
+            tasks,
+            kanban: crate::state::types::KanbanState {
+                columns: kanban_columns.clone(),
+                focused_column_index: 0,
+                focused_task_index: HashMap::new(),
+                kanban_scroll_offset: 0,
+            },
+            ui: crate::state::types::UIState::default(),
+            connected: false,
+            active_project_id: Some("proj-1".to_string()),
+            task_number_counters: HashMap::new(),
+            session_to_task: HashMap::new(),
+            task_sessions: HashMap::new(),
+            cached_streaming_lines: HashMap::new(),
+            subagent_sessions: HashMap::new(),
+            subagent_to_parent: HashMap::new(),
+            subagent_session_data: HashMap::new(),
+            reconnecting: false,
+            reconnect_attempt: 0,
+            permanently_disconnected: false,
+            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dirty_tasks: std::collections::HashSet::new(),
+            deleted_tasks: std::collections::HashSet::new(),
+            deleted_projects: std::collections::HashSet::new(),
+        };
+
+        // ── Save both tasks to DB ──
+        original.dirty_tasks.insert(task1.id.clone());
+        original.dirty_tasks.insert(task2.id.clone());
+        save_state(&mut original, &db).expect("save_state failed (initial)");
+        assert!(original.dirty_tasks.is_empty());
+        assert!(original.deleted_tasks.is_empty());
+
+        // ── Delete task2 via AppState::delete_task ──
+        let _session = original.delete_task(&task2.id);
+        assert!(!original.tasks.contains_key(&task2.id));
+        assert!(original.deleted_tasks.contains(&task2.id));
+
+        // ── Save again (should flush the deletion to DB) ──
+        save_state(&mut original, &db).expect("save_state failed (after delete)");
+        assert!(original.deleted_tasks.is_empty());
+
+        // ── Restore into a fresh AppState ──
+        let mut restored = AppState::default();
+        restore_state(&mut restored, &db).expect("restore_state failed");
+
+        // ── Assert task1 survived, task2 is gone ──
+        assert_eq!(restored.tasks.len(), 1, "expected exactly 1 task after restore");
+        assert!(restored.tasks.contains_key(&task1.id), "task1 should still exist");
+        assert!(!restored.tasks.contains_key(&task2.id), "task2 should be deleted");
+
+        // ── Verify at DB level too ──
+        let db_tasks = db.load_tasks("proj-1").expect("load_tasks failed");
+        assert_eq!(db_tasks.len(), 1, "DB should contain exactly 1 task");
+        assert_eq!(db_tasks[0].id, task1.id);
 
         // Cleanup
         let _ = std::fs::remove_file(&db_path);

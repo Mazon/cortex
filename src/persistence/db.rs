@@ -293,6 +293,40 @@ impl Db {
         Ok(())
     }
 
+    pub fn delete_task_with_conn(&self, task_id: &str, tx: &Transaction) -> Result<()> {
+        tx.execute(
+            "DELETE FROM kanban_order WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE id = ?1",
+            params![task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a project and all its associated data within a transaction.
+    ///
+    /// This is the transaction-aware counterpart to [`Self::delete_project`],
+    /// designed for use inside `save_state()`. It removes:
+    /// - Kanban order entries for tasks belonging to this project
+    /// - All tasks belonging to this project
+    /// - The task number counter metadata for this project
+    /// - The project row itself
+    pub fn delete_project_with_conn(&self, project_id: &str, tx: &Transaction) -> Result<()> {
+        tx.execute(
+            "DELETE FROM kanban_order WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)",
+            params![project_id],
+        )?;
+        tx.execute("DELETE FROM tasks WHERE project_id = ?1", params![project_id])?;
+        tx.execute(
+            "DELETE FROM metadata WHERE key = ?1",
+            params![format!("counter_{}", project_id)],
+        )?;
+        tx.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
+        Ok(())
+    }
+
     pub fn set_metadata_with_conn(
         &self,
         key: &str,
