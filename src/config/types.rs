@@ -332,6 +332,8 @@ pub struct KeybindingConfig {
     pub delete_project: String,
     #[serde(default = "default_abort_session")]
     pub abort_session: String,
+    #[serde(default = "default_drill_down_subagent")]
+    pub drill_down_subagent: String,
     #[serde(default = "default_scroll_kanban_left")]
     pub scroll_kanban_left: String,
     #[serde(default = "default_scroll_kanban_right")]
@@ -406,6 +408,9 @@ fn default_delete_project() -> String {
 fn default_abort_session() -> String {
     "ctrl+a a".to_string()
 }
+fn default_drill_down_subagent() -> String {
+    "ctrl+x".to_string()
+}
 fn default_scroll_kanban_left() -> String {
     "pageup".to_string()
 }
@@ -442,6 +447,7 @@ impl Default for KeybindingConfig {
             set_working_directory: default_set_working_directory(),
             delete_project: default_delete_project(),
             abort_session: default_abort_session(),
+            drill_down_subagent: default_drill_down_subagent(),
             scroll_kanban_left: default_scroll_kanban_left(),
             scroll_kanban_right: default_scroll_kanban_right(),
             help_toggle: default_help_toggle(),

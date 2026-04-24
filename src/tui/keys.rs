@@ -31,6 +31,8 @@ pub enum Action {
     DeleteTask,
     ViewTask,
     AbortSession,
+    // Subagent drill-down
+    DrillDownSubagent,
     // Project operations
     SetWorkingDirectory,
     DeleteProject,
@@ -74,6 +76,11 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
+        parse_and_add(
+            &mut bindings,
+            &config.drill_down_subagent,
+            Action::DrillDownSubagent,
+        );
         parse_and_add(
             &mut bindings,
             &config.scroll_kanban_left,

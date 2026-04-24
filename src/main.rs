@@ -224,12 +224,11 @@ fn main() -> Result<()> {
             }
         }
 
-        // Create OpenCode client for active project
+        // Create shared OpenCode client and server (single process for all projects)
         let mut opencode_clients: HashMap<String, opencode::client::OpenCodeClient> = HashMap::new();
-        let mut server_manager = opencode::server::ServerManager::new(config.opencode.port);
+        let mut server_manager = opencode::server::ServerManager::new();
 
-        // Start servers for each project (optional — only if opencode is available)
-        // Collect project info first so we don't hold the state lock during await.
+        // Start a single shared server using the first project's working directory.
         let projects_snapshot: Vec<(String, String, String)> = state
             .lock()
             .unwrap()
@@ -238,30 +237,33 @@ fn main() -> Result<()> {
             .map(|p| (p.id.clone(), p.name.clone(), p.working_directory.clone()))
             .collect();
 
-        for (project_id, project_name, working_dir) in projects_snapshot.iter() {
+        if let Some((_, project_name, working_dir)) = projects_snapshot.first() {
             spinner_idx = tui::loading::advance_spinner(spinner_idx);
             tui::loading::render_loading_frame(
                 &mut loading_terminal,
-                &format!("Starting server for {}...", project_name),
+                &format!("Starting shared server ({}...)...", project_name),
                 spinner_idx,
             )?;
 
-            match start_project_server(
-                project_id,
-                working_dir,
-                &mut config.opencode,
-                &mut server_manager,
-                &mut opencode_clients,
-            )
-            .await
-            {
-                Ok(_) => {
-                    tracing::info!("Server started for project: {}", project_name);
+            match server_manager.start_shared(&config.opencode, working_dir).await {
+                Ok(url) => {
+                    tracing::info!("Shared server started at {}", url);
+                    // Create a single shared client
+                    match opencode::client::OpenCodeClient::new(&url) {
+                        Ok(client) => {
+                            // Register the same client for every project
+                            for (project_id, _, _) in &projects_snapshot {
+                                opencode_clients.insert(project_id.clone(), client.clone());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to create OpenCode client: {}", e);
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to start server for project {}: {}. Continuing without server.",
-                        project_name,
+                        "Failed to start shared server: {}. Continuing without server.",
                         e
                     );
                 }
@@ -410,20 +412,4 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Start an OpenCode server for a project and create a client.
-async fn start_project_server(
-    project_id: &str,
-    working_dir: &str,
-    opencode_config: &mut config::types::OpenCodeConfig,
-    server_manager: &mut opencode::server::ServerManager,
-    clients: &mut HashMap<String, opencode::client::OpenCodeClient>,
-) -> Result<()> {
-    let url = server_manager
-        .start_for_project(project_id, opencode_config, working_dir)
-        .await?;
 
-    let client = opencode::client::OpenCodeClient::new(&url)?;
-    clients.insert(project_id.to_string(), client);
-
-    Ok(())
-}

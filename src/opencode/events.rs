@@ -292,7 +292,15 @@ fn process_event(
 
         EventListResponse::QuestionAsked { properties } => {
             let session_id = properties.get("sessionID").and_then(|v| v.as_str()).unwrap_or("");
-            if let Some(task_id) = state.get_task_id_by_session(session_id).map(|s| s.to_string()) {
+
+            // Route to parent task if this is a subagent session
+            let task_id = if let Some(parent) = state.get_parent_task_for_subagent(session_id) {
+                Some(parent.to_string())
+            } else {
+                state.get_task_id_by_session(session_id).map(|s| s.to_string())
+            };
+
+            if let Some(task_id) = task_id {
                 let question_id: String = properties
                     .get("id")
                     .and_then(|v| v.as_str())

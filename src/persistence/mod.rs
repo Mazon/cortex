@@ -473,4 +473,136 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_file(&db_path);
     }
+
+    // ─── Project delete round-trip ─────────────────────────────────────────
+
+    #[test]
+    fn project_delete_round_trip() {
+        let db_path = temp_db_path("project_delete_round_trip");
+        let _ = std::fs::remove_file(&db_path);
+
+        let db = db::Db::new(&db_path).expect("failed to open test db");
+
+        // ── Build AppState with one project and two tasks ──
+        let project = make_project();
+        let task1 = make_task();
+        let mut task2 = make_task();
+        task2.id = "task-def-456".to_string();
+        task2.number = 8;
+        task2.title = "Second task".to_string();
+
+        let mut tasks: HashMap<String, CortexTask> = HashMap::new();
+        tasks.insert(task1.id.clone(), task1.clone());
+        tasks.insert(task2.id.clone(), task2.clone());
+
+        let mut kanban_columns: HashMap<String, Vec<String>> = HashMap::new();
+        kanban_columns.insert("running".to_string(), vec![task1.id.clone(), task2.id.clone()]);
+
+        let mut counters: HashMap<String, u32> = HashMap::new();
+        counters.insert("proj-1".to_string(), 8);
+
+        let mut original = AppState {
+            projects: vec![project.clone()],
+            tasks,
+            kanban: crate::state::types::KanbanState {
+                columns: kanban_columns.clone(),
+                focused_column_index: 0,
+                focused_task_index: HashMap::new(),
+                kanban_scroll_offset: 0,
+            },
+            ui: crate::state::types::UIState::default(),
+            connected: false,
+            active_project_id: Some("proj-1".to_string()),
+            task_number_counters: counters.clone(),
+            session_to_task: HashMap::new(),
+            task_sessions: HashMap::new(),
+            cached_streaming_lines: HashMap::new(),
+            subagent_sessions: HashMap::new(),
+            subagent_to_parent: HashMap::new(),
+            subagent_session_data: HashMap::new(),
+            reconnecting: false,
+            reconnect_attempt: 0,
+            permanently_disconnected: false,
+            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dirty_tasks: std::collections::HashSet::new(),
+            deleted_tasks: std::collections::HashSet::new(),
+            deleted_projects: std::collections::HashSet::new(),
+        };
+
+        // ── Save project + tasks to DB ──
+        original.dirty_tasks.insert(task1.id.clone());
+        original.dirty_tasks.insert(task2.id.clone());
+        save_state(&mut original, &db).expect("save_state failed (initial)");
+        assert!(original.dirty_tasks.is_empty(), "dirty_tasks should be cleared after save");
+        assert!(original.deleted_tasks.is_empty(), "deleted_tasks should be cleared after save");
+        assert!(original.deleted_projects.is_empty(), "deleted_projects should be cleared after save");
+
+        // ── Verify DB has the project and tasks before deletion ──
+        let db_projects = db.load_projects().expect("load_projects failed");
+        assert_eq!(db_projects.len(), 1, "DB should contain 1 project before delete");
+        let db_tasks = db.load_tasks("proj-1").expect("load_tasks failed");
+        assert_eq!(db_tasks.len(), 2, "DB should contain 2 tasks before delete");
+
+        // ── Delete the project via remove_project() ──
+        original.remove_project("proj-1");
+        assert!(original.projects.is_empty(), "projects should be empty after remove");
+        assert!(original.tasks.is_empty(), "tasks should be empty after remove");
+        assert!(
+            original.deleted_projects.contains("proj-1"),
+            "deleted_projects should contain proj-1"
+        );
+        assert!(
+            original.deleted_tasks.contains(&task1.id),
+            "deleted_tasks should contain task1"
+        );
+        assert!(
+            original.deleted_tasks.contains(&task2.id),
+            "deleted_tasks should contain task2"
+        );
+
+        // ── Save again (should flush project + task deletions to DB) ──
+        save_state(&mut original, &db).expect("save_state failed (after project delete)");
+        assert!(
+            original.deleted_projects.is_empty(),
+            "deleted_projects should be cleared after save"
+        );
+        assert!(
+            original.deleted_tasks.is_empty(),
+            "deleted_tasks should be cleared after save"
+        );
+
+        // ── Verify at DB level — project and tasks are gone ──
+        let db_projects = db.load_projects().expect("load_projects failed");
+        assert_eq!(
+            db_projects.len(),
+            0,
+            "DB should contain 0 projects after delete"
+        );
+
+        let db_tasks = db.load_tasks("proj-1").expect("load_tasks failed");
+        assert_eq!(
+            db_tasks.len(),
+            0,
+            "DB should contain 0 tasks after project delete"
+        );
+
+        // ── Restore into a fresh AppState — everything should be gone ──
+        let mut restored = AppState::default();
+        restore_state(&mut restored, &db).expect("restore_state failed");
+
+        assert_eq!(
+            restored.projects.len(),
+            0,
+            "restored state should have 0 projects"
+        );
+        assert_eq!(
+            restored.tasks.len(),
+            0,
+            "restored state should have 0 tasks"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&db_path);
+    }
 }

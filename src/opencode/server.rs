@@ -1,8 +1,7 @@
-//! Per-project OpenCode server manager.
+//! OpenCode server manager — single shared server for all projects.
 
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
-use std::collections::HashMap;
 use tokio::process::{Child, Command};
 use tokio::time::Duration;
 
@@ -15,8 +14,66 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_START_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
-/// Manages an OpenCode server process for a single project.
-pub struct OpenCodeServer {
+/// Manages the single shared OpenCode server process for all projects.
+///
+/// Instead of spawning one `opencode serve` per project, this manager
+/// maintains a single server instance. Sessions are differentiated by
+/// the OpenCode server's internal project scoping.
+pub struct ServerManager {
+    server: Option<OpenCodeServer>,
+    /// The URL the shared server is listening on (once started).
+    url: Option<String>,
+}
+
+impl ServerManager {
+    pub fn new() -> Self {
+        Self {
+            server: None,
+            url: None,
+        }
+    }
+
+    /// Start the shared server (if not already running) and return its URL.
+    ///
+    /// `working_dir` is the first project's working directory — the server
+    /// uses it as its initial cwd. The server itself handles multi-project
+    /// session scoping internally.
+    pub async fn start_shared(
+        &mut self,
+        config: &OpenCodeConfig,
+        working_dir: &str,
+    ) -> Result<String> {
+        // If already running, return the cached URL
+        if let Some(ref url) = self.url {
+            let running = self.server.as_mut().map(|s| s.is_running()).unwrap_or(false);
+            if running {
+                debug!("Shared server already running at {}", url);
+                return Ok(url.clone());
+            }
+        }
+
+        let mut server = OpenCodeServer::new()?;
+        server.start(config, working_dir).await?;
+        let url = server.url().to_string();
+
+        self.url = Some(url.clone());
+        self.server = Some(server);
+        info!("Shared server started on {}", url);
+        Ok(url)
+    }
+
+    /// Stop the shared server.
+    pub async fn stop_all(&mut self) {
+        if let Some(mut server) = self.server.take() {
+            info!("Stopping shared server");
+            let _ = server.stop().await;
+        }
+        self.url = None;
+    }
+}
+
+/// Manages a single OpenCode server process.
+struct OpenCodeServer {
     process: Option<Child>,
     url: String,
     http_client: reqwest::Client,
@@ -171,70 +228,3 @@ impl OpenCodeServer {
         }
     }
 }
-
-/// Manages OpenCode servers for multiple projects.
-pub struct ServerManager {
-    servers: HashMap<String, OpenCodeServer>,
-    base_port: u16,
-    next_port_counter: u16,
-}
-
-impl ServerManager {
-    pub fn new(base_port: u16) -> Self {
-        Self {
-            servers: HashMap::new(),
-            base_port,
-            next_port_counter: 0,
-        }
-    }
-
-    /// Start a server for a project.
-    pub async fn start_for_project(
-        &mut self,
-        project_id: &str,
-        config: &mut OpenCodeConfig,
-        working_dir: &str,
-    ) -> Result<String> {
-        let port = self.next_port(project_id)?;
-        config.port = port;
-
-        let mut server = OpenCodeServer::new()?;
-        server.start(config, working_dir).await?;
-        let url = server.url().to_string();
-
-        self.servers.insert(project_id.to_string(), server);
-        info!("Started server for project {} on {}", project_id, url);
-        Ok(url)
-    }
-
-    /// Stop a project's server.
-    pub async fn stop_for_project(&mut self, project_id: &str) -> Result<()> {
-        if let Some(mut server) = self.servers.remove(project_id) {
-            server.stop().await?;
-        }
-        Ok(())
-    }
-
-    /// Stop all servers.
-    pub async fn stop_all(&mut self) {
-        for (id, mut server) in self.servers.drain() {
-            info!("Stopping server for project {}", id);
-            let _ = server.stop().await;
-        }
-    }
-
-    /// Get the URL for a project's server.
-    pub fn get_url(&self, project_id: &str) -> Option<String> {
-        self.servers.get(project_id).map(|s| s.url().to_string())
-    }
-
-    fn next_port(&mut self, _project_id: &str) -> Result<u16> {
-        let port = self
-            .base_port
-            .checked_add(self.next_port_counter)
-            .ok_or_else(|| anyhow::anyhow!("Port overflow: base_port ({}) + counter ({}) exceeds u16::MAX", self.base_port, self.next_port_counter))?;
-        self.next_port_counter += 1;
-        Ok(port)
-    }
-}
-

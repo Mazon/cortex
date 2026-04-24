@@ -129,6 +129,27 @@ impl OpenCodeClient {
         Ok(messages)
     }
 
+    /// Fetch messages for a subagent session and convert them to Cortex types.
+    ///
+    /// This is used for lazy-loading subagent output when the user drills
+    /// down into a subagent via `ctrl+x`.
+    pub async fn fetch_subagent_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
+        debug!("Fetching subagent messages for session: {}", session_id);
+        let response = self.get_messages(session_id)
+            .await
+            .with_context(|| format!("Failed to fetch messages for subagent session {}", session_id))?;
+        let messages: Vec<TaskMessage> = response
+            .iter()
+            .map(convert_sdk_message)
+            .collect();
+        debug!(
+            "Fetched {} messages for subagent session {}",
+            messages.len(),
+            session_id
+        );
+        Ok(messages)
+    }
+
     /// Delete a session. Returns `true` if the deletion was acknowledged.
     pub async fn delete_session(&self, session_id: &str) -> Result<bool> {
         debug!("Deleting session: {}", session_id);

@@ -2,8 +2,9 @@
 //!
 //! * [`client`] — thin wrapper around `opencode-sdk-rs` for session CRUD,
 //!   prompt sending, permission resolution, and type conversion helpers.
-//! * [`server`] — per-project OpenCode server process lifecycle management
-//!   (spawn, health-check, stop) via `opencode serve`.
+//! * [`server`] — shared OpenCode server process lifecycle management
+//!   (spawn, health-check, stop) via `opencode serve`. A single server
+//!   instance handles all projects.
 //! * [`events`] — SSE event loop that subscribes to the OpenCode event
 //!   stream and dispatches events into [`AppState`](crate::state::types::AppState).
 
