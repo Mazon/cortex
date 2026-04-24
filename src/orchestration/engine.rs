@@ -74,6 +74,9 @@ fn start_agent(
             // the current task.agent_type, which has already been updated to the new agent.
             let agent_changed = previous_agent.as_deref() != Some(agent.as_str());
             if agent_changed {
+                // Capture the old session ID so we can abort it after creating the new one
+                let old_session_id = session_id.clone();
+
                 // Clear the old session mapping and create a new one
                 {
                     let mut s = state.lock().unwrap();
@@ -84,6 +87,16 @@ fn start_agent(
                         let sid = session.id.clone();
                         let mut s = state.lock().unwrap();
                         s.set_task_session_id(&task_id_clone, Some(sid.clone()));
+                        // Abort the old session asynchronously (don't block the new session)
+                        if let Some(old_sid) = old_session_id {
+                            let client_clone = client.clone();
+                            tokio::spawn(async move {
+                                tracing::info!("Aborting old session {} after agent change", old_sid);
+                                if let Err(e) = client_clone.abort_session(&old_sid).await {
+                                    tracing::warn!("Failed to abort old session {}: {}", old_sid, e);
+                                }
+                            });
+                        }
                         sid
                     }
                     Err(e) => {
