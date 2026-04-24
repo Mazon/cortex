@@ -591,6 +591,7 @@ mod tests {
             render_version: 0,
             seen_delta_keys: std::collections::HashSet::new(),
             last_delta_key: None,
+            last_delta_content: None,
         };
         state.task_sessions.insert("task-1".to_string(), session);
 
@@ -622,6 +623,7 @@ mod tests {
             render_version: 0,
             seen_delta_keys: std::collections::HashSet::new(),
             last_delta_key: None,
+            last_delta_content: None,
         };
         state.task_sessions.insert("task-1".to_string(), session);
 

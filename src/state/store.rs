@@ -375,6 +375,9 @@ impl AppState {
             if let Some(session) = self.task_sessions.get_mut(task_id) {
                 session.streaming_text = None;
                 session.messages.clear();
+                session.seen_delta_keys.clear();
+                session.last_delta_key = None;
+                session.last_delta_content = None;
                 session.render_version += 1;
                 self.cached_streaming_lines.remove(task_id);
             }
@@ -1134,10 +1137,23 @@ impl AppState {
             // part share the same key and are always accepted (continuation).
             // A different key that's already in the set indicates a replay
             // from SSE reconnection — skip it to prevent text duplication.
+            //
+            // Defense-in-depth: also reject continuations (same key) when the
+            // delta content is *identical* to the last processed content.
+            // Two concurrent SSE loops delivering the same event will produce
+            // the same key AND the same content, while a true continuation
+            // (next chunk of the same streaming part) will always differ.
             let delta_key = (message_id.to_string(), part_id.to_string());
             let is_continuation = session.last_delta_key.as_ref() == Some(&delta_key);
             if !is_continuation && session.seen_delta_keys.contains(&delta_key) {
                 // Key was seen before but is NOT the current part — replay.
+                return;
+            }
+            if is_continuation
+                && session.last_delta_content.as_deref() == Some(delta)
+            {
+                // Same key AND identical content — duplicate from a second SSE
+                // loop, not a genuine continuation. Skip to prevent doubling.
                 return;
             }
             if !is_continuation {
@@ -1145,6 +1161,7 @@ impl AppState {
                 session.seen_delta_keys.insert(delta_key.clone());
             }
             session.last_delta_key = Some(delta_key);
+            session.last_delta_content = Some(delta.to_string());
 
             // Only append to streaming_text for "text" field deltas.
             // Other field types (e.g., "reasoning") should be handled
@@ -1185,10 +1202,14 @@ impl AppState {
                 tracing::debug!("Subagent session {} completed", session_id);
                 // Clear dedup tracking when subagent completes.
                 entry.seen_delta_keys.clear();
+                entry.last_delta_key = None;
+                entry.last_delta_content = None;
             }
             "error" => {
                 tracing::debug!("Subagent session {} errored", session_id);
                 entry.seen_delta_keys.clear();
+                entry.last_delta_key = None;
+                entry.last_delta_content = None;
             }
             _ => {}
         }
@@ -1203,6 +1224,8 @@ impl AppState {
         // Clear dedup tracking for the subagent session.
         if let Some(entry) = self.subagent_session_data.get_mut(session_id) {
             entry.seen_delta_keys.clear();
+            entry.last_delta_key = None;
+            entry.last_delta_content = None;
         }
         self.mark_render_dirty();
     }
@@ -1228,15 +1251,23 @@ impl AppState {
         // Deduplication: skip if this (message_id, part_id) was already
         // seen for a *previous* part. Consecutive deltas for the same
         // part share the same key and are always accepted (continuation).
+        // Also reject continuations with identical content (defense-in-depth
+        // against concurrent SSE connections).
         let delta_key = (message_id.to_string(), part_id.to_string());
         let is_continuation = entry.last_delta_key.as_ref() == Some(&delta_key);
         if !is_continuation && entry.seen_delta_keys.contains(&delta_key) {
+            return;
+        }
+        if is_continuation
+            && entry.last_delta_content.as_deref() == Some(delta)
+        {
             return;
         }
         if !is_continuation {
             entry.seen_delta_keys.insert(delta_key.clone());
         }
         entry.last_delta_key = Some(delta_key);
+        entry.last_delta_content = Some(delta.to_string());
 
         // Only append to streaming_text for "text" field deltas.
         // Other field types (e.g., "reasoning") are ignored for the
@@ -3032,16 +3063,15 @@ mod tests {
     // ── Bug 2: SSE reconnection replay deduplication ─────────────────────
     //
     // The dedup scheme distinguishes two cases for a given (message_id, part_id):
-    //   • Same key as last_delta_key → "continuation" → always accepted
-    //     (multiple chunks for the same streaming part must all be appended).
+    //   • Same key as last_delta_key → "continuation" → accepted UNLESS
+    //     the delta content is identical to the last processed content
+    //     (in which case it's a duplicate from a concurrent SSE loop).
     //   • Different key already in seen_delta_keys → "replay" → skipped
     //     (SSE reconnection replayed an earlier part).
     //   • Different key NOT in seen_delta_keys → "new part" → recorded & accepted.
     //
-    // This means replaying the *very last* part is indistinguishable from a
-    // continuation and will be appended — a known trade-off.  The scheme
-    // reliably catches replays of *earlier* parts, which is the common case
-    // (the server replays from a point before the last processed event).
+    // Content-based dedup eliminates the old trade-off where replaying the
+    // very last part was indistinguishable from a continuation.
 
     #[test]
     fn regression_dedup_skips_replayed_earlier_parts() {
@@ -3130,9 +3160,8 @@ mod tests {
         // Reconnection replays from part-1 again.
         // part-1: different key from last (part-3), in seen set → skip
         // part-2: different key from last (still part-3), in seen set → skip
-        // part-3: same key as last_delta_key → continuation → accepted
-        //   (This is the known trade-off: the very last part can't be
-        //   distinguished from a continuation.)
+        // part-3: same key as last_delta_key AND same content → duplicate → skip
+        //   (Content-based dedup catches the last-part trade-off case too.)
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "alpha ");
         state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "beta ");
         state.process_message_part_delta(session_id, "msg-1", "part-3", "text", "gamma");
@@ -3145,11 +3174,11 @@ mod tests {
             .as_ref()
             .unwrap()
             .clone();
-        // Only part-1 and part-2 were skipped; part-3 was appended again
-        // because it matched last_delta_key (continuation).
+        // ALL replayed parts (including the last one) are now skipped thanks
+        // to content-based dedup — no more trade-off.
         assert_eq!(
-            text, "alpha beta gammagamma",
-            "Earlier parts should be skipped; last part continuation is accepted (trade-off)"
+            text, "alpha beta gamma",
+            "All replayed parts should be skipped (content-based dedup eliminates the trade-off)"
         );
     }
 
@@ -3479,6 +3508,128 @@ mod tests {
         assert_eq!(
             text, "second run",
             "Full lifecycle should produce no duplication, got: '{}'",
+            text
+        );
+    }
+
+    // ── Bug: multi-SSE-loop text duplication (defense-in-depth) ────────────
+    //
+    // When multiple SSE event loops (e.g., one per project) subscribe to
+    // the same server, they independently deliver the same MessagePartDelta
+    // events. The dedup logic must catch these duplicates even when the
+    // second delivery looks like a "continuation" (same delta key as the
+    // last processed event). This is achieved by also comparing the actual
+    // delta content — a true continuation will always have different content,
+    // but a duplicate from another loop will have identical content.
+
+    #[test]
+    fn regression_duplicate_sse_loops_dont_double_text() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Simulate two SSE loops processing the same delta.
+        // Loop A delivers (msg-1, part-1, "Hello ") — accepted as new part.
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "Hello ");
+
+        // Loop B delivers the exact same delta — should be rejected because
+        // it's a continuation (same key) with identical content.
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "Hello ");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "Hello ",
+            "Duplicate processing of same delta should not double text, got: '{}'",
+            text
+        );
+    }
+
+    #[test]
+    fn regression_duplicate_sse_loops_multiple_deltas() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Simulate interleaved processing from two SSE loops:
+        // Loop A: "The " → Loop B: "The " → Loop A: "user " → Loop B: "user "
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "The ");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "The ");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "user ");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "user ");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "The user ",
+            "Interleaved duplicate deltas should not double text, got: '{}'",
+            text
+        );
+    }
+
+    #[test]
+    fn regression_content_dedup_allows_true_continuations() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Multiple chunks for the same part — all different content.
+        // These are true continuations and should ALL be accepted.
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "chunk1 ");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "chunk2 ");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "chunk3");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "chunk1 chunk2 chunk3",
+            "True continuations with different content should all be accepted"
+        );
+    }
+
+    #[test]
+    fn regression_subagent_duplicate_sse_loops_dont_double_text() {
+        let mut state = make_state_with_tasks();
+        let parent_session = "parent-session";
+        let sub_session = "sub-session";
+
+        setup_session_mapping(&mut state, "task-0", parent_session);
+        state.register_subagent_session("task-0", sub_session, "do");
+        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+
+        // Simulate two SSE loops delivering the same subagent delta
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "sub ");
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "sub ");
+
+        let text = state
+            .subagent_session_data
+            .get(sub_session)
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "sub ",
+            "Duplicate subagent deltas should not double text, got: '{}'",
             text
         );
     }

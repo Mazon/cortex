@@ -771,6 +771,12 @@ pub struct TaskDetailSession {
     /// only a *different* key that's already in `seen_delta_keys` is
     /// treated as a replay.
     pub last_delta_key: Option<(String, String)>,
+    /// The actual content of the last processed delta. Used as
+    /// defense-in-depth to detect when two concurrent SSE connections
+    /// deliver the *exact same* delta (same key AND same content).
+    /// A true continuation will always have different content, but a
+    /// duplicate from another loop will have identical content.
+    pub last_delta_content: Option<String>,
 }
 
 /// A subagent session spawned by a parent task's agent.
