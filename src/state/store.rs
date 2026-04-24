@@ -367,6 +367,18 @@ impl AppState {
             }
             self.mark_task_dirty(task_id);
         }
+
+        // Clear stale streaming state when a new session starts on an existing task.
+        // Without this, streaming_text from the previous agent run persists into
+        // the new session's output, causing text duplication (Bug 1).
+        if session_id.is_some() {
+            if let Some(session) = self.task_sessions.get_mut(task_id) {
+                session.streaming_text = None;
+                session.messages.clear();
+                session.render_version += 1;
+                self.cached_streaming_lines.remove(task_id);
+            }
+        }
     }
 
     /// Record an error on a task and set its agent status to [`AgentStatus::Error`].
