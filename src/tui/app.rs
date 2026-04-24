@@ -781,10 +781,14 @@ impl App {
             let state = self.state.lock().unwrap();
             state.ui.focused_task_id.clone()
         };
+        let project_id = {
+            let state = self.state.lock().unwrap();
+            state.active_project_id.clone()
+        };
         let mut state = self.state.lock().unwrap();
         match task_id {
             Some(tid) => {
-                state.delete_task(&tid);
+                let deleted_session_id = state.delete_task(&tid);
 
                 // Clamp focused task index for the column
                 let col_id = state.ui.focused_column.clone();
@@ -800,6 +804,19 @@ impl App {
                     crate::state::types::NotificationVariant::Info,
                     3000,
                 );
+
+                // Abort the remote session if one existed
+                if let Some(session_id) = deleted_session_id {
+                    if let Some(pid) = &project_id {
+                        if let Some(client) = self.opencode_clients.get(pid).cloned() {
+                            tokio::spawn(async move {
+                                if let Err(e) = client.abort_session(&session_id).await {
+                                    tracing::warn!("Failed to abort remote session {}: {}", session_id, e);
+                                }
+                            });
+                        }
+                    }
+                }
             }
             None => {
                 state.set_notification(

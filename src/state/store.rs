@@ -228,15 +228,18 @@ impl AppState {
     }
 
     /// Delete a task by ID. Removes it from the kanban board and session index.
-    /// Returns `false` if the task doesn't exist. Marks state dirty.
-    pub fn delete_task(&mut self, task_id: &str) -> bool {
+    /// Returns `Some(session_id)` if the deleted task had an active session
+    /// (caller should abort it asynchronously), `None` if no session or task not found.
+    /// Marks state dirty.
+    pub fn delete_task(&mut self, task_id: &str) -> Option<String> {
         if let Some(task) = self.tasks.remove(task_id) {
             // Remove from kanban
             if let Some(tasks) = self.kanban.columns.get_mut(&task.column.0) {
                 tasks.retain(|id| id != task_id);
             }
             // Remove session mapping
-            if let Some(sid) = &task.session_id {
+            let session_id = task.session_id.clone();
+            if let Some(ref sid) = session_id {
                 self.session_to_task.remove(sid);
             }
             // Remove render cache for deleted task
@@ -246,9 +249,9 @@ impl AppState {
             // Remove from dirty set (task no longer exists)
             self.dirty_tasks.remove(task_id);
             self.mark_dirty();
-            true
+            session_id
         } else {
-            false
+            None
         }
     }
 
@@ -1461,7 +1464,7 @@ mod tests {
         assert!(state.tasks.contains_key("task-1"));
 
         let deleted = state.delete_task("task-1");
-        assert!(deleted);
+        assert!(deleted.is_none()); // no session
         assert!(!state.tasks.contains_key("task-1"));
         assert!(!state
             .kanban
@@ -1472,10 +1475,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_nonexistent_task_returns_false() {
+    fn delete_nonexistent_task_returns_none() {
         let mut state = make_state_with_tasks();
         let deleted = state.delete_task("nonexistent");
-        assert!(!deleted);
+        assert!(deleted.is_none());
     }
 
     #[test]
@@ -1486,7 +1489,8 @@ mod tests {
             .session_to_task
             .insert("session-abc".to_string(), "task-1".to_string());
 
-        state.delete_task("task-1");
+        let deleted = state.delete_task("task-1");
+        assert_eq!(deleted, Some("session-abc".to_string()));
         assert!(!state.session_to_task.contains_key("session-abc"));
     }
 
