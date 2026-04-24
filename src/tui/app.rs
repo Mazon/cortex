@@ -647,7 +647,10 @@ impl App {
         };
         let mut state = self.state.lock().unwrap();
         match task_id {
-            Some(id) => state.open_task_editor_edit(&id),
+            Some(id) => {
+                let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
+                state.open_task_editor_edit(&id, available_columns);
+            }
             None => state.set_notification(
                 "No task selected to edit".to_string(),
                 crate::state::types::NotificationVariant::Info,

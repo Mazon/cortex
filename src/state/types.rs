@@ -363,7 +363,7 @@ impl TaskEditorState {
     }
 
     /// Pre-populates from an existing task for editing. Starts focused on Description.
-    pub fn new_for_edit(task: &CortexTask) -> Self {
+    pub fn new_for_edit(task: &CortexTask, available_columns: Vec<String>) -> Self {
         let lines: Vec<String> = if task.description.is_empty() {
             vec![String::new()]
         } else {
@@ -387,8 +387,10 @@ impl TaskEditorState {
             has_unsaved_changes: false,
             discard_warning_shown: false,
             validation_error: None,
-            available_columns: Vec::new(),
-            selected_column_index: 0,
+            available_columns: available_columns.clone(),
+            selected_column_index: available_columns.iter()
+                .position(|c| c == &task.column.0)
+                .unwrap_or(0),
         }
     }
     /// Returns the description text as a single string.
@@ -1303,12 +1305,14 @@ mod tests {
             updated_at: 1000,
             project_id: "proj-1".to_string(),
         };
-        let editor = TaskEditorState::new_for_edit(&task);
+        let editor = TaskEditorState::new_for_edit(&task, vec!["todo".to_string(), "planning".to_string()]);
         assert_eq!(editor.task_id, Some("task-1".to_string()));
         assert_eq!(editor.desc_lines, vec!["Line 1", "Line 2"]);
         assert_eq!(editor.cursor_col, 0);
         assert_eq!(editor.focused_field, EditorField::Description);
         assert!(!editor.has_unsaved_changes);
+        assert_eq!(editor.available_columns, vec!["todo".to_string(), "planning".to_string()]);
+        assert_eq!(editor.selected_column_index, 0); // "todo" is at index 0
     }
 
     #[test]
@@ -1332,7 +1336,7 @@ mod tests {
             updated_at: 1000,
             project_id: "proj-1".to_string(),
         };
-        let editor = TaskEditorState::new_for_edit(&task);
+        let editor = TaskEditorState::new_for_edit(&task, vec!["todo".to_string()]);
         assert_eq!(editor.desc_lines, vec![String::new()]);
         assert!(editor.cached_description.is_none());
     }

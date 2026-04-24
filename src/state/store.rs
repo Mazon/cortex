@@ -441,9 +441,9 @@ impl AppState {
 
     /// Open the task editor in "edit" mode for an existing task.
     /// Does nothing if the task doesn't exist.
-    pub fn open_task_editor_edit(&mut self, task_id: &str) {
+    pub fn open_task_editor_edit(&mut self, task_id: &str, available_columns: Vec<String>) {
         if let Some(task) = self.tasks.get(task_id) {
-            self.ui.task_editor = Some(TaskEditorState::new_for_edit(task));
+            self.ui.task_editor = Some(TaskEditorState::new_for_edit(task, available_columns));
             self.ui.mode = AppMode::TaskEditor;
         }
     }
@@ -1350,7 +1350,7 @@ mod tests {
     #[test]
     fn open_task_editor_edit_populates_from_existing_task() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_edit("task-1");
+        state.open_task_editor_edit("task-1", vec!["todo".to_string()]);
 
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
         let editor = state.get_task_editor().unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
     #[test]
     fn open_task_editor_edit_nonexistent_does_nothing() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_edit("nonexistent");
+        state.open_task_editor_edit("nonexistent", vec!["todo".to_string()]);
 
         assert_eq!(state.ui.mode, AppMode::Normal);
         assert!(state.ui.task_editor.is_none());
@@ -1404,7 +1404,7 @@ mod tests {
     #[test]
     fn save_task_editor_edit_existing() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_edit("task-1");
+        state.open_task_editor_edit("task-1", vec!["todo".to_string()]);
 
         if let Some(editor) = state.get_task_editor_mut() {
             editor.set_description("Updated Description");
