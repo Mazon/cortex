@@ -49,18 +49,18 @@ fn start_agent(
     };
 
     tokio::spawn(async move {
-        // Build prompt from task
+        // Build prompt from task WHILE holding the lock to prevent stale data
         let (prompt, session_id, task_id_clone) = {
-            let mut s = state.lock().unwrap();
+            let s = state.lock().unwrap();
             let task = match s.tasks.get(&task_id) {
-                Some(t) => t.clone(),
+                Some(t) => t,
                 None => {
                     tracing::warn!("Task {} not found for agent start", task_id);
                     return;
                 }
             };
 
-            let prompt = OpenCodeClient::build_prompt_for_agent(&task, &agent, None);
+            let prompt = OpenCodeClient::build_prompt_for_agent(task, &agent, None);
             (prompt, task.session_id.clone(), task.id.clone())
         };
 
