@@ -10,7 +10,7 @@ use crate::opencode::client::{
     OpenCodeClient,
 };
 use crate::orchestration::engine::{on_agent_completed, on_task_moved, AutoProgressAction};
-use crate::state::types::AppState;
+use crate::state::types::{AgentStatus, AppState};
 
 /// Default maximum consecutive SSE reconnection attempts.
 /// Used when the config field is 0 (which would mean "retry forever").
@@ -101,12 +101,26 @@ pub async fn sse_event_loop(
 
                             let action = {
                                 let mut state = state.lock().unwrap();
-                                process_event(&event, &mut state, &client, &columns_config)
+                                let action = process_event(&event, &mut state, &client, &columns_config);
+                                // Close the race window: set Running status + agent_type while
+                                // still holding the lock, same as the manual move path in app.rs.
+                                // Also capture previous agent for cross-contamination detection.
+                                if let Some(ref a) = action {
+                                    let previous_agent = state.tasks.get(&a.task_id)
+                                        .and_then(|t| t.agent_type.clone());
+                                    state.update_task_agent_status(&a.task_id, AgentStatus::Running);
+                                    state.set_task_agent_type(&a.task_id, Some(a.agent.clone()));
+                                    // Return both action and previous_agent
+                                    (action, previous_agent)
+                                } else {
+                                    (action, None)
+                                }
                             };
 
                             // Start deferred agent if auto-progression triggered one.
                             // This must happen after the MutexGuard is dropped to avoid
                             // deadlock (start_agent acquires its own lock).
+                            let (action, previous_agent) = action;
                             if let Some(action) = action {
                                 on_task_moved(
                                     &action.task_id,
@@ -115,7 +129,7 @@ pub async fn sse_event_loop(
                                     &client,
                                     &columns_config,
                                     &opencode_config,
-                                    None, // Previous agent not available in SSE path yet; Issue B will fix
+                                    previous_agent,
                                 );
                             }
                         }
