@@ -239,7 +239,12 @@ fn process_event(
         }
 
         EventListResponse::MessagePartDelta { properties } => {
-            state.process_message_part_delta(&properties.session_id, &properties.delta);
+            state.process_message_part_delta(
+                &properties.session_id,
+                &properties.message_id,
+                &properties.part_id,
+                &properties.delta,
+            );
             None
         }
 

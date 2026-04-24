@@ -1063,13 +1063,29 @@ impl AppState {
     /// When the buffer exceeds `STREAMING_TEXT_CAP_BYTES`, old text
     /// is truncated from the beginning (keeping the most recent content).
     ///
+    /// Deduplicates events by tracking `(message_id, part_id)` pairs:
+    /// if the same pair is seen again (e.g., after SSE reconnection),
+    /// the delta is silently skipped to prevent text duplication.
+    ///
     /// If the session_id belongs to a subagent session, the delta is
     /// routed to the subagent's session data in `subagent_session_data`.
-    pub fn process_message_part_delta(&mut self, session_id: &str, delta: &str) {
+    pub fn process_message_part_delta(
+        &mut self,
+        session_id: &str,
+        message_id: &str,
+        part_id: &str,
+        delta: &str,
+    ) {
         // Route to subagent session data if this is a child session
         if let Some(parent) = self.get_parent_task_for_subagent(session_id) {
             let parent_task_id = parent.to_string();
-            self.process_subagent_message_delta(session_id, &parent_task_id, delta);
+            self.process_subagent_message_delta(
+                session_id,
+                &parent_task_id,
+                message_id,
+                part_id,
+                delta,
+            );
             return;
         }
 
@@ -1084,6 +1100,24 @@ impl AppState {
                     task_id,
                     ..Default::default()
                 });
+
+            // Deduplication: skip if this (message_id, part_id) was already
+            // seen for a *previous* part. Consecutive deltas for the same
+            // part share the same key and are always accepted (continuation).
+            // A different key that's already in the set indicates a replay
+            // from SSE reconnection — skip it to prevent text duplication.
+            let delta_key = (message_id.to_string(), part_id.to_string());
+            let is_continuation = session.last_delta_key.as_ref() == Some(&delta_key);
+            if !is_continuation && session.seen_delta_keys.contains(&delta_key) {
+                // Key was seen before but is NOT the current part — replay.
+                return;
+            }
+            if !is_continuation {
+                // New part we haven't seen — record it.
+                session.seen_delta_keys.insert(delta_key.clone());
+            }
+            session.last_delta_key = Some(delta_key);
+
             match &mut session.streaming_text {
                 Some(text) => {
                     text.push_str(delta);
@@ -1114,9 +1148,12 @@ impl AppState {
         match status {
             "complete" | "completed" => {
                 tracing::debug!("Subagent session {} completed", session_id);
+                // Clear dedup tracking when subagent completes.
+                entry.seen_delta_keys.clear();
             }
             "error" => {
                 tracing::debug!("Subagent session {} errored", session_id);
+                entry.seen_delta_keys.clear();
             }
             _ => {}
         }
@@ -1128,15 +1165,22 @@ impl AppState {
     fn process_subagent_idle(&mut self, session_id: &str, _parent_task_id: &str) {
         tracing::debug!("Subagent session {} went idle", session_id);
         self.mark_subagent_inactive(session_id);
+        // Clear dedup tracking for the subagent session.
+        if let Some(entry) = self.subagent_session_data.get_mut(session_id) {
+            entry.seen_delta_keys.clear();
+        }
         self.mark_render_dirty();
     }
 
     /// Handle a message delta for a subagent session.
     /// Appends to the subagent's streaming text buffer in `subagent_session_data`.
+    /// Deduplicates using `(message_id, part_id)` to prevent replay doubling.
     fn process_subagent_message_delta(
         &mut self,
         session_id: &str,
         _parent_task_id: &str,
+        message_id: &str,
+        part_id: &str,
         delta: &str,
     ) {
         let entry = self
@@ -1144,6 +1188,19 @@ impl AppState {
             .entry(session_id.to_string())
             .or_insert_with(TaskDetailSession::default);
         entry.session_id = Some(session_id.to_string());
+
+        // Deduplication: skip if this (message_id, part_id) was already
+        // seen for a *previous* part. Consecutive deltas for the same
+        // part share the same key and are always accepted (continuation).
+        let delta_key = (message_id.to_string(), part_id.to_string());
+        let is_continuation = entry.last_delta_key.as_ref() == Some(&delta_key);
+        if !is_continuation && entry.seen_delta_keys.contains(&delta_key) {
+            return;
+        }
+        if !is_continuation {
+            entry.seen_delta_keys.insert(delta_key.clone());
+        }
+        entry.last_delta_key = Some(delta_key);
 
         match &mut entry.streaming_text {
             Some(text) => {
@@ -2259,7 +2316,7 @@ mod tests {
         // Fill buffer well past the 1MB cap (write 1.1MB of ASCII)
         let chunk_size = STREAMING_TEXT_CAP_BYTES + 100_000;
         let big_chunk = "x".repeat(chunk_size);
-        state.process_message_part_delta(session_id, &big_chunk);
+        state.process_message_part_delta(session_id, "msg-1", "part-1", &big_chunk);
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
@@ -2284,8 +2341,8 @@ mod tests {
         state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
         // Write data well below the cap
-        state.process_message_part_delta(session_id, "hello world");
-        state.process_message_part_delta(session_id, " and more");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "hello world");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", " and more");
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
         assert_eq!(text, "hello world and more");
@@ -2302,7 +2359,7 @@ mod tests {
         let emoji = "🎉"; // 4 bytes
         let count = (STREAMING_TEXT_CAP_BYTES / 4) + 100_000;
         let big_chunk = emoji.repeat(count);
-        state.process_message_part_delta(session_id, &big_chunk);
+        state.process_message_part_delta(session_id, "msg-1", "part-1", &big_chunk);
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 

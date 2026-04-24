@@ -589,6 +589,8 @@ mod tests {
             }],
             pending_questions: vec![],
             render_version: 0,
+            seen_delta_keys: std::collections::HashSet::new(),
+            last_delta_key: None,
         };
         state.task_sessions.insert("task-1".to_string(), session);
 
@@ -618,6 +620,8 @@ mod tests {
                 status: "pending".to_string(),
             }],
             render_version: 0,
+            seen_delta_keys: std::collections::HashSet::new(),
+            last_delta_key: None,
         };
         state.task_sessions.insert("task-1".to_string(), session);
 

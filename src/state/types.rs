@@ -749,6 +749,15 @@ pub struct TaskDetailSession {
     /// messages or streaming text change. Used by the render path to skip
     /// rebuilding `Vec<Line>` when nothing has changed.
     pub render_version: u64,
+    /// Set of `(message_id, part_id)` pairs that have been seen for this
+    /// session. Used alongside `last_delta_key` to deduplicate SSE
+    /// `MessagePartDelta` events that may be replayed on reconnection.
+    pub seen_delta_keys: HashSet<(String, String)>,
+    /// The most recent `(message_id, part_id)` pair processed.
+    /// Consecutive deltas for the same part share the same key, so
+    /// only a *different* key that's already in `seen_delta_keys` is
+    /// treated as a replay.
+    pub last_delta_key: Option<(String, String)>,
 }
 
 /// A subagent session spawned by a parent task's agent.
