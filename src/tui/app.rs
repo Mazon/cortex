@@ -676,7 +676,9 @@ impl App {
                     // Trigger orchestration engine if the target column has an agent configured
                     if let Some(_agent) = self.config.columns.agent_for_column(&target_col) {
                         let already_running = state.tasks.get(&tid)
-                            .map(|t| matches!(t.agent_status, crate::state::types::AgentStatus::Running))
+                            .map(|t| matches!(t.agent_status,
+                                crate::state::types::AgentStatus::Running
+                                | crate::state::types::AgentStatus::Hung))
                             .unwrap_or(false);
                         if !already_running {
                             if let Some(project_id) = state.active_project_id.clone() {
@@ -1168,7 +1170,9 @@ impl App {
                             if let Some(_agent) = self.config.columns.agent_for_column(col_id) {
                                 // Check if task already has a running agent
                                 let already_running = state.tasks.get(&task_id)
-                                    .map(|t| matches!(t.agent_status, crate::state::types::AgentStatus::Running))
+                                    .map(|t| matches!(t.agent_status,
+                                        crate::state::types::AgentStatus::Running
+                                        | crate::state::types::AgentStatus::Hung))
                                     .unwrap_or(false);
 
                                 if !already_running {
