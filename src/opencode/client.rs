@@ -150,6 +150,27 @@ impl OpenCodeClient {
         Ok(messages)
     }
 
+    /// Fetch messages for any session and convert them to Cortex types.
+    ///
+    /// Used after a session completes to persist the full message history
+    /// into `session.messages`, replacing the transient `streaming_text`.
+    pub async fn fetch_session_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
+        debug!("Fetching messages for session: {}", session_id);
+        let response = self.get_messages(session_id)
+            .await
+            .with_context(|| format!("Failed to fetch messages for session {}", session_id))?;
+        let messages: Vec<TaskMessage> = response
+            .iter()
+            .map(convert_sdk_message)
+            .collect();
+        debug!(
+            "Fetched {} messages for session {}",
+            messages.len(),
+            session_id
+        );
+        Ok(messages)
+    }
+
     /// Delete a session. Returns `true` if the deletion was acknowledged.
     pub async fn delete_session(&self, session_id: &str) -> Result<bool> {
         debug!("Deleting session: {}", session_id);

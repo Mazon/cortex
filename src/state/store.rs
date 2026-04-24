@@ -902,6 +902,32 @@ impl AppState {
         session.render_version += 1;
     }
 
+    /// Finalize a completed session's streaming output into persistent
+    /// message history.  Called after the agent finishes and the full
+    /// message list has been fetched from the OpenCode server.
+    ///
+    /// Sets `session.messages` (registering any subagent sessions found
+    /// in the parts) and clears `streaming_text` so that the completed
+    /// messages are rendered without duplication.
+    ///
+    /// Returns `true` if the session actually had streaming text to
+    /// finalize (i.e., this is not a no-op), `false` otherwise.
+    pub fn finalize_session_streaming(
+        &mut self,
+        task_id: &str,
+        messages: Vec<TaskMessage>,
+    ) -> bool {
+        let has_streaming = self
+            .task_sessions
+            .get(task_id)
+            .is_some_and(|s| s.streaming_text.is_some());
+
+        self.update_session_messages(task_id, messages);
+        self.update_streaming_text(task_id, None);
+
+        has_streaming
+    }
+
     /// Add a pending permission request to a task's session.
     /// Updates the task's `pending_permission_count`.
     pub fn add_permission_request(&mut self, task_id: &str, request: PermissionRequest) {
