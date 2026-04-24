@@ -954,19 +954,42 @@ impl App {
                 if let Some(action) = action {
                     match action {
                         ConfirmableAction::DeleteProject(project_id) => {
-                            // Remove the OpenCode client for this project.
-                            self.opencode_clients.remove(&project_id);
-
-                            // Get project name for notification before removing it.
-                            let project_name = {
+                            // Collect active session IDs and project name before removing anything.
+                            // We must abort remote sessions BEFORE destroying the client.
+                            let (sessions_to_abort, project_name) = {
                                 let state = self.state.lock().unwrap();
-                                state
+                                let project_name = state
                                     .projects
                                     .iter()
                                     .find(|p| p.id == project_id)
                                     .map(|p| p.name.clone())
-                                    .unwrap_or_else(|| project_id.clone())
+                                    .unwrap_or_else(|| project_id.clone());
+                                // Gather all session IDs for this project's tasks
+                                let session_ids: Vec<String> = state.tasks.values()
+                                    .filter(|t| t.project_id == project_id)
+                                    .filter_map(|t| t.session_id.clone())
+                                    .collect();
+                                (session_ids, project_name)
                             };
+
+                            // Abort all active sessions asynchronously using the client
+                            // (which we still have at this point).
+                            if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                let sessions = sessions_to_abort;
+                                tokio::spawn(async move {
+                                    for sid in &sessions {
+                                        if let Err(e) = client.abort_session(sid).await {
+                                            tracing::warn!(
+                                                "Failed to abort session {} during project deletion: {}",
+                                                sid, e
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+
+                            // Now safe to remove the client
+                            self.opencode_clients.remove(&project_id);
 
                             let mut state = self.state.lock().unwrap();
                             state.remove_project(&project_id);
