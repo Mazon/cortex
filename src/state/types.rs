@@ -731,6 +731,19 @@ pub struct QuestionRequest {
 }
 
 /// Session data for a task (messages, streaming state).
+///
+/// ## Render cache invariant
+///
+/// `render_version` **must** be bumped every time `messages` or
+/// `streaming_text` is mutated.  The TUI render path (`task_detail.rs`)
+/// stores a per-session `(render_version, Vec<Line>)` in
+/// [`AppState::cached_streaming_lines`] and only rebuilds the lines when
+/// the live `render_version` differs from the cached one.  A missed bump
+/// causes stale output to be displayed until the next valid mutation.
+///
+/// The cache is keyed by `task_id` for main sessions and by `session_id`
+/// for drilled-down subagent sessions — both share the same HashMap, so
+/// [`AppState::prune_streaming_cache`] must account for both key spaces.
 #[derive(Debug, Clone, Default)]
 pub struct TaskDetailSession {
     /// ID of the task this session belongs to.
@@ -831,9 +844,14 @@ pub struct AppState {
     pub session_to_task: HashMap<String, String>,
     /// Session data for task detail view, keyed by task_id.
     pub task_sessions: HashMap<String, TaskDetailSession>,
-    /// Cache for rendered streaming lines in the task detail view.
-    /// Maps `task_id → (render_version, lines)`. Only rebuild lines when
-    /// the session's `render_version` has changed.
+    /// Render cache for streaming lines in the task detail view.
+    ///
+    /// Shared by both main sessions (keyed by `task_id`) and drilled-down
+    /// subagent sessions (keyed by `session_id`).  Each entry stores
+    /// `(render_version, lines)` — lines are only rebuilt when the live
+    /// `render_version` differs from the cached one.
+    ///
+    /// See the render cache invariant on [`TaskDetailSession`].
     pub cached_streaming_lines: HashMap<String, (u64, Vec<ratatui::prelude::Line<'static>>)>,
     /// Subagent sessions keyed by parent task_id.
     /// Each parent task can have multiple subagent sessions (e.g., a

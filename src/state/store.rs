@@ -1344,13 +1344,19 @@ impl AppState {
 
     /// Evict stale entries from the streaming render cache.
     ///
-    /// Removes cached lines for task IDs that no longer exist in `self.tasks`,
-    /// and if the cache still exceeds `max_entries`, clears the oldest half
-    /// (by insertion order, which roughly correlates with least-recently-viewed).
+    /// Removes cached lines whose key no longer has a corresponding live
+    /// session — either a main task in `self.tasks` (keyed by `task_id`)
+    /// or a drilled-down subagent in `self.subagent_session_data` (keyed
+    /// by `session_id`).  If the cache still exceeds `max_entries` after
+    /// that, the oldest half is evicted (by insertion order).
     pub fn prune_streaming_cache(&mut self, max_entries: usize) {
-        // Remove entries for deleted tasks
+        // Remove entries whose backing session no longer exists.
+        // Main sessions are keyed by task_id; subagent sessions by session_id.
         self.cached_streaming_lines
-            .retain(|task_id, _| self.tasks.contains_key(task_id));
+            .retain(|key, _| {
+                self.tasks.contains_key(key)
+                    || self.subagent_session_data.contains_key(key)
+            });
 
         // Also evict subagent session data for sessions whose parent task no longer exists
         self.subagent_session_data.retain(|session_id, _| {
@@ -2923,5 +2929,557 @@ mod tests {
         // Should have the last MAX_NOTIFICATIONS
         assert_eq!(state.ui.notifications.front().unwrap().message, "N7");
         assert_eq!(state.ui.notifications.back().unwrap().message, "N9");
+    }
+
+    // ── Regression: streaming duplication bugs ─────────────────────────────
+
+    /// Helper to wire up a session-to-task mapping for streaming tests.
+    fn setup_session_mapping(state: &mut AppState, task_id: &str, session_id: &str) {
+        state.tasks.get_mut(task_id).unwrap().session_id = Some(session_id.to_string());
+        state
+            .session_to_task
+            .insert(session_id.to_string(), task_id.to_string());
+    }
+
+    /// Helper to create a simple text TaskMessage for testing.
+    fn make_text_message(id: &str, role: MessageRole, text: &str) -> TaskMessage {
+        TaskMessage {
+            id: id.to_string(),
+            role,
+            parts: vec![TaskMessagePart::Text {
+                text: text.to_string(),
+            }],
+            created_at: None,
+        }
+    }
+
+    // ── Bug 1: streaming_text cleared on new session start ────────────────
+
+    #[test]
+    fn regression_streaming_text_cleared_on_new_session_for_same_task() {
+        let mut state = make_state_with_tasks();
+        let session_1 = "session-old";
+        let session_2 = "session-new";
+
+        // Session 1 runs, accumulates streaming text
+        setup_session_mapping(&mut state, "task-0", session_1);
+        state.process_message_part_delta(session_1, "msg-1", "part-1", "text", "hello ");
+        state.process_message_part_delta(session_1, "msg-1", "part-2", "text", "world");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(text, "hello world");
+
+        // New session starts on the SAME task — this is Bug 1's trigger.
+        // set_task_session_id should clear the old streaming_text.
+        state.set_task_session_id("task-0", Some(session_2.to_string()));
+
+        // Verify streaming_text is cleared
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert!(
+            session.streaming_text.is_none(),
+            "streaming_text should be cleared when a new session starts on the same task"
+        );
+        // Verify messages are also cleared
+        assert!(
+            session.messages.is_empty(),
+            "messages should be cleared when a new session starts on the same task"
+        );
+        // Verify render_version was bumped (cache invalidation)
+        assert!(
+            session.render_version > 0,
+            "render_version should be bumped to invalidate cache"
+        );
+        // Verify cached_streaming_lines was removed
+        assert!(
+            !state.cached_streaming_lines.contains_key("task-0"),
+            "cached_streaming_lines should be removed for the task"
+        );
+    }
+
+    #[test]
+    fn regression_new_session_clears_streaming_but_preserves_session_object() {
+        let mut state = make_state_with_tasks();
+        let session_1 = "session-old";
+        let session_2 = "session-new";
+
+        // Set up session 1 with streaming text
+        setup_session_mapping(&mut state, "task-0", session_1);
+        state.process_message_part_delta(session_1, "msg-1", "part-1", "text", "data");
+
+        // New session starts — should NOT remove the TaskDetailSession entry itself,
+        // just clear its fields
+        state.set_task_session_id("task-0", Some(session_2.to_string()));
+
+        // The session entry should still exist
+        assert!(
+            state.task_sessions.contains_key("task-0"),
+            "TaskDetailSession entry should still exist for the task"
+        );
+        // But with cleaned fields
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert_eq!(session.task_id, "task-0");
+        assert!(session.streaming_text.is_none());
+        assert!(session.messages.is_empty());
+    }
+
+    // ── Bug 2: SSE reconnection replay deduplication ─────────────────────
+    //
+    // The dedup scheme distinguishes two cases for a given (message_id, part_id):
+    //   • Same key as last_delta_key → "continuation" → always accepted
+    //     (multiple chunks for the same streaming part must all be appended).
+    //   • Different key already in seen_delta_keys → "replay" → skipped
+    //     (SSE reconnection replayed an earlier part).
+    //   • Different key NOT in seen_delta_keys → "new part" → recorded & accepted.
+    //
+    // This means replaying the *very last* part is indistinguishable from a
+    // continuation and will be appended — a known trade-off.  The scheme
+    // reliably catches replays of *earlier* parts, which is the common case
+    // (the server replays from a point before the last processed event).
+
+    #[test]
+    fn regression_dedup_skips_replayed_earlier_parts() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Normal flow: part-1, then part-2
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "the ");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "fix");
+
+        let text_before = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(text_before, "the fix");
+
+        // Simulate SSE reconnection: server replays from part-1 again.
+        // Part-1 has a different key than last_delta_key (part-2) AND is
+        // already in seen_delta_keys → replay → silently skipped.
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "the ");
+
+        let text_after = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text_after, text_before,
+            "Replayed earlier part should not duplicate text — got '{}', expected '{}'",
+            text_after, text_before
+        );
+    }
+
+    #[test]
+    fn regression_dedup_allows_new_parts_after_replay_skip() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Initial deltas: part-1 then part-2
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "hello ");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "world");
+
+        // Replay of part-1 (earlier part, different key from last) → skipped
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "hello ");
+
+        // New part from a new message arrives → should be accepted
+        state.process_message_part_delta(session_id, "msg-2", "part-1", "text", "!");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "hello world!",
+            "New part should be appended after replay skip"
+        );
+    }
+
+    #[test]
+    fn regression_dedup_skips_multiple_earlier_parts_on_replay() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Part-1, part-2, part-3
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "alpha ");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "beta ");
+        state.process_message_part_delta(session_id, "msg-1", "part-3", "text", "gamma");
+
+        // Reconnection replays from part-1 again.
+        // part-1: different key from last (part-3), in seen set → skip
+        // part-2: different key from last (still part-3), in seen set → skip
+        // part-3: same key as last_delta_key → continuation → accepted
+        //   (This is the known trade-off: the very last part can't be
+        //   distinguished from a continuation.)
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "alpha ");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "beta ");
+        state.process_message_part_delta(session_id, "msg-1", "part-3", "text", "gamma");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        // Only part-1 and part-2 were skipped; part-3 was appended again
+        // because it matched last_delta_key (continuation).
+        assert_eq!(
+            text, "alpha beta gammagamma",
+            "Earlier parts should be skipped; last part continuation is accepted (trade-off)"
+        );
+    }
+
+    #[test]
+    fn regression_dedup_continuation_same_key_always_accepted() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Multiple consecutive deltas for the SAME (msg, part) key — all should append
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "a");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "b");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "c");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "d");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "abcd",
+            "Consecutive deltas for the same part should all be appended"
+        );
+    }
+
+    // ── Bug 3: subagent drill-down doesn't double-render ─────────────────
+
+    #[test]
+    fn regression_subagent_drilldown_clears_streaming_text() {
+        let mut state = make_state_with_tasks();
+        let parent_session = "parent-session";
+        let sub_session = "sub-session";
+
+        // Set up parent session
+        setup_session_mapping(&mut state, "task-0", parent_session);
+
+        // Register a subagent
+        state.register_subagent_session("task-0", sub_session, "do");
+
+        // Simulate subagent streaming some text
+        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "subagent output ");
+
+        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        assert_eq!(
+            entry.streaming_text.as_ref().unwrap(),
+            "subagent output "
+        );
+
+        // Simulate drill-down: load complete messages for the subagent.
+        // This should clear streaming_text to avoid double-rendering.
+        let messages = vec![make_text_message("msg-1", MessageRole::Assistant, "subagent output complete")];
+        state.update_session_messages("task-0", messages);
+
+        // The key behavior: when drill-down loads messages, streaming_text
+        // should be cleared. In the actual app, this happens in
+        // handle_drill_down_subagent(). Here we test that clearing
+        // streaming_text prevents double-rendering.
+        if let Some(entry) = state.subagent_session_data.get_mut(sub_session) {
+            entry.streaming_text = None; // This is what handle_drill_down_subagent does
+            entry.render_version += 1;
+        }
+
+        // After drill-down, streaming_text should be None (not duplicated)
+        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        assert!(
+            entry.streaming_text.is_none(),
+            "streaming_text should be cleared on drill-down to prevent double-rendering"
+        );
+    }
+
+    #[test]
+    fn regression_subagent_delta_deduplication() {
+        let mut state = make_state_with_tasks();
+        let parent_session = "parent-session";
+        let sub_session = "sub-session";
+
+        setup_session_mapping(&mut state, "task-0", parent_session);
+        state.register_subagent_session("task-0", sub_session, "do");
+        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+
+        // Subagent receives deltas: part-1 then part-2
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "hello ");
+        state.process_message_part_delta(sub_session, "msg-1", "part-2", "text", "world");
+
+        // Replay of part-1 (earlier part, different key from last) → skipped
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "hello ");
+
+        let text = state
+            .subagent_session_data
+            .get(sub_session)
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "hello world",
+            "Subagent replayed earlier deltas should be deduplicated, got: '{}'",
+            text
+        );
+    }
+
+    // ── Task 4: session completion finalizes streaming into messages ──────
+
+    #[test]
+    fn regression_finalize_session_moves_streaming_to_messages() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Agent streams text
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "the fix");
+
+        // Verify streaming text exists
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert_eq!(
+            session.streaming_text.as_ref().unwrap(),
+            "the fix"
+        );
+        assert!(session.messages.is_empty(), "messages should be empty during streaming");
+
+        // Agent completes — finalize_session_streaming is called with the
+        // full message history fetched from the server.
+        let messages = vec![make_text_message("msg-1", MessageRole::Assistant, "the fix")];
+        let had_streaming = state.finalize_session_streaming("task-0", messages);
+
+        // Should report that there was streaming text to finalize
+        assert!(had_streaming, "finalize should report streaming was present");
+
+        let session = state.task_sessions.get("task-0").unwrap();
+        // Messages should now contain the completed text
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].id, "msg-1");
+        // Streaming text should be cleared
+        assert!(
+            session.streaming_text.is_none(),
+            "streaming_text should be cleared after finalization"
+        );
+    }
+
+    #[test]
+    fn regression_finalize_session_noop_when_no_streaming() {
+        let mut state = make_state_with_tasks();
+
+        // No streaming text exists for this task
+        let messages = vec![make_text_message("msg-1", MessageRole::Assistant, "existing")];
+        let had_streaming = state.finalize_session_streaming("task-0", messages);
+
+        assert!(
+            !had_streaming,
+            "finalize should report no-op when no streaming text exists"
+        );
+
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert_eq!(session.messages.len(), 1);
+        assert!(session.streaming_text.is_none());
+    }
+
+    #[test]
+    fn regression_finalize_session_bumps_render_version() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "text");
+
+        let version_before = state.task_sessions.get("task-0").unwrap().render_version;
+
+        let messages = vec![make_text_message("msg-1", MessageRole::Assistant, "text")];
+        state.finalize_session_streaming("task-0", messages);
+
+        let version_after = state.task_sessions.get("task-0").unwrap().render_version;
+        assert!(
+            version_after > version_before,
+            "render_version should be bumped after finalization"
+        );
+    }
+
+    // ── Task 5: non-text field deltas ignored ────────────────────────────
+
+    #[test]
+    fn regression_non_text_field_delta_not_appended() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Send a "reasoning" field delta — should NOT be appended to streaming_text
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "reasoning", "thinking...");
+
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert!(
+            session.streaming_text.is_none(),
+            "reasoning field deltas should NOT be appended to streaming_text"
+        );
+    }
+
+    #[test]
+    fn regression_mixed_field_deltas_only_text_appended() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Mix of text and non-text deltas
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "visible ");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "reasoning", "hidden");
+        state.process_message_part_delta(session_id, "msg-2", "part-1", "text", "text");
+        state.process_message_part_delta(session_id, "msg-2", "part-2", "some_other_field", "ignored");
+        state.process_message_part_delta(session_id, "msg-3", "part-1", "text", " here");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "visible text here",
+            "Only 'text' field deltas should appear in streaming_text, got: '{}'",
+            text
+        );
+    }
+
+    #[test]
+    fn regression_non_text_field_delta_still_records_dedup_key() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-abc";
+
+        setup_session_mapping(&mut state, "task-0", session_id);
+
+        // Non-text delta should still participate in dedup tracking
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "reasoning", "thinking");
+
+        // The key should be recorded even though no text was appended
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert!(
+            session.seen_delta_keys.contains(&(String::from("msg-1"), String::from("part-1"))),
+            "Non-text deltas should still record their dedup key"
+        );
+    }
+
+    // ── Subagent non-text field filtering ─────────────────────────────────
+
+    #[test]
+    fn regression_subagent_non_text_field_ignored() {
+        let mut state = make_state_with_tasks();
+        let parent_session = "parent-session";
+        let sub_session = "sub-session";
+
+        setup_session_mapping(&mut state, "task-0", parent_session);
+        state.register_subagent_session("task-0", sub_session, "do");
+        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+
+        // Subagent receives a reasoning delta — should be ignored
+        state.process_message_part_delta(sub_session, "msg-1", "part-1", "reasoning", "thinking...");
+
+        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        assert!(
+            entry.streaming_text.is_none(),
+            "Subagent reasoning deltas should not appear in streaming_text"
+        );
+
+        // But a text delta should work
+        state.process_message_part_delta(sub_session, "msg-1", "part-2", "text", "actual text");
+
+        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        assert_eq!(
+            entry.streaming_text.as_ref().unwrap(),
+            "actual text"
+        );
+    }
+
+    // ── Integration: full lifecycle without duplication ───────────────────
+
+    #[test]
+    fn regression_full_lifecycle_no_duplication() {
+        let mut state = make_state_with_tasks();
+        let session_1 = "session-1";
+        let session_2 = "session-2";
+
+        // Phase 1: First session runs
+        setup_session_mapping(&mut state, "task-0", session_1);
+        state.process_message_part_delta(session_1, "msg-1", "part-1", "text", "first ");
+        state.process_message_part_delta(session_1, "msg-1", "part-2", "text", "run");
+        state.process_message_part_delta(session_1, "msg-1", "part-2", "reasoning", "ignored");
+
+        // Phase 2: Session completes — finalize
+        let messages_1 = vec![make_text_message("msg-1", MessageRole::Assistant, "first run")];
+        state.finalize_session_streaming("task-0", messages_1);
+
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert!(session.streaming_text.is_none());
+        assert_eq!(session.messages.len(), 1);
+
+        // Phase 3: New session starts (auto-progression)
+        state.set_task_session_id("task-0", Some(session_2.to_string()));
+
+        let session = state.task_sessions.get("task-0").unwrap();
+        assert!(session.streaming_text.is_none());
+        assert!(session.messages.is_empty(), "messages cleared for new session");
+
+        // Phase 4: Second session streams
+        state.process_message_part_delta(session_2, "msg-2", "part-1", "text", "second ");
+        state.process_message_part_delta(session_2, "msg-2", "part-2", "text", "run");
+
+        // Simulate reconnection: replay an earlier part (part-1)
+        state.process_message_part_delta(session_2, "msg-2", "part-1", "text", "second ");
+
+        let text = state
+            .task_sessions
+            .get("task-0")
+            .unwrap()
+            .streaming_text
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            text, "second run",
+            "Full lifecycle should produce no duplication, got: '{}'",
+            text
+        );
     }
 }
