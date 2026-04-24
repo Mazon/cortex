@@ -243,6 +243,7 @@ fn process_event(
                 &properties.session_id,
                 &properties.message_id,
                 &properties.part_id,
+                &properties.field,
                 &properties.delta,
             );
             None

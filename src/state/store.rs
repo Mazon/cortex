@@ -1074,6 +1074,7 @@ impl AppState {
         session_id: &str,
         message_id: &str,
         part_id: &str,
+        field: &str,
         delta: &str,
     ) {
         // Route to subagent session data if this is a child session
@@ -1084,6 +1085,7 @@ impl AppState {
                 &parent_task_id,
                 message_id,
                 part_id,
+                field,
                 delta,
             );
             return;
@@ -1117,6 +1119,13 @@ impl AppState {
                 session.seen_delta_keys.insert(delta_key.clone());
             }
             session.last_delta_key = Some(delta_key);
+
+            // Only append to streaming_text for "text" field deltas.
+            // Other field types (e.g., "reasoning") should be handled
+            // separately — they must not pollute the text buffer.
+            if field != "text" {
+                return;
+            }
 
             match &mut session.streaming_text {
                 Some(text) => {
@@ -1181,6 +1190,7 @@ impl AppState {
         _parent_task_id: &str,
         message_id: &str,
         part_id: &str,
+        field: &str,
         delta: &str,
     ) {
         let entry = self
@@ -1201,6 +1211,13 @@ impl AppState {
             entry.seen_delta_keys.insert(delta_key.clone());
         }
         entry.last_delta_key = Some(delta_key);
+
+        // Only append to streaming_text for "text" field deltas.
+        // Other field types (e.g., "reasoning") are ignored for the
+        // streaming buffer.
+        if field != "text" {
+            return;
+        }
 
         match &mut entry.streaming_text {
             Some(text) => {
@@ -2316,7 +2333,7 @@ mod tests {
         // Fill buffer well past the 1MB cap (write 1.1MB of ASCII)
         let chunk_size = STREAMING_TEXT_CAP_BYTES + 100_000;
         let big_chunk = "x".repeat(chunk_size);
-        state.process_message_part_delta(session_id, "msg-1", "part-1", &big_chunk);
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", &big_chunk);
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
@@ -2341,8 +2358,8 @@ mod tests {
         state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
         // Write data well below the cap
-        state.process_message_part_delta(session_id, "msg-1", "part-1", "hello world");
-        state.process_message_part_delta(session_id, "msg-1", "part-2", " and more");
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "hello world");
+        state.process_message_part_delta(session_id, "msg-1", "part-2", "text", " and more");
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
         assert_eq!(text, "hello world and more");
@@ -2359,7 +2376,7 @@ mod tests {
         let emoji = "🎉"; // 4 bytes
         let count = (STREAMING_TEXT_CAP_BYTES / 4) + 100_000;
         let big_chunk = emoji.repeat(count);
-        state.process_message_part_delta(session_id, "msg-1", "part-1", &big_chunk);
+        state.process_message_part_delta(session_id, "msg-1", "part-1", "text", &big_chunk);
 
         let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
