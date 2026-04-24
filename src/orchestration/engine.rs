@@ -15,9 +15,10 @@ pub fn on_task_moved(
     client: &OpenCodeClient,
     columns_config: &ColumnsConfig,
     opencode_config: &OpenCodeConfig,
+    previous_agent: Option<String>,
 ) {
     if let Some(agent) = columns_config.agent_for_column(&to_column.0) {
-        start_agent(task_id, &agent, state, client, opencode_config);
+        start_agent(task_id, &agent, state, client, opencode_config, previous_agent);
     }
 }
 
@@ -28,6 +29,7 @@ fn start_agent(
     state: &Arc<Mutex<AppState>>,
     client: &OpenCodeClient,
     opencode_config: &OpenCodeConfig,
+    previous_agent: Option<String>,
 ) {
     // Status is already set to Running by the caller (app.rs) to close the race window.
     // No need to re-acquire the lock here for status update.
@@ -67,13 +69,10 @@ fn start_agent(
         // Create session if needed
         let sid = if let Some(ref existing_sid) = session_id {
             // Check if the agent type changed — if so, create a fresh session
-            // to avoid cross-contaminating the new agent with old conversation history
-            let agent_changed = {
-                let s = state.lock().unwrap();
-                s.tasks.get(&task_id_clone)
-                    .map(|t| t.agent_type.as_deref() != Some(agent.as_str()))
-                    .unwrap_or(false)
-            };
+            // to avoid cross-contaminating the new agent with old conversation history.
+            // We use previous_agent (captured before the lock-set) rather than reading
+            // the current task.agent_type, which has already been updated to the new agent.
+            let agent_changed = previous_agent.as_deref() != Some(agent.as_str());
             if agent_changed {
                 // Clear the old session mapping and create a new one
                 {

@@ -115,6 +115,7 @@ pub async fn sse_event_loop(
                                     &client,
                                     &columns_config,
                                     &opencode_config,
+                                    None, // Previous agent not available in SSE path yet; Issue B will fix
                                 );
                             }
                         }

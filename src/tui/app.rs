@@ -685,7 +685,7 @@ impl App {
                             .unwrap_or(false);
                         if already_running {
                             let status = state.tasks.get(&tid)
-                                .map(|t| t.agent_status)
+                                .map(|t| t.agent_status.clone())
                                 .unwrap_or(crate::state::types::AgentStatus::Pending);
                             if status == crate::state::types::AgentStatus::Hung {
                                 state.set_notification(
@@ -1251,7 +1251,7 @@ impl App {
 
                                 if already_running {
                                     let status = state.tasks.get(&task_id)
-                                        .map(|t| t.agent_status)
+                                        .map(|t| t.agent_status.clone())
                                         .unwrap_or(crate::state::types::AgentStatus::Pending);
                                     if status == crate::state::types::AgentStatus::Hung {
                                         state.set_notification(
