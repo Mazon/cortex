@@ -66,7 +66,37 @@ fn start_agent(
 
         // Create session if needed
         let sid = if let Some(ref existing_sid) = session_id {
-            existing_sid.clone()
+            // Check if the agent type changed — if so, create a fresh session
+            // to avoid cross-contaminating the new agent with old conversation history
+            let agent_changed = {
+                let s = state.lock().unwrap();
+                s.tasks.get(&task_id_clone)
+                    .map(|t| t.agent_type.as_deref() != Some(agent.as_str()))
+                    .unwrap_or(false)
+            };
+            if agent_changed {
+                // Clear the old session mapping and create a new one
+                {
+                    let mut s = state.lock().unwrap();
+                    s.set_task_session_id(&task_id_clone, None);
+                }
+                match client.create_session().await {
+                    Ok(session) => {
+                        let sid = session.id.clone();
+                        let mut s = state.lock().unwrap();
+                        s.set_task_session_id(&task_id_clone, Some(sid.clone()));
+                        sid
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create session: {}", e);
+                        let mut s = state.lock().unwrap();
+                        s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
+                        return;
+                    }
+                }
+            } else {
+                existing_sid.clone()
+            }
         } else {
             match client.create_session().await {
                 Ok(session) => {
