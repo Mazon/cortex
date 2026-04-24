@@ -245,7 +245,7 @@ impl App {
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
 
-        // Check if we're in task detail view — Escape closes it, y/n approve/reject permissions
+        // Check if we're in task detail view — Escape pops subagent stack or closes detail
         {
             let is_detail_escape = {
                 let state = self.state.lock().unwrap();
@@ -254,6 +254,12 @@ impl App {
             // First lock dropped here
             if is_detail_escape {
                 let mut state = self.state.lock().unwrap();
+                // If drilled into a subagent, pop back one level
+                if state.is_drilled_into_subagent() {
+                    state.pop_subagent_drilldown();
+                    return;
+                }
+                // Otherwise, close the task detail view
                 state.close_task_detail();
                 return;
             }
@@ -508,6 +514,7 @@ impl App {
             Some(Action::DeleteTask) => self.handle_delete_task(),
             Some(Action::ViewTask) => self.handle_view_task(),
             Some(Action::AbortSession) => self.handle_abort_session(),
+            Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
             Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
             Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
             None => {} // Unmatched key, ignore
@@ -933,6 +940,183 @@ impl App {
         }
     }
 
+    /// Handle drill-down into a subagent session (ctrl+x).
+    ///
+    /// When in the task detail view, looks for `TaskMessagePart::Agent` parts
+    /// in the currently viewed session's messages. If a subagent is found,
+    /// fetches its messages (lazy-load) and pushes onto the navigation stack.
+    fn handle_drill_down_subagent(&mut self) {
+        // Must be in task detail view
+        {
+            let state = self.state.lock().unwrap();
+            if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+                return;
+            }
+        }
+
+        // Find the first navigable Agent part in the current view.
+        // We extract the needed data while holding the lock, then drop it.
+        let found = Self::find_drillable_subagent(&self.state);
+
+        let (session_id, agent, task_id, depth) = match found {
+            Some(f) => f,
+            None => {
+                let mut state = self.state.lock().unwrap();
+                state.set_notification(
+                    "No subagent to drill into".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                );
+                return;
+            }
+        };
+
+        // Fetch subagent messages lazily
+        let client = self.get_active_client();
+        let state = self.state.clone();
+
+        tokio::spawn(async move {
+            // Check if we already have cached data
+            let needs_fetch = {
+                let s = state.lock().unwrap();
+                s.subagent_session_data.get(&session_id)
+                    .map(|d| d.messages.is_empty())
+                    .unwrap_or(true)
+            };
+
+            if needs_fetch {
+                if let Some(client) = client {
+                    match client.fetch_subagent_messages(&session_id).await {
+                        Ok(messages) => {
+                            let mut s = state.lock().unwrap();
+                            let entry = s
+                                .subagent_session_data
+                                .entry(session_id.clone())
+                                .or_insert_with(crate::state::types::TaskDetailSession::default);
+                            entry.session_id = Some(session_id.clone());
+                            entry.task_id = task_id.clone();
+                            entry.messages = messages;
+                            entry.render_version += 1;
+                            tracing::debug!(
+                                "Loaded {} messages for subagent {}",
+                                entry.messages.len(),
+                                session_id
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to fetch subagent messages for {}: {}",
+                                session_id,
+                                e
+                            );
+                            let mut s = state.lock().unwrap();
+                            s.set_notification(
+                                format!("Failed to load subagent: {}", e),
+                                crate::state::types::NotificationVariant::Error,
+                                3000,
+                            );
+                            return;
+                        }
+                    }
+                } else {
+                    let mut s = state.lock().unwrap();
+                    s.set_notification(
+                        "No OpenCode client available".to_string(),
+                        crate::state::types::NotificationVariant::Warning,
+                        3000,
+                    );
+                    return;
+                }
+            }
+
+            // Push onto navigation stack
+            let mut s = state.lock().unwrap();
+            // Guard against duplicate push from rapid key presses
+            let already_on_stack = s.ui.session_nav_stack
+                .iter()
+                .any(|r| r.session_id == session_id);
+            if already_on_stack {
+                return; // Already pushed by a prior keypress
+            }
+            // For nested drill-downs, use only the agent name to avoid
+            // repeating the task label (e.g., "Task #3 > planning > do"
+            // instead of "Task #3 > planning > Task #3 > do").
+            let label = if s.is_drilled_into_subagent() {
+                agent.clone()
+            } else {
+                let task_label = s
+                    .tasks
+                    .get(&task_id)
+                    .map(|t| format!("Task #{}", t.number))
+                    .unwrap_or_else(|| task_id.clone());
+                format!("{} > {}", task_label, agent)
+            };
+            let session_ref = crate::state::types::SessionRef {
+                task_id: task_id.clone(),
+                session_id: session_id.clone(),
+                label,
+                depth,
+            };
+            s.push_subagent_drilldown(session_ref);
+        });
+    }
+
+    /// Scan the current view for a drillable subagent `Agent` part.
+    ///
+    /// Returns `Some((session_id, agent_name, parent_task_id, depth))` if a
+    /// navigable subagent is found, or `None` otherwise.
+    fn find_drillable_subagent(
+        state: &Arc<Mutex<AppState>>,
+    ) -> Option<(String, String, String, u32)> {
+        let state = state.lock().unwrap();
+
+        let session_id_to_scan = state.get_drilldown_session_id().map(|s| s.to_string());
+
+        if let Some(scan_id) = session_id_to_scan {
+            // Scanning subagent session data
+            if let Some(session_data) = state.subagent_session_data.get(&scan_id) {
+                let task_id = state.ui.viewing_task_id.clone().unwrap_or_default();
+                let current_depth = state.ui.session_nav_stack.last().map(|r| r.depth).unwrap_or(0);
+                for msg in &session_data.messages {
+                    for part in &msg.parts {
+                        if let crate::state::types::TaskMessagePart::Agent { id, agent } = part {
+                            let already_in_stack = state
+                                .ui
+                                .session_nav_stack
+                                .iter()
+                                .any(|r| r.session_id == *id);
+                            if !already_in_stack {
+                                return Some((id.clone(), agent.clone(), task_id, current_depth + 1));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Scanning parent task's messages
+            if let Some(ref tid) = state.ui.viewing_task_id {
+                if let Some(session) = state.task_sessions.get(tid) {
+                    let task_id = tid.clone();
+                    for msg in &session.messages {
+                        for part in &msg.parts {
+                            if let crate::state::types::TaskMessagePart::Agent { id, agent } = part {
+                                let already_in_stack = state
+                                    .ui
+                                    .session_nav_stack
+                                    .iter()
+                                    .any(|r| r.session_id == *id);
+                                if !already_in_stack {
+                                    return Some((id.clone(), agent.clone(), task_id, 1));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Scroll the kanban view left or right without changing the focused column.
     /// Bound to PageUp (left) and PageDown (right) by default.
     fn handle_scroll_kanban(&mut self, direction: i32) {
@@ -1021,6 +1205,16 @@ impl App {
                                 crate::state::types::NotificationVariant::Info,
                                 3000,
                             );
+
+                            // If the user just deleted the last project, show a
+                            // prominent notification prompting them to create one.
+                            if state.projects.is_empty() {
+                                state.set_notification(
+                                    "All projects deleted. Press Ctrl+N to create a new one.".to_string(),
+                                    crate::state::types::NotificationVariant::Info,
+                                    10000,
+                                );
+                            }
                         }
                     }
                 }
@@ -1368,6 +1562,16 @@ impl App {
 
         let max_offset = total_cols.saturating_sub(max_visible);
         *offset = (*offset).min(max_offset);
+    }
+
+    /// Get the OpenCode client for the active project, or `None` if unavailable.
+    fn get_active_client(&self) -> Option<OpenCodeClient> {
+        let state = self.state.lock().unwrap();
+        state
+            .active_project_id
+            .as_ref()
+            .and_then(|pid| self.opencode_clients.get(pid))
+            .cloned()
     }
 
     /// Teardown the terminal. Call this on shutdown.
