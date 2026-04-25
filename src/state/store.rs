@@ -1097,7 +1097,10 @@ impl AppState {
             let agent_status = match status {
                 "running" => AgentStatus::Running,
                 "complete" | "completed" => AgentStatus::Complete,
-                _ => return,
+                _ => {
+                    tracing::warn!("Unknown session status '{}' for task session, ignoring", status);
+                    return;
+                }
             };
             self.update_task_agent_status(&task_id, agent_status);
         }
