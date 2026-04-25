@@ -1703,6 +1703,119 @@ mod tests {
         assert_eq!(state.kanban.focused_task_index.get("planning"), Some(&0));
     }
 
+    // ── Regression: auto-progression does not corrupt focused_task_id ─────
+
+    /// Regression test for the bug where `clamp_focused_task_index` would
+    /// unconditionally overwrite `focused_task_id` even when clamping a
+    /// background column. This caused auto-progression events (SSE →
+    /// on_agent_completed → move_task) to silently clear the user's focus,
+    /// blocking all subsequent keyboard operations (move, edit, delete, view).
+    #[test]
+    fn regression_auto_progression_does_not_corrupt_focused_task_id() {
+        let mut state = make_state_with_tasks();
+        // make_state_with_tasks creates 3 tasks (task-0, task-1, task-2) in "todo"
+        // with focused_column = "todo" and focused_task_id = "task-0"
+
+        // Simulate: user is focused on "todo" column
+        assert_eq!(state.ui.focused_column, "todo");
+        assert_eq!(state.ui.focused_task_id, Some("task-0".into()));
+
+        // Step 1: Move task-0 from "todo" to "planning" (user presses 'm')
+        // This clamps "todo" (the focused column) — focus updates but stays valid
+        state
+            .kanban
+            .columns
+            .entry("planning".to_string())
+            .or_default();
+        let moved = state.move_task("task-0", KanbanColumn("planning".to_string()));
+        assert!(moved);
+
+        // After moving task-0 out of "todo", focus should still be valid
+        assert_eq!(state.ui.focused_column, "todo");
+        assert!(
+            state.ui.focused_task_id.is_some(),
+            "focused_task_id should not be None after moving a task out of the focused column"
+        );
+        let focused = state.ui.focused_task_id.as_ref().unwrap();
+        assert!(
+            state
+                .kanban
+                .columns
+                .get("todo")
+                .unwrap()
+                .contains(focused),
+            "focused_task_id should point to a task still in the focused 'todo' column"
+        );
+
+        // Step 2: Simulate auto-progression — move task-0 from "planning" to "running"
+        // This clamps "planning" (NOT the focused column) — must NOT corrupt focused_task_id
+        let focus_before = state.ui.focused_task_id.clone();
+        state
+            .kanban
+            .columns
+            .entry("running".to_string())
+            .or_default();
+        let moved = state.move_task("task-0", KanbanColumn("running".to_string()));
+        assert!(moved);
+
+        // focused_task_id must NOT have been corrupted by clamping "planning"
+        assert_eq!(
+            state.ui.focused_task_id, focus_before,
+            "Auto-progression in a background column must not change focused_task_id"
+        );
+        assert_eq!(state.ui.focused_column, "todo");
+        let focused = state.ui.focused_task_id.as_ref().unwrap();
+        assert!(
+            state
+                .kanban
+                .columns
+                .get("todo")
+                .unwrap()
+                .contains(focused),
+            "focused_task_id should still point to a task in 'todo' after background auto-progression"
+        );
+    }
+
+    /// Direct regression test: calling clamp_focused_task_index on a non-focused
+    /// column (even an empty one) must not touch focused_task_id.
+    #[test]
+    fn regression_clamp_non_focused_empty_column_preserves_focus() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.focused_column, "todo");
+        let focus_before = state.ui.focused_task_id.clone();
+
+        // Create an empty "planning" column and clamp it — user is NOT on planning
+        state
+            .kanban
+            .columns
+            .entry("planning".to_string())
+            .or_default();
+        state.clamp_focused_task_index("planning");
+
+        assert_eq!(
+            state.ui.focused_task_id, focus_before,
+            "Clamping a non-focused empty column must not change focused_task_id"
+        );
+    }
+
+    /// Direct regression test: calling clamp_focused_task_index on a column
+    /// that doesn't exist in kanban.columns must not clear focused_task_id
+    /// when it's not the focused column.
+    #[test]
+    fn regression_clamp_nonexistent_column_preserves_focus() {
+        let mut state = make_state_with_tasks();
+        assert_eq!(state.ui.focused_column, "todo");
+        let focus_before = state.ui.focused_task_id.clone();
+
+        // Clamp a column that doesn't exist at all — must be a no-op for focus
+        state.clamp_focused_task_index("nonexistent-column");
+
+        assert_eq!(
+            state.ui.focused_task_id, focus_before,
+            "Clamping a nonexistent column must not clear focused_task_id"
+        );
+    }
+
     // ── Navigation: task index movement (simulates NavUp/NavDown) ───────
 
     #[test]
