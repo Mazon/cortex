@@ -119,7 +119,7 @@ fn main() -> Result<()> {
         {
             let mut state = state.lock().unwrap();
             if let Err(e) = persistence::restore_state(&mut state, &db) {
-                let _ = e;
+                tracing::error!("Failed to restore persisted state: {}", e);
             }
         }
 
@@ -174,11 +174,12 @@ fn main() -> Result<()> {
                             }
                         }
                         Err(e) => {
-                            let _ = e;
+                            tracing::error!("Failed to create OpenCode client: {}", e);
                         }
                     }
                 }
-                Err(_e) => {
+                Err(e) => {
+                    tracing::error!("Failed to start OpenCode server: {}", e);
                 }
             }
         }
