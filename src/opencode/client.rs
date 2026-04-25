@@ -9,20 +9,29 @@ use opencode_sdk_rs::resources::session::{
     ToolState as SdkToolState,
 };
 use opencode_sdk_rs::resources::shared::SessionError as SdkSessionError;
-use opencode_sdk_rs::SseStream;
 use std::time::Duration;
 
 use crate::config::types::OpenCodeConfig;
+use crate::opencode::sse::SseEventStream;
 use crate::state::types::{CortexTask, MessageRole, TaskMessage, TaskMessagePart, ToolState};
 
 /// Cortex-specific wrapper around the `opencode-sdk-rs` `Opencode` client.
+///
+/// Holds both the SDK client (for non-SSE API calls like session CRUD,
+/// chat, permissions) and an hpx client configured with `read_timeout`
+/// (for SSE event streaming).
 #[derive(Clone)]
 pub struct OpenCodeClient {
     sdk: opencode_sdk_rs::Opencode,
+    /// Per-chunk read timeout (seconds) for SSE event streams.
+    sse_read_timeout_secs: u64,
 }
 
 impl OpenCodeClient {
     /// Create a new `OpenCodeClient` connected to the given base URL.
+    ///
+    /// Uses a default SSE read timeout of 60 seconds. Prefer
+    /// [`from_config_with_url`] when a config is available.
     pub fn new(base_url: &str) -> Result<Self> {
         let sdk = opencode_sdk_rs::Opencode::builder()
             .base_url(base_url)
@@ -30,7 +39,10 @@ impl OpenCodeClient {
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        Ok(Self { sdk })
+        Ok(Self {
+            sdk,
+            sse_read_timeout_secs: 60,
+        })
     }
 
     /// Create a new `OpenCodeClient` from an `OpenCodeConfig`.
@@ -42,7 +54,26 @@ impl OpenCodeClient {
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        Ok(Self { sdk })
+        Ok(Self {
+            sdk,
+            sse_read_timeout_secs: config.sse_read_timeout_secs,
+        })
+    }
+
+    /// Create a new `OpenCodeClient` using config values but connected to
+    /// the specified URL (which may differ from `config.hostname:config.port`
+    /// when the server picks a random port).
+    pub fn from_config_with_url(config: &OpenCodeConfig, url: &str) -> Result<Self> {
+        let sdk = opencode_sdk_rs::Opencode::builder()
+            .base_url(url)
+            .timeout(Duration::from_secs(config.request_timeout_secs))
+            .max_retries(2)
+            .build()
+            .context("Failed to build OpenCode SDK client")?;
+        Ok(Self {
+            sdk,
+            sse_read_timeout_secs: config.sse_read_timeout_secs,
+        })
     }
 
     /// Create a new OpenCode session.
@@ -222,16 +253,42 @@ impl OpenCodeClient {
         Ok(())
     }
 
-    /// Subscribe to the OpenCode SSE event stream. Returns a stream of
-    /// [`EventListResponse`] items that yields events as they arrive.
-    pub async fn subscribe_to_events(&self) -> Result<SseStream<EventListResponse>> {
-        let stream = self
-            .sdk
-            .event()
-            .list()
+    /// Subscribe to the OpenCode SSE event stream using a direct hpx
+    /// connection with `read_timeout` instead of the SDK's `total_timeout`.
+    ///
+    /// **Why not the SDK?** The SDK's `OpencodeBuilder` only exposes
+    /// `timeout()` which sets hpx's `total_timeout` — a single-shot timer
+    /// that kills the response body after N seconds and never resets.
+    /// For SSE streams that last hours, this is fatal. hpx's `read_timeout`
+    /// resets after every successful chunk read, so as long as heartbeats
+    /// arrive every ~5s, the stream continues indefinitely.
+    ///
+    /// Returns our own [`SseEventStream`] which behaves identically to the
+    /// SDK's `SseStream` but wraps an hpx client configured with
+    /// `read_timeout(sse_read_timeout_secs)`.
+    pub async fn subscribe_to_events(&self) -> Result<SseEventStream<EventListResponse>> {
+        let hpx_client = hpx::Client::builder()
+            .timeout(Duration::from_secs(30)) // TCP connect + HTTP headers
+            .read_timeout(Duration::from_secs(self.sse_read_timeout_secs)) // per-chunk body timeout
+            .build()
+            .context("Failed to build hpx client for SSE")?;
+
+        let url = format!("{}/event", self.base_url());
+        let response = hpx_client
+            .get(&url)
+            .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to subscribe to events: {}", e))?;
-        Ok(stream)
+            .map_err(|e| anyhow::anyhow!("SSE request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "SSE endpoint returned status {}",
+                response.status()
+            ));
+        }
+
+        let byte_stream = response.bytes_stream();
+        Ok(SseEventStream::new(byte_stream))
     }
 
     /// Fetch OpenCode app info (version, status, etc.).
@@ -416,10 +473,10 @@ mod tests {
     // -----------------------------------------------------------------------
     //
     // These tests spin up a minimal HTTP/1.1 server on localhost, serve SSE
-    // payloads through it, and consume the resulting `SseStream<EventListResponse>`
+    // payloads through it, and consume the resulting `SseEventStream<EventListResponse>`
     // via the real `OpenCodeClient`.  They exercise the complete pipeline:
     //
-    //   HTTP response → hpx byte stream → SseStream → SSE decode → JSON parse
+    //   hpx client (read_timeout) → HTTP response → byte stream → SSE decode → JSON parse
 
     /// Spin up a minimal HTTP/1.1 server that writes `payload` as the SSE
     /// body, then closes the connection.
@@ -491,7 +548,7 @@ mod tests {
     /// Collect all events from the stream into a `Vec`.
     async fn collect_events(
         client: &OpenCodeClient,
-    ) -> Vec<Result<EventListResponse, opencode_sdk_rs::OpencodeError>> {
+    ) -> Vec<Result<EventListResponse, crate::opencode::sse::SseStreamError>> {
         let stream = client.subscribe_to_events().await.unwrap();
         stream.collect().await
     }

@@ -165,8 +165,10 @@ fn main() -> Result<()> {
 
             match server_manager.start_shared(&config.opencode, working_dir).await {
                 Ok(url) => {
-                    // Create a single shared client
-                    match opencode::client::OpenCodeClient::new(&url) {
+                    // Create a single shared client using config values (timeouts)
+                    // but connected to the actual server URL (which may use a
+                    // random port picked by `opencode serve`).
+                    match opencode::client::OpenCodeClient::from_config_with_url(&config.opencode, &url) {
                         Ok(client) => {
                             // Register the same client for every project
                             for (project_id, _, _) in &projects_snapshot {

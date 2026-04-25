@@ -429,12 +429,15 @@ name = "cortex"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "criterion",
  "crossterm",
  "futures",
+ "hpx",
  "opencode-sdk-rs",
+ "pin-project-lite",
  "ratatui",
  "reqwest",
  "rusqlite",

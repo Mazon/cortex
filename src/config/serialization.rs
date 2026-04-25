@@ -247,6 +247,7 @@ mod tests {
             mcp_servers: HashMap::new(),
             request_timeout_secs: 0,
             sse_max_retries: 50,
+            sse_read_timeout_secs: 60,
         }
     }
 

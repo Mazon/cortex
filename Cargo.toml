@@ -16,6 +16,8 @@ crossterm = "0.28"
 # Async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util", "signal", "net"] }
 futures = "0.3"
+pin-project-lite = "0.2"
+bytes = "1"
 
 # Config
 toml = "0.8"
@@ -28,6 +30,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # OpenCode SDK — provides HTTP client (hpx), SSE streaming, typed API,
 # automatic retries, structured errors.
 opencode-sdk-rs = "0.2"
+
+# hpx — HTTP client used directly for SSE event streaming with per-chunk
+# read_timeout. The SDK uses hpx internally but doesn't expose read_timeout,
+# so we build SSE connections directly for correct long-lived stream handling.
+hpx = "1.4"
 
 # reqwest — used for lightweight HTTP health checks against the OpenCode server.
 # Kept separate from the SDK's hpx client because: (1) hpx is designed for SSE

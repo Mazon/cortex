@@ -11,3 +11,4 @@
 pub mod client;
 pub mod server;
 pub mod events;
+pub mod sse;
