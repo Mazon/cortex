@@ -170,7 +170,7 @@ fn start_agent(
                 existing_sid.clone()
             }
         } else {
-            match client.create_session().await {
+            match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
                 Ok(session) => {
                     let sid = session.id.clone();
                     // Store session ID
@@ -181,7 +181,12 @@ fn start_agent(
                     sid
                 }
                 Err(e) => {
-                    tracing::error!("Failed to create session: {}", e);
+                    tracing::error!(
+                        task_id = %task_id_clone,
+                        agent = %agent,
+                        "Failed to create session after retries: {}",
+                        e
+                    );
                     let mut s = state.lock().unwrap();
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                     return;
@@ -202,15 +207,23 @@ fn start_agent(
             Some(format!("{}/{}", provider, model_id))
         });
 
-        // Send prompt
-        match client
-            .send_prompt(&sid, &prompt, Some(&agent), model.as_deref())
-            .await
+        // Send prompt (with retry to tolerate transient HTTP errors)
+        match retry_with_backoff(
+            3,
+            Duration::from_millis(500),
+            || client.send_prompt(&sid, &prompt, Some(&agent), model.as_deref()),
+        )
+        .await
         {
-            Ok(_) => {
-            }
+            Ok(_) => {}
             Err(e) => {
-                tracing::error!("Failed to send prompt: {}", e);
+                tracing::error!(
+                    task_id = %task_id_clone,
+                    agent = %agent,
+                    session_id = %sid,
+                    "Failed to send prompt after retries: {}",
+                    e
+                );
                 let mut s = state.lock().unwrap();
                 s.set_task_error(
                     &task_id_clone,
