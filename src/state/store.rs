@@ -1680,6 +1680,29 @@ mod tests {
         assert_eq!(state.ui.focused_task_id, None);
     }
 
+    #[test]
+    fn clamp_focused_task_index_non_focused_empty_column_does_not_change_focus() {
+        let mut state = make_state_with_tasks();
+        // focused_column is "todo" with focused_task_id = "task-0"
+        assert_eq!(state.ui.focused_column, "todo");
+        assert_eq!(state.ui.focused_task_id, Some("task-0".to_string()));
+
+        // Add an empty "planning" column (a non-focused column)
+        state
+            .kanban
+            .columns
+            .entry("planning".to_string())
+            .or_default();
+
+        // Clamp the non-focused, empty "planning" column
+        state.clamp_focused_task_index("planning");
+
+        // focused_task_id must NOT change — we're focused on "todo", not "planning"
+        assert_eq!(state.ui.focused_task_id, Some("task-0".to_string()));
+        // The planning column's index should still be reset to 0
+        assert_eq!(state.kanban.focused_task_index.get("planning"), Some(&0));
+    }
+
     // ── Navigation: task index movement (simulates NavUp/NavDown) ───────
 
     #[test]
@@ -3639,6 +3662,110 @@ mod tests {
             text, "sub ",
             "Duplicate subagent deltas should not double text, got: '{}'",
             text
+        );
+    }
+
+    // ── update_project_status ─────────────────────────────────────────
+
+    #[test]
+    fn update_project_status_sets_question_when_task_has_pending_questions() {
+        let mut state = make_state_with_tasks();
+
+        // Give task-0 a pending question
+        if let Some(task) = state.tasks.get_mut("task-0") {
+            task.pending_question_count = 2;
+        }
+
+        state.update_project_status("proj-1");
+
+        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        assert_eq!(
+            project.status,
+            ProjectStatus::Question,
+            "Project status should be Question when a task has pending questions"
+        );
+    }
+
+    #[test]
+    fn update_project_status_sets_error_when_task_has_error_status() {
+        let mut state = make_state_with_tasks();
+
+        if let Some(task) = state.tasks.get_mut("task-0") {
+            task.agent_status = AgentStatus::Error;
+        }
+
+        state.update_project_status("proj-1");
+
+        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        assert_eq!(
+            project.status,
+            ProjectStatus::Error,
+            "Project status should be Error when a task has error agent status"
+        );
+    }
+
+    #[test]
+    fn update_project_status_sets_working_when_task_is_running() {
+        let mut state = make_state_with_tasks();
+
+        if let Some(task) = state.tasks.get_mut("task-0") {
+            task.agent_status = AgentStatus::Running;
+        }
+
+        state.update_project_status("proj-1");
+
+        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        assert_eq!(
+            project.status,
+            ProjectStatus::Working,
+            "Project status should be Working when a task is running"
+        );
+    }
+
+    #[test]
+    fn update_project_status_sets_idle_when_no_active_tasks() {
+        let mut state = make_state_with_tasks();
+
+        // All tasks default to AgentStatus::Pending with pending_question_count = 0
+        state.update_project_status("proj-1");
+
+        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        assert_eq!(
+            project.status,
+            ProjectStatus::Idle,
+            "Project status should be Idle when no tasks are running, errored, or have questions"
+        );
+    }
+
+    #[test]
+    fn update_project_status_does_not_affect_other_projects() {
+        let mut state = make_state_with_tasks();
+
+        // Add a second project with no tasks
+        let project2 = CortexProject {
+            id: "proj-2".to_string(),
+            name: "Other Project".to_string(),
+            working_directory: "/tmp/other".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+        };
+        state.add_project(project2);
+
+        // Give task-0 a pending question
+        if let Some(task) = state.tasks.get_mut("task-0") {
+            task.pending_question_count = 1;
+        }
+
+        // Only update proj-1
+        state.update_project_status("proj-1");
+
+        let proj1 = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let proj2 = state.projects.iter().find(|p| p.id == "proj-2").unwrap();
+        assert_eq!(proj1.status, ProjectStatus::Question);
+        assert_eq!(
+            proj2.status,
+            ProjectStatus::Idle,
+            "Updating proj-1 should not change proj-2's status"
         );
     }
 }
