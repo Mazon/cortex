@@ -413,7 +413,10 @@ impl AppState {
     // ─── Navigation ──────────────────────────────────────────────────────
 
     /// Clamp the focused task index for a column so it stays within bounds.
-    /// Syncs `ui.focused_task_id` with the clamped index.
+    /// Syncs `ui.focused_task_id` with the clamped index **only** when the
+    /// column being clamped is the user's currently focused column.
+    /// Auto-progression events can move tasks in background columns —
+    /// those must not corrupt the user's active focus.
     pub fn clamp_focused_task_index(&mut self, col_id: &str) {
         let idx = self
             .kanban
@@ -430,9 +433,14 @@ impl AppState {
             self.kanban
                 .focused_task_index
                 .insert(col_id.to_string(), clamped);
-            self.ui.focused_task_id = tasks.get(clamped).cloned();
+            // Only update focused_task_id when clamping the currently focused column.
+            if self.ui.focused_column == col_id {
+                self.ui.focused_task_id = tasks.get(clamped).cloned();
+            }
         } else {
-            self.ui.focused_task_id = None;
+            if self.ui.focused_column == col_id {
+                self.ui.focused_task_id = None;
+            }
         }
     }
 

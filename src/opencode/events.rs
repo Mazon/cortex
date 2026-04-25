@@ -405,7 +405,12 @@ fn process_event(
                     status: "pending".to_string(),
                 };
                 state.add_question_request(&task_id, request);
-                state.update_project_status(&task_id);
+                let project_id = state.tasks.get(&task_id)
+                    .map(|t| t.project_id.clone())
+                    .unwrap_or_default();
+                if !project_id.is_empty() {
+                    state.update_project_status(&project_id);
+                }
 
                 let preview: String = question_text.chars().take(50).collect();
                 state.set_notification(
