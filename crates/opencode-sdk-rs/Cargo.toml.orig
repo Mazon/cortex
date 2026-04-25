@@ -1,0 +1,34 @@
+[package]
+name = "opencode-sdk-rs"
+version.workspace = true
+edition.workspace = true
+description = "A Rust SDK for the OpenCode API with type-safe access to all endpoints, automatic retries, and streaming support"
+license = "MIT"
+repository = "https://github.com/longcipher/opencode-sdk-rs"
+documentation = "https://docs.rs/opencode-sdk-rs"
+homepage = "https://github.com/longcipher/opencode-sdk-rs"
+keywords = ["opencode", "sdk", "api", "client", "ai"]
+categories = [
+    "api-bindings",
+    "web-programming::http-client",
+    "development-tools",
+]
+authors = ["OpenCode SDK Contributors"]
+
+[dependencies]
+bytes.workspace = true
+futures-core.workspace = true
+hpx = { workspace = true, features = ["rustls-tls", "json", "query", "stream"] }
+http.workspace = true
+pin-project-lite.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

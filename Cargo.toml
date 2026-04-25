@@ -59,6 +59,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "benchmarks"
 harness = false
 
+[patch.crates-io]
+opencode-sdk-rs = { path = "crates/opencode-sdk-rs" }
+
 [lints.clippy]
 # Disallowed methods are tracked as warnings (defined in clippy.toml).
 # Allow the lint at the workspace level so -D warnings in CI doesn't
