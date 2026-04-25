@@ -16,6 +16,25 @@ pub mod task_editor;
 use ratatui::prelude::*;
 use crate::state::types::FocusedPanel;
 
+/// Format elapsed time since the given timestamp.
+pub(crate) fn format_elapsed_time(entered_at: i64) -> String {
+    if entered_at <= 0 {
+        return String::new();
+    }
+    let now = chrono::Utc::now().timestamp();
+    let elapsed = now.saturating_sub(entered_at).max(0) as u64;
+    let secs = elapsed % 60;
+    let mins = (elapsed / 60) % 60;
+    let hours = elapsed / 3600;
+    if hours > 0 {
+        format!("{}h {}m", hours, mins)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 /// Type alias for the terminal backend.
 pub type CrosstermBackend = ratatui::backend::CrosstermBackend<std::io::Stdout>;
 /// Type alias for the terminal.

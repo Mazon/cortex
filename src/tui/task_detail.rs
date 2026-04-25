@@ -3,27 +3,9 @@
 use crate::state::types::{
     AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
 };
+use super::format_elapsed_time;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-
-/// Format elapsed time since the given timestamp.
-fn format_elapsed_time(entered_at: i64) -> String {
-    if entered_at <= 0 {
-        return String::new();
-    }
-    let now = chrono::Utc::now().timestamp();
-    let elapsed = now.saturating_sub(entered_at).max(0) as u64;
-    let secs = elapsed % 60;
-    let mins = (elapsed / 60) % 60;
-    let hours = elapsed / 3600;
-    if hours > 0 {
-        format!("{}h {}m", hours, mins)
-    } else if mins > 0 {
-        format!("{}m {}s", mins, secs)
-    } else {
-        format!("{}s", secs)
-    }
-}
 
 /// Render the task detail panel in the given area.
 ///
@@ -195,7 +177,7 @@ fn render_metadata_line(
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
         AgentStatus::Running => theme.working_color(),
-        AgentStatus::Ready => theme.done_color(),
+        AgentStatus::Ready => Color::Cyan,
         AgentStatus::Complete => theme.done_color(),
         AgentStatus::Error => theme.error_color(),
         AgentStatus::Hung => theme.question_color(),

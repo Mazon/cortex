@@ -220,8 +220,9 @@ impl AppState {
 
         let from_column = task.column.clone();
         task.column = to_column.clone();
-        task.entered_column_at = chrono::Utc::now().timestamp();
-        task.last_activity_at = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp();
+        task.entered_column_at = now;
+        task.last_activity_at = now;
 
         // Remove from old column in kanban
         if let Some(tasks) = self.kanban.columns.get_mut(&from_column.0) {
@@ -1136,8 +1137,11 @@ impl AppState {
             .map(|task_id| {
                 self.update_task_agent_status(&task_id, AgentStatus::Complete);
 
+                let agent_label = self.tasks.get(&task_id)
+                    .and_then(|t| t.agent_type.clone())
+                    .unwrap_or_else(|| "agent".to_string());
                 self.set_notification(
-                    format!("Task agent completed"),
+                    format!("{} agent completed", agent_label),
                     NotificationVariant::Success,
                     5000,
                 );

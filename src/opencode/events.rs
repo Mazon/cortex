@@ -79,7 +79,7 @@ pub async fn sse_event_loop(
                                     if msg.contains("unknown variant") {
                                         // Skip unknown variants silently
                                     } else {
-                                        // Skip SSE event errors
+                                        tracing::warn!("Skipping malformed SSE event: {}", msg);
                                     }
                                     continue;
                                 }
