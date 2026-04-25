@@ -941,6 +941,16 @@ impl AppState {
 
         self.update_streaming_text(task_id, None);
 
+        // Clear dedup tracking — no longer needed after finalization.
+        // For main sessions this is the only place these are cleared
+        // (subagents also clear on complete/idle/error in
+        // process_session_status / process_session_idle).
+        if let Some(session) = self.task_sessions.get_mut(task_id) {
+            session.seen_delta_keys.clear();
+            session.last_delta_key = None;
+            session.last_delta_content = None;
+        }
+
         has_streaming
     }
 

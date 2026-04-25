@@ -165,10 +165,10 @@ pub async fn sse_event_loop(
                                                 let mut s = state_clone.lock().unwrap();
                                                 s.finalize_session_streaming(&task_id, messages);
                                             }
-                                            Err(_e) => {
-                                                // Clear streaming_text even on failure to prevent stale data
-                                                let mut s = state_clone.lock().unwrap();
-                                                s.update_streaming_text(&task_id, None);
+                                            Err(e) => {
+                                                tracing::warn!("Failed to fetch session messages for finalization (streaming text preserved): {}", e);
+                                                // Don't clear streaming_text — it's the only copy of the agent's output.
+                                                // It will be cleaned up when a new session starts.
                                             }
                                         }
                                     });
