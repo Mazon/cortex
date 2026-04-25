@@ -211,10 +211,20 @@ pub struct OpenCodeConfig {
     /// Set to 0 to retry forever (not recommended). Defaults to 50.
     #[serde(default = "default_sse_max_retries")]
     pub sse_max_retries: u32,
+    /// Read timeout (per-chunk) for SSE event streams, in seconds.
+    /// The timer resets after every successful chunk, so the stream
+    /// only dies when no data arrives for this duration. Defaults to 60s.
+    #[serde(default = "default_sse_read_timeout_secs")]
+    pub sse_read_timeout_secs: u64,
 }
 
 fn default_sse_max_retries() -> u32 {
     50
+}
+
+/// Default value for `OpenCodeConfig::sse_read_timeout_secs`.
+fn default_sse_read_timeout_secs() -> u64 {
+    60
 }
 
 fn default_hostname() -> String {
@@ -235,6 +245,7 @@ impl Default for OpenCodeConfig {
             mcp_servers: HashMap::new(),
             request_timeout_secs: default_request_timeout_secs(),
             sse_max_retries: default_sse_max_retries(),
+            sse_read_timeout_secs: default_sse_read_timeout_secs(),
         }
     }
 }
