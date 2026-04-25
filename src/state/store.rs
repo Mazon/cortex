@@ -926,6 +926,19 @@ impl AppState {
             .is_some_and(|s| s.streaming_text.is_some());
 
         self.update_session_messages(task_id, messages);
+
+        // Extract plan output while session.messages is populated with the full
+        // fetched message list. This must happen BEFORE update_streaming_text
+        // clears streaming_text, so the fallback path in extract_plan_output
+        // can still access it if the messages contain no assistant text parts.
+        //
+        // Ordering dependency: auto-progression (on_agent_completed → start_agent)
+        // is also async, and the "do" agent's build_prompt_for_agent reads
+        // task.plan_output. Since both finalization and auto-progression are
+        // spawned on the same tokio runtime, the finalization lock-hold completes
+        // before start_agent acquires the lock to build the prompt.
+        self.extract_plan_output(task_id);
+
         self.update_streaming_text(task_id, None);
 
         has_streaming
@@ -1109,11 +1122,6 @@ impl AppState {
             .map(|s| s.to_string())
             .map(|task_id| {
                 self.update_task_agent_status(&task_id, AgentStatus::Complete);
-
-                // Extract plan output from the completed agent's session.
-                // Must happen BEFORE on_agent_completed() triggers auto-progression,
-                // so the "do" agent can read the plan via build_prompt_for_agent().
-                self.extract_plan_output(&task_id);
 
                 self.set_notification(
                     format!("Task agent completed"),
