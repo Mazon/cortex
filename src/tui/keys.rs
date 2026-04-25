@@ -297,6 +297,12 @@ mod tests {
             Some(Action::DeleteTask)
         );
 
+        // DeleteProject: shift+x
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SHIFT)),
+            Some(Action::DeleteProject)
+        );
+
         // ViewTask: v
         assert_eq!(
             matcher.match_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),

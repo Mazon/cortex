@@ -414,7 +414,7 @@ fn default_set_working_directory() -> String {
     "d".to_string()
 }
 fn default_delete_project() -> String {
-    "ctrl+shift+d".to_string()
+    "shift+x".to_string()
 }
 fn default_abort_session() -> String {
     "ctrl+a a".to_string()

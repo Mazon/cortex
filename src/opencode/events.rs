@@ -79,8 +79,10 @@ pub async fn sse_event_loop(
                                     match &e {
                                         SseStreamError::Json(json_err) => {
                                             let msg = json_err.to_string();
-                                            if msg.contains("unknown variant") {
-                                                // Unknown event type — stream is still healthy, skip.
+                                            if msg.contains("unknown variant") || msg.contains("missing field") {
+                                                // Unknown event type or structurally expected field missing from
+                                                // the server payload (e.g. FileDiff.before for new files).
+                                                // The stream is still healthy — skip silently.
                                             } else {
                                                 tracing::warn!("Skipping malformed SSE event: {}", msg);
                                             }

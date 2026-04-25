@@ -184,6 +184,7 @@ visible = false
 # new_project = "ctrl+n"               # Create a new project
 # rename_project = "r"                 # Rename active project
 # set_working_directory = "d"          # Set working directory for active project
+delete_project = "shift+x"            # Delete active project (confirmed)
 
 # Session
 # abort_session = "ctrl+a a"           # Abort the active agent session
