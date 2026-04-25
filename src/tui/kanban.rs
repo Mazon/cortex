@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 const SCROLL_INDICATOR_WIDTH: u16 = 3;
 
 /// Render the kanban board in the given area.
-pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &CortexConfig) {
+pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &CortexConfig, now: i64) {
     let all_visible = config.columns.visible_column_ids();
     if all_visible.is_empty() {
         return;
@@ -170,7 +170,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                     };
 
                     crate::tui::task_card::render_task_card(
-                        f, card_area, task, is_task_focused, &config.theme,
+                        f, card_area, task, is_task_focused, &config.theme, now,
                     );
                     card_y += card_height + 1;
                     rendered_count += 1;

@@ -19,6 +19,7 @@ pub fn render_task_detail(
     state: &mut AppState,
     task_id: &str,
     theme: &crate::config::types::ThemeConfig,
+    now: i64,
 ) {
     let task = match state.tasks.get(task_id) {
         Some(t) => t,
@@ -117,7 +118,7 @@ pub fn render_task_detail(
         .split(inner);
 
     // ── 1. Metadata line ─────────────────────────────────────────────
-    render_metadata_line(f, v_layout[0], task, theme);
+    render_metadata_line(f, v_layout[0], task, theme, now);
 
     // ── 2. Breadcrumb (only when drilled into subagent) ───────────────
     if is_drilled {
@@ -172,6 +173,7 @@ fn render_metadata_line(
     area: Rect,
     task: &CortexTask,
     theme: &crate::config::types::ThemeConfig,
+    now: i64,
 ) {
     let status_icon = task.agent_status.icon();
     let status_text = task.agent_status.to_string();
@@ -184,7 +186,7 @@ fn render_metadata_line(
         AgentStatus::Pending => Color::DarkGray,
     };
 
-    let elapsed = format_elapsed_time(task.entered_column_at);
+    let elapsed = format_elapsed_time(task.entered_column_at, now);
     let agent_name = task.agent_type.as_deref().unwrap_or("none");
 
     // Task number badge

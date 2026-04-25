@@ -1050,17 +1050,30 @@ impl AppState {
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join("\n")
+                .trim()
+                .to_string();
 
             if !from_messages.is_empty() {
                 from_messages
             } else if let Some(ref text) = session.streaming_text {
-                text.clone()
+                text.trim().to_string()
             } else {
                 return;
             }
         } else {
             return;
+        };
+
+        // Enforce a 50KB cap — keep the tail (most recent content)
+        const PLAN_OUTPUT_CAP_BYTES: usize = 50 * 1024;
+        let plan = if plan.len() > PLAN_OUTPUT_CAP_BYTES {
+            let start = plan.len() - PLAN_OUTPUT_CAP_BYTES;
+            let mut i = start;
+            while i < plan.len() && !plan.is_char_boundary(i) { i += 1; }
+            plan[i..].to_string()
+        } else {
+            plan
         };
 
         if let Some(task) = self.tasks.get_mut(task_id) {
@@ -1568,12 +1581,18 @@ impl AppState {
             .tasks
             .values()
             .any(|t| t.project_id == project_id && t.pending_question_count > 0);
+        let has_ready = self
+            .tasks
+            .values()
+            .any(|t| t.project_id == project_id && t.agent_status == AgentStatus::Ready);
 
         let status = if has_error {
             ProjectStatus::Error
         } else if has_question {
             ProjectStatus::Question
         } else if has_running {
+            ProjectStatus::Working
+        } else if has_ready {
             ProjectStatus::Working
         } else {
             ProjectStatus::Idle

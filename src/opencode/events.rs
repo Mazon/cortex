@@ -264,6 +264,11 @@ fn process_event(
 
         EventListResponse::SessionIdle { properties } => {
             let action = if let Some(task_id) = state.process_session_idle(&properties.session_id) {
+                // Extract plan output NOW from streaming_text, so the has_plan
+                // check below can see it. finalize_session_streaming will later
+                // overwrite with the full message-based version.
+                state.extract_plan_output(&task_id);
+
                 // process_session_idle sets Complete by default — override to Ready
                 // when the task has a plan ready for the next step, or when the
                 // column has auto_progress_to configured.

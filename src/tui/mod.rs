@@ -17,11 +17,10 @@ use ratatui::prelude::*;
 use crate::state::types::FocusedPanel;
 
 /// Format elapsed time since the given timestamp.
-pub(crate) fn format_elapsed_time(entered_at: i64) -> String {
+pub(crate) fn format_elapsed_time(entered_at: i64, now: i64) -> String {
     if entered_at <= 0 {
         return String::new();
     }
-    let now = chrono::Utc::now().timestamp();
     let elapsed = now.saturating_sub(entered_at).max(0) as u64;
     let secs = elapsed % 60;
     let mins = (elapsed / 60) % 60;
@@ -47,6 +46,7 @@ pub fn render_normal(
     config: &crate::config::types::CortexConfig,
 ) {
     let area = f.area();
+    let now = chrono::Utc::now().timestamp();
 
     // Main horizontal layout: sidebar | kanban
     let sidebar_width = config.theme.sidebar_width;
@@ -78,13 +78,13 @@ pub fn render_normal(
     sidebar::render_sidebar(f, sidebar_v[0], state, config);
     match state.ui.focused_panel {
         FocusedPanel::Kanban => {
-            kanban::render_kanban(f, kanban_v[0], state, config);
+            kanban::render_kanban(f, kanban_v[0], state, config, now);
         }
         FocusedPanel::TaskDetail => {
             if let Some(task_id) = state.ui.viewing_task_id.clone() {
-                task_detail::render_task_detail(f, kanban_v[0], state, &task_id, &config.theme);
+                task_detail::render_task_detail(f, kanban_v[0], state, &task_id, &config.theme, now);
             } else {
-                kanban::render_kanban(f, kanban_v[0], state, config);
+                kanban::render_kanban(f, kanban_v[0], state, config, now);
             }
         }
     }

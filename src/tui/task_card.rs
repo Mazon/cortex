@@ -13,6 +13,7 @@ pub fn render_task_card(
     task: &CortexTask,
     is_selected: bool,
     theme: &ThemeConfig,
+    now: i64,
 ) {
     let border_color = if is_selected {
         Color::Cyan
@@ -204,7 +205,7 @@ pub fn render_task_card(
 
         // Line 3 (timer) — show elapsed time since entering current column
         if inner.height >= 3 {
-            let elapsed = format_elapsed_time(task.entered_column_at);
+            let elapsed = format_elapsed_time(task.entered_column_at, now);
             if !elapsed.is_empty() {
                 let timer_spans = vec![
                     Span::styled("⏱ ", Style::default().fg(Color::DarkGray)),

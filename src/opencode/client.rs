@@ -53,7 +53,7 @@ impl OpenCodeClient {
     /// default agent and the correct agent is selected when the first prompt
     /// is sent through [`SessionChatParams::agent`].
     pub async fn create_session(&self) -> Result<Session> {
-        tracing::warn!(
+        tracing::debug!(
             "create_session: agent cannot be specified at session creation time; \
              it will be set on the first chat message via SessionChatParams.agent"
         );

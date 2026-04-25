@@ -7,10 +7,36 @@ use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::OpenCodeClient;
 use crate::state::types::{AppState, KanbanColumn};
 
+/// Maximum backoff delay cap (30 seconds).
+const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(30);
+
+/// Check if an error is transient and worth retrying.
+///
+/// Non-retryable errors include client-side HTTP errors (4xx, except 429 rate limit).
+/// Server errors (5xx), rate limits (429), and network-level errors are retryable.
+fn is_retryable(error: &anyhow::Error) -> bool {
+    let msg = error.to_string();
+    // Check for HTTP status codes in the error message (SDK wraps errors in anyhow)
+    // Non-retryable: 4xx client errors (except 429 Too Many Requests)
+    for token in msg.split_whitespace() {
+        if let Some(code_str) = token.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            if let Ok(code) = code_str.parse::<u16>() {
+                if (400..429).contains(&code) || (430..500).contains(&code) {
+                    return false;
+                }
+                // 429 (rate limit) and 5xx are retryable
+            }
+        }
+    }
+    true
+}
+
 /// Retry an async operation with exponential backoff.
 ///
 /// Attempts `operation` up to `max_attempts` times. On each failure the
-/// delay doubles starting from `initial_delay` (500 ms → 1 s → 2 s …).
+/// delay doubles starting from `initial_delay` (500 ms → 1 s → 2 s …),
+/// capped at 30 seconds. Non-retryable errors (e.g. 4xx HTTP) cause an
+/// immediate return without retrying.
 /// A `tracing::warn!` is emitted for every retry so operators can see
 /// transient hiccups in the logs.
 async fn retry_with_backoff<F, Fut, T>(
@@ -29,6 +55,9 @@ where
         match operation().await {
             Ok(result) => return Ok(result),
             Err(e) => {
+                if !is_retryable(&e) {
+                    return Err(e);
+                }
                 last_error = Some(e);
                 if attempt + 1 < max_attempts {
                     tracing::warn!(
@@ -39,7 +68,7 @@ where
                         "Operation failed, retrying with exponential backoff"
                     );
                     tokio::time::sleep(delay).await;
-                    delay *= 2;
+                    delay = (delay * 2).min(MAX_BACKOFF_DELAY);
                 }
             }
         }
@@ -137,8 +166,14 @@ fn start_agent(
                 // This prevents server-side session accumulation that can cause
                 // SendRequest errors when concurrent sessions exhaust server resources.
                 if let Some(ref old_sid) = old_session_id {
-                    if let Err(e) = client.abort_session(old_sid).await {
-                        tracing::warn!("Failed to abort old session {}: {}", old_sid, e);
+                    match tokio::time::timeout(
+                        Duration::from_secs(10),
+                        client.abort_session(old_sid),
+                    ).await {
+                        Ok(Ok(true)) => {},
+                        Ok(Ok(false)) => tracing::warn!("Abort returned false for old session {}", old_sid),
+                        Ok(Err(e)) => tracing::warn!("Failed to abort old session {}: {}", old_sid, e),
+                        Err(_) => tracing::warn!("Timeout aborting old session {} after 10s", old_sid),
                     }
                 }
 
