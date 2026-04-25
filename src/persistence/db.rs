@@ -388,7 +388,7 @@ CREATE TABLE IF NOT EXISTS metadata (
 fn parse_agent_status(s: &str) -> AgentStatus {
     match s {
         "pending" => AgentStatus::Pending,
-        "working" | "running" => AgentStatus::Running,
+        "working" | "running" | "busy" => AgentStatus::Running,
         "hung" => AgentStatus::Hung,
         "ready" => AgentStatus::Ready,
         "done" | "complete" | "completed" => AgentStatus::Complete,

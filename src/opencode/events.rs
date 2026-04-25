@@ -77,9 +77,27 @@ pub async fn sse_event_loop(
                                 Err(e) => {
                                     let msg = e.to_string();
                                     if msg.contains("unknown variant") {
-                                        // Skip unknown variants silently
+                                        // Parse error — stream is still healthy, skip this event.
                                     } else {
-                                        tracing::warn!("Skipping malformed SSE event: {}", msg);
+                                        let msg_lower = msg.to_lowercase();
+                                        let is_connection_error = msg_lower.contains("timed out")
+                                            || msg_lower.contains("connection error")
+                                            || msg_lower.contains("connection reset")
+                                            || msg_lower.contains("broken pipe")
+                                            || msg_lower.contains("unexpected eof")
+                                            || msg_lower.contains("os error");
+
+                                        if is_connection_error {
+                                            // Connection error — stream is dead, break to reconnect.
+                                            tracing::debug!("SSE stream error (reconnecting): {}", msg);
+                                            {
+                                                let mut state = state.lock().unwrap();
+                                                state.reconnecting = true;
+                                            }
+                                            break; // Exit inner loop → triggers reconnect with backoff
+                                        } else {
+                                            tracing::warn!("Skipping malformed SSE event: {}", msg);
+                                        }
                                     }
                                     continue;
                                 }

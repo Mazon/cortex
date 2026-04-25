@@ -1119,8 +1119,8 @@ impl AppState {
             .map(|s| s.to_string())
         {
             let agent_status = match status {
-                "running" => AgentStatus::Running,
-                "complete" | "completed" => AgentStatus::Complete,
+                "running" | "busy" => AgentStatus::Running,
+                "complete" | "completed" | "idle" => AgentStatus::Complete,
                 _ => {
                     tracing::warn!("Unknown session status '{}' for task session, ignoring", status);
                     return;
@@ -3959,6 +3959,30 @@ mod tests {
             proj2.status,
             ProjectStatus::Idle,
             "Updating proj-1 should not change proj-2's status"
+        );
+    }
+
+    // ── Session status: "busy" mapped to Running ───────────────────────────
+
+    #[test]
+    fn process_session_status_busy_maps_to_running() {
+        let mut state = make_state_with_tasks();
+        let session_id = "session-busy-test";
+        state
+            .tasks
+            .get_mut("task-0")
+            .unwrap()
+            .session_id = Some(session_id.to_string());
+        state
+            .session_to_task
+            .insert(session_id.to_string(), "task-0".to_string());
+
+        state.process_session_status(session_id, "busy");
+
+        assert_eq!(
+            state.tasks.get("task-0").unwrap().agent_status,
+            AgentStatus::Running,
+            "'busy' status should map to AgentStatus::Running"
         );
     }
 }
