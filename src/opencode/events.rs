@@ -8,6 +8,7 @@ use crate::opencode::client::{
     convert_session_error, extract_permission_fields, is_safe_tool,
     OpenCodeClient,
 };
+use crate::opencode::sse::SseStreamError;
 use crate::orchestration::engine::{on_agent_completed, on_task_moved, AutoProgressAction};
 use crate::state::types::{AgentStatus, AppState};
 
@@ -75,28 +76,23 @@ pub async fn sse_event_loop(
                             let event = match event_result {
                                 Ok(e) => e,
                                 Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("unknown variant") {
-                                        // Parse error — stream is still healthy, skip this event.
-                                    } else {
-                                        let msg_lower = msg.to_lowercase();
-                                        let is_connection_error = msg_lower.contains("timed out")
-                                            || msg_lower.contains("connection error")
-                                            || msg_lower.contains("connection reset")
-                                            || msg_lower.contains("broken pipe")
-                                            || msg_lower.contains("unexpected eof")
-                                            || msg_lower.contains("os error");
-
-                                        if is_connection_error {
+                                    match &e {
+                                        SseStreamError::Json(json_err) => {
+                                            let msg = json_err.to_string();
+                                            if msg.contains("unknown variant") {
+                                                // Unknown event type — stream is still healthy, skip.
+                                            } else {
+                                                tracing::warn!("Skipping malformed SSE event: {}", msg);
+                                            }
+                                        }
+                                        SseStreamError::Connection(msg) => {
                                             // Connection error — stream is dead, break to reconnect.
                                             tracing::debug!("SSE stream error (reconnecting): {}", msg);
                                             {
                                                 let mut state = state.lock().unwrap();
                                                 state.reconnecting = true;
                                             }
-                                            break; // Exit inner loop → triggers reconnect with backoff
-                                        } else {
-                                            tracing::warn!("Skipping malformed SSE event: {}", msg);
+                                            break;
                                         }
                                     }
                                     continue;

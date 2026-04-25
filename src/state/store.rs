@@ -1120,7 +1120,13 @@ impl AppState {
         {
             let agent_status = match status {
                 "running" | "busy" => AgentStatus::Running,
-                "complete" | "completed" | "idle" => AgentStatus::Complete,
+                "complete" | "completed" => AgentStatus::Complete,
+                "idle" => {
+                    // Don't update status — SessionIdle event handles this
+                    // with proper Ready/Complete logic. A SessionStatus "idle"
+                    // arriving after SessionIdle would overwrite Ready→Complete.
+                    return;
+                }
                 _ => {
                     tracing::warn!("Unknown session status '{}' for task session, ignoring", status);
                     return;

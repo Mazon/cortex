@@ -45,21 +45,6 @@ impl OpenCodeClient {
         })
     }
 
-    /// Create a new `OpenCodeClient` from an `OpenCodeConfig`.
-    pub fn from_config(config: &OpenCodeConfig) -> Result<Self> {
-        let url = format!("http://{}:{}", config.hostname, config.port);
-        let sdk = opencode_sdk_rs::Opencode::builder()
-            .base_url(&url)
-            .timeout(Duration::from_secs(config.request_timeout_secs))
-            .max_retries(2)
-            .build()
-            .context("Failed to build OpenCode SDK client")?;
-        Ok(Self {
-            sdk,
-            sse_read_timeout_secs: config.sse_read_timeout_secs,
-        })
-    }
-
     /// Create a new `OpenCodeClient` using config values but connected to
     /// the specified URL (which may differ from `config.hostname:config.port`
     /// when the server picks a random port).
@@ -269,7 +254,7 @@ impl OpenCodeClient {
     pub async fn subscribe_to_events(&self) -> Result<SseEventStream<EventListResponse>> {
         let hpx_client = hpx::Client::builder()
             .timeout(Duration::from_secs(30)) // TCP connect + HTTP headers
-            .read_timeout(Duration::from_secs(self.sse_read_timeout_secs)) // per-chunk body timeout
+            .read_timeout(Duration::from_secs(self.sse_read_timeout_secs.max(5))) // per-chunk body timeout (min 5s)
             .build()
             .context("Failed to build hpx client for SSE")?;
 
@@ -284,6 +269,18 @@ impl OpenCodeClient {
             return Err(anyhow::anyhow!(
                 "SSE endpoint returned status {}",
                 response.status()
+            ));
+        }
+
+        let content_type = response
+            .headers()
+            .get(hpx::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !content_type.starts_with("text/event-stream") {
+            return Err(anyhow::anyhow!(
+                "SSE endpoint returned unexpected Content-Type: {}",
+                content_type
             ));
         }
 

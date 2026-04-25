@@ -10,6 +10,7 @@
 use bytes::Bytes;
 use futures::Stream;
 use pin_project_lite::pin_project;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -50,6 +51,12 @@ struct SseDecoder {
     current_id: Option<String>,
 }
 
+/// Maximum allowed size for the internal line buffer (1 MB).
+/// A misbehaving server sending no LF characters would otherwise cause
+/// unbounded memory growth. If exceeded, the buffer is silently cleared
+/// and an error is logged — this is conservative but prevents OOM.
+const MAX_BUFFER_SIZE: usize = 1_048_576;
+
 impl SseDecoder {
     fn new() -> Self {
         Self {
@@ -63,6 +70,20 @@ impl SseDecoder {
     /// Feed raw bytes into the decoder. Returns all complete events found.
     fn feed(&mut self, chunk: &[u8]) -> Vec<ServerSentEvent> {
         self.buffer.extend_from_slice(chunk);
+
+        // Guard against unbounded buffer growth from a misbehaving server.
+        if self.buffer.len() > MAX_BUFFER_SIZE {
+            self.buffer.clear();
+            self.current_data.clear();
+            self.current_event_type = None;
+            self.current_id = None;
+            tracing::error!(
+                "SSE buffer exceeded {} bytes — possible malformed stream, resetting",
+                MAX_BUFFER_SIZE
+            );
+            return Vec::new();
+        }
+
         let mut events = Vec::new();
 
         // Process complete lines.
@@ -96,12 +117,18 @@ impl SseDecoder {
     }
 
     /// Flush any remaining buffered data as a final event (end-of-stream).
+    ///
+    /// Handles the case where the stream ends without a trailing blank line —
+    /// any accumulated `data:` field is still emitted as a complete event.
     fn flush(&mut self) -> Option<ServerSentEvent> {
-        if self.buffer.is_empty() {
+        if self.buffer.is_empty() && self.current_data.is_empty() {
             return None;
         }
-        let line: Vec<u8> = std::mem::take(&mut self.buffer);
-        self.process_line(&line)
+        if !self.buffer.is_empty() {
+            let line: Vec<u8> = std::mem::take(&mut self.buffer);
+            let _ = self.process_line(&line);
+        }
+        self.emit_event()
     }
 
     /// Process a single line and potentially emit an event.
@@ -190,7 +217,7 @@ pin_project! {
         #[pin]
         inner: Pin<Box<dyn Stream<Item = Result<Bytes, hpx::Error>> + Send>>,
         decoder: SseDecoder,
-        pending: Vec<ServerSentEvent>,
+        pending: VecDeque<ServerSentEvent>,
         _marker: std::marker::PhantomData<T>,
     }
 }
@@ -203,7 +230,7 @@ impl<T: serde::de::DeserializeOwned> SseEventStream<T> {
         Self {
             inner: Box::pin(byte_stream),
             decoder: SseDecoder::new(),
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -217,7 +244,7 @@ impl<T: serde::de::DeserializeOwned> Stream for SseEventStream<T> {
 
         // First, drain any pending events from a previous chunk.
         if !this.pending.is_empty() {
-            let event = this.pending.remove(0);
+            let event = this.pending.pop_front().unwrap();
             if event.data.is_empty() {
                 // Skip events with no data (heartbeats, etc.).
                 cx.waker().wake_by_ref();
@@ -232,7 +259,7 @@ impl<T: serde::de::DeserializeOwned> Stream for SseEventStream<T> {
         match this.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
                 let events = this.decoder.feed(&bytes);
-                *this.pending = events;
+                *this.pending = events.into();
                 cx.waker().wake_by_ref();
                 Poll::Pending
             }
@@ -407,5 +434,17 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Connection error"), "got: {}", msg);
         assert!(msg.contains("timed out"), "got: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn stream_ending_without_trailing_blank_line_emits_event() {
+        // When the server closes the connection without sending a trailing
+        // blank line after the last data field, flush() should still emit
+        // the accumulated event (H2 fix).
+        let data = b"data: {\"flushed\":true}";
+        let mut stream = stream_from_bytes(data);
+        let event = stream.next().await.unwrap().unwrap();
+        assert_eq!(event["flushed"], true);
+        assert!(stream.next().await.is_none());
     }
 }
