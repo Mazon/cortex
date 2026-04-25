@@ -1146,6 +1146,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn auto_progress_column_with_plan_output_still_gets_ready() {
+        // A task in a column WITH auto_progress_to AND plan_output should
+        // still get Ready status (both conditions independently trigger Ready).
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Use default config: "planning" has auto_progress_to → "running"
+        let columns_config = make_columns_config();
+
+        // Pre-set plan_output on the task
+        state.tasks.get_mut(&task_id).unwrap().plan_output = Some(
+            "Step 1: Refactor module\nStep 2: Add tests".to_string()
+        );
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Should get Ready — both auto_progress_to and plan_output are set.
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Ready
+        );
+    }
+
     // ── Plan output extraction ───────────────────────────────────────────
 
     #[test]
