@@ -1,7 +1,6 @@
 //! Thin wrapper around `opencode_sdk_rs::Opencode`.
 
 use anyhow::{Context, Result};
-use tracing::{debug, info};
 use opencode_sdk_rs::resources::app::App;
 use opencode_sdk_rs::resources::event::EventListResponse;
 use opencode_sdk_rs::resources::session::{
@@ -31,7 +30,6 @@ impl OpenCodeClient {
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        info!("OpenCode client created for {}", base_url);
         Ok(Self { sdk })
     }
 
@@ -44,20 +42,17 @@ impl OpenCodeClient {
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        info!("OpenCode client created for {} (timeout: {}s)", url, config.request_timeout_secs);
         Ok(Self { sdk })
     }
 
     /// Create a new OpenCode session.
     pub async fn create_session(&self) -> Result<Session> {
-        debug!("Creating new session");
         let session = self
             .sdk
             .session()
             .create(None)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create session: {}", e))?;
-        debug!("Session created: {}", session.id);
         Ok(session)
     }
 
@@ -70,7 +65,10 @@ impl OpenCodeClient {
         agent: Option<&str>,
         model: Option<&str>,
     ) -> Result<SessionMessagesResponseItem> {
-        debug!("Sending prompt to session {}: {} chars", session_id, text.len());
+        tracing::debug!(
+            "send_prompt: session={}, agent={:?}, model={:?}, text_len={}",
+            session_id, agent, model, text.len()
+        );
         let text_input = TextPartInput {
             text: text.to_string(),
             id: None,
@@ -107,7 +105,6 @@ impl OpenCodeClient {
 
     /// Abort an active session. Returns `true` if the abort was acknowledged.
     pub async fn abort_session(&self, session_id: &str) -> Result<bool> {
-        debug!("Aborting session: {}", session_id);
         let result = self
             .sdk
             .session()
@@ -119,7 +116,6 @@ impl OpenCodeClient {
 
     /// Fetch all messages for a session.
     pub async fn get_messages(&self, session_id: &str) -> Result<SessionMessagesResponse> {
-        debug!("Fetching messages for session: {}", session_id);
         let messages = self
             .sdk
             .session()
@@ -134,7 +130,6 @@ impl OpenCodeClient {
     /// This is used for lazy-loading subagent output when the user drills
     /// down into a subagent via `ctrl+x`.
     pub async fn fetch_subagent_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
-        debug!("Fetching subagent messages for session: {}", session_id);
         let response = self.get_messages(session_id)
             .await
             .with_context(|| format!("Failed to fetch messages for subagent session {}", session_id))?;
@@ -142,11 +137,6 @@ impl OpenCodeClient {
             .iter()
             .map(convert_sdk_message)
             .collect();
-        debug!(
-            "Fetched {} messages for subagent session {}",
-            messages.len(),
-            session_id
-        );
         Ok(messages)
     }
 
@@ -155,7 +145,6 @@ impl OpenCodeClient {
     /// Used after a session completes to persist the full message history
     /// into `session.messages`, replacing the transient `streaming_text`.
     pub async fn fetch_session_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
-        debug!("Fetching messages for session: {}", session_id);
         let response = self.get_messages(session_id)
             .await
             .with_context(|| format!("Failed to fetch messages for session {}", session_id))?;
@@ -163,17 +152,11 @@ impl OpenCodeClient {
             .iter()
             .map(convert_sdk_message)
             .collect();
-        debug!(
-            "Fetched {} messages for session {}",
-            messages.len(),
-            session_id
-        );
         Ok(messages)
     }
 
     /// Delete a session. Returns `true` if the deletion was acknowledged.
     pub async fn delete_session(&self, session_id: &str) -> Result<bool> {
-        debug!("Deleting session: {}", session_id);
         let result = self
             .sdk
             .session()
@@ -185,7 +168,6 @@ impl OpenCodeClient {
 
     /// List all sessions.
     pub async fn list_sessions(&self) -> Result<SessionListResponse> {
-        debug!("Listing sessions");
         let sessions = self
             .sdk
             .session()
@@ -202,7 +184,6 @@ impl OpenCodeClient {
         permission_id: &str,
         approved: bool,
     ) -> Result<()> {
-        debug!("Resolving permission {} in session {}: approved={}", permission_id, session_id, approved);
         let reply = if approved { "once" } else { "reject" };
         let body = serde_json::json!({ "reply": reply });
         let path = format!("/session/{}/permission/{}", session_id, permission_id);
@@ -234,7 +215,6 @@ impl OpenCodeClient {
     /// Subscribe to the OpenCode SSE event stream. Returns a stream of
     /// [`EventListResponse`] items that yields events as they arrive.
     pub async fn subscribe_to_events(&self) -> Result<SseStream<EventListResponse>> {
-        debug!("Subscribing to SSE events");
         let stream = self
             .sdk
             .event()
@@ -246,7 +226,6 @@ impl OpenCodeClient {
 
     /// Fetch OpenCode app info (version, status, etc.).
     pub async fn get_app_info(&self) -> Result<App> {
-        debug!("Fetching app info");
         let app = self
             .sdk
             .app()
@@ -345,10 +324,7 @@ pub fn convert_sdk_part(part: &Part) -> TaskMessagePart {
         Part::StepFinish(s) => TaskMessagePart::StepFinish { id: s.id.clone() },
         Part::Agent(a) => TaskMessagePart::Agent { id: a.id.clone(), agent: a.name.clone() },
         Part::Reasoning(r) => TaskMessagePart::Reasoning { text: r.text.clone() },
-        _ => {
-            tracing::debug!("Unknown message part type: {:?}", part);
-            TaskMessagePart::Unknown
-        }
+        _ => TaskMessagePart::Unknown,
     }
 }
 

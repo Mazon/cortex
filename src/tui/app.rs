@@ -84,27 +84,22 @@ impl App {
                     tokio::signal::unix::SignalKind::terminate(),
                 ) {
                     Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!("Failed to register SIGTERM handler: {}", e);
+                    Err(_e) => {
                         let _ = tokio::signal::ctrl_c().await;
-                        tracing::info!("Received SIGINT — shutting down gracefully");
                         let _ = shutdown_tx.send(()).await;
                         return;
                     }
                 };
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("Received SIGINT — shutting down gracefully");
                     }
                     _ = sigterm.recv() => {
-                        tracing::info!("Received SIGTERM — shutting down gracefully");
                     }
                 }
             }
             #[cfg(not(unix))]
             {
                 let _ = tokio::signal::ctrl_c().await;
-                tracing::info!("Received SIGINT — shutting down gracefully");
             }
             let _ = shutdown_tx.send(()).await;
         });
@@ -359,16 +354,9 @@ impl App {
                         let state = self.state.clone();
                         let perm_id = perm.id.clone();
                         let session_id = perm.session_id.clone();
-                        let tool_name = perm.tool_name.clone();
                         tokio::spawn(async move {
                             match client.resolve_permission(&session_id, &perm_id, approve).await {
                                 Ok(()) => {
-                                    let action_word = if approve { "approved" } else { "rejected" };
-                                    tracing::info!(
-                                        "Permission {} {} for tool {}",
-                                        perm_id, action_word, tool_name
-                                    );
-                                    // Only remove from pending list on success
                                     let mut s = state.lock().unwrap();
                                     s.resolve_permission_request(&tid, &perm_id, approve);
                                     s.mark_render_dirty();
@@ -441,10 +429,6 @@ impl App {
                         tokio::spawn(async move {
                             match client.resolve_question(&session_id, &question_id, &answer).await {
                                 Ok(()) => {
-                                    tracing::info!(
-                                        "Question {} answered with: {}",
-                                        question_id, answer_preview
-                                    );
                                     let mut s = state.lock().unwrap();
                                     s.resolve_question_request(&tid, &question_id);
                                     s.set_notification(
@@ -836,8 +820,7 @@ impl App {
                     if let Some(pid) = &project_id {
                         if let Some(client) = self.opencode_clients.get(pid).cloned() {
                             tokio::spawn(async move {
-                                if let Err(e) = client.abort_session(&session_id).await {
-                                    tracing::warn!("Failed to abort remote session {}: {}", session_id, e);
+                                if let Err(_e) = client.abort_session(&session_id).await {
                                 }
                             });
                         }
@@ -889,21 +872,12 @@ impl App {
         };
 
         if let Some(sid) = session_id {
-            tracing::info!("Abort session requested: {}", sid);
-
             if let Some(client) = client {
                 let state = self.state.clone();
                 tokio::spawn(async move {
                     match client.abort_session(&sid).await {
                         Ok(aborted) => {
-                            if aborted {
-                                tracing::info!("Session {} aborted successfully", sid);
-                            } else {
-                                tracing::warn!(
-                                    "Session {} abort returned false (may already be done)",
-                                    sid
-                                );
-                            }
+                            let _ = aborted;
                         }
                         Err(e) => {
                             tracing::error!("Failed to abort session {}: {}", sid, e);
@@ -919,10 +893,6 @@ impl App {
                     state.mark_render_dirty();
                 });
             } else {
-                tracing::warn!(
-                    "No OpenCode client available for aborting session {}",
-                    sid
-                );
                 let mut state = self.state.lock().unwrap();
                 state.set_notification(
                     "No client available to abort session".to_string(),
@@ -998,18 +968,8 @@ impl App {
                             entry.streaming_text = None; // Clear to avoid double-rendering with messages
                             entry.messages = messages;
                             entry.render_version += 1;
-                            tracing::debug!(
-                                "Loaded {} messages for subagent {}",
-                                entry.messages.len(),
-                                session_id
-                            );
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                "Failed to fetch subagent messages for {}: {}",
-                                session_id,
-                                e
-                            );
                             let mut s = state.lock().unwrap();
                             s.set_notification(
                                 format!("Failed to load subagent: {}", e),
@@ -1179,11 +1139,7 @@ impl App {
                                 let sessions = sessions_to_abort;
                                 tokio::spawn(async move {
                                     for sid in &sessions {
-                                        if let Err(e) = client.abort_session(sid).await {
-                                            tracing::warn!(
-                                                "Failed to abort session {} during project deletion: {}",
-                                                sid, e
-                                            );
+                                        if let Err(_e) = client.abort_session(sid).await {
                                         }
                                     }
                                 });
@@ -1436,7 +1392,12 @@ impl App {
 
                         // Auto-launch agent if column has one configured
                         if let Some(ref col_id) = column_id {
-                            if let Some(_agent) = self.config.columns.agent_for_column(col_id) {
+                            let agent_name = self.config.columns.agent_for_column(col_id);
+                            tracing::debug!(
+                                "Task {} saved in column '{}', agent_for_column={:?}",
+                                task_id, col_id, agent_name
+                            );
+                            if let Some(_agent) = agent_name {
                                 // Check if task already has a running agent
                                 let already_running = state.tasks.get(&task_id)
                                     .map(|t| matches!(t.agent_status,

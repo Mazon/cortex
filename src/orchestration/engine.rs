@@ -1,10 +1,52 @@
 //! Orchestration engine — config-driven task progression rules.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::OpenCodeClient;
 use crate::state::types::{AppState, KanbanColumn};
+
+/// Retry an async operation with exponential backoff.
+///
+/// Attempts `operation` up to `max_attempts` times. On each failure the
+/// delay doubles starting from `initial_delay` (500 ms → 1 s → 2 s …).
+/// A `tracing::warn!` is emitted for every retry so operators can see
+/// transient hiccups in the logs.
+async fn retry_with_backoff<F, Fut, T>(
+    max_attempts: usize,
+    initial_delay: Duration,
+    operation: F,
+) -> anyhow::Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut delay = initial_delay;
+    let mut last_error = None;
+
+    for attempt in 0..max_attempts {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                last_error = Some(e);
+                if attempt + 1 < max_attempts {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        max_attempts,
+                        retry_after_ms = delay.as_millis() as u64,
+                        error = %last_error.as_ref().unwrap(),
+                        "Operation failed, retrying with exponential backoff"
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                }
+            }
+        }
+    }
+
+    Err(last_error.expect("retry_with_backoff called with max_attempts >= 1"))
+}
 
 /// Called when a task is moved to a new column.
 /// Starts an agent if the column has one configured.
@@ -17,7 +59,12 @@ pub fn on_task_moved(
     opencode_config: &OpenCodeConfig,
     previous_agent: Option<String>,
 ) {
-    if let Some(agent) = columns_config.agent_for_column(&to_column.0) {
+    let agent = columns_config.agent_for_column(&to_column.0);
+    tracing::debug!(
+        "on_task_moved: task={}, to_column={}, resolved_agent={:?}, previous_agent={:?}",
+        task_id, to_column.0, agent, previous_agent
+    );
+    if let Some(agent) = agent {
         start_agent(task_id, &agent, state, client, opencode_config, previous_agent);
     }
 }
@@ -31,6 +78,17 @@ fn start_agent(
     opencode_config: &OpenCodeConfig,
     previous_agent: Option<String>,
 ) {
+    // Log the full dispatch decision for diagnostics
+    {
+        let s = state.lock().unwrap();
+        let session_id = s.tasks.get(task_id).and_then(|t| t.session_id.clone());
+        let agent_changed = previous_agent.as_deref() != Some(agent);
+        tracing::debug!(
+            "start_agent: task={}, agent={}, previous_agent={:?}, session_id={:?}, agent_changed={}",
+            task_id, agent, previous_agent, session_id, agent_changed
+        );
+    }
+
     // Status is already set to Running by the caller (app.rs) to close the race window.
     // No need to re-acquire the lock here for status update.
 
@@ -57,7 +115,6 @@ fn start_agent(
             let task = match s.tasks.get(&task_id) {
                 Some(t) => t,
                 None => {
-                    tracing::warn!("Task {} not found for agent start", task_id);
                     return;
                 }
             };
@@ -91,9 +148,7 @@ fn start_agent(
                         if let Some(old_sid) = old_session_id {
                             let client_clone = client.clone();
                             tokio::spawn(async move {
-                                tracing::info!("Aborting old session {} after agent change", old_sid);
-                                if let Err(e) = client_clone.abort_session(&old_sid).await {
-                                    tracing::warn!("Failed to abort old session {}: {}", old_sid, e);
+                                if let Err(_e) = client_clone.abort_session(&old_sid).await {
                                 }
                             });
                         }
@@ -148,7 +203,6 @@ fn start_agent(
             .await
         {
             Ok(_) => {
-                tracing::info!("Prompt sent to agent '{}' for task {}", agent, task_id_clone);
             }
             Err(e) => {
                 tracing::error!("Failed to send prompt: {}", e);
@@ -184,12 +238,6 @@ pub fn on_agent_completed(
         .map(|t| t.column.clone());
     if let Some(col) = column {
         if let Some(target) = columns_config.auto_progress_for(&col.0) {
-            tracing::info!(
-                "Auto-progressing task {} from {} to {}",
-                task_id,
-                col.0,
-                target
-            );
             state.move_task(task_id, KanbanColumn(target.clone()));
 
             // Check if target column has an agent configured
