@@ -139,7 +139,7 @@ fn start_agent(
                     let mut s = state.lock().unwrap();
                     s.set_task_session_id(&task_id_clone, None);
                 }
-                match client.create_session().await {
+                match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
                     Ok(session) => {
                         let sid = session.id.clone();
                         let mut s = state.lock().unwrap();
@@ -155,7 +155,12 @@ fn start_agent(
                         sid
                     }
                     Err(e) => {
-                        tracing::error!("Failed to create session: {}", e);
+                        tracing::error!(
+                            task_id = %task_id_clone,
+                            agent = %agent,
+                            "Failed to create session after retries: {}",
+                            e
+                        );
                         let mut s = state.lock().unwrap();
                         s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                         return;

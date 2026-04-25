@@ -25,17 +25,12 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     // Save only dirty tasks (depends on projects — saved above)
     if state.dirty_tasks.is_empty() {
         // No tasks changed — skip task writes but still save kanban/metadata.
-        tracing::debug!("save_state: no dirty tasks, skipping task writes");
     } else {
         for task_id in &state.dirty_tasks {
             if let Some(task) = state.tasks.get(task_id) {
                 db.save_task_with_conn(task, &tx)?;
             }
         }
-        tracing::debug!(
-            "save_state: wrote {} dirty tasks",
-            state.dirty_tasks.len()
-        );
     }
 
     // Delete tasks that were removed from in-memory state
@@ -43,10 +38,6 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
         for task_id in &state.deleted_tasks {
             db.delete_task_with_conn(task_id, &tx)?;
         }
-        tracing::debug!(
-            "save_state: deleted {} tasks from database",
-            state.deleted_tasks.len()
-        );
     }
 
     // Delete projects that were removed from in-memory state
@@ -54,10 +45,6 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
         for project_id in &state.deleted_projects {
             db.delete_project_with_conn(project_id, &tx)?;
         }
-        tracing::debug!(
-            "save_state: deleted {} projects from database",
-            state.deleted_projects.len()
-        );
     }
 
     // Save kanban order (depends on tasks — saved above)
@@ -120,12 +107,6 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
         kanban_order,
         active_project_id,
         counters,
-    );
-
-    tracing::info!(
-        "Restored state: {} projects, {} tasks",
-        state.projects.len(),
-        state.tasks.len()
     );
 
     Ok(())

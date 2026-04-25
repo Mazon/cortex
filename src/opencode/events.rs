@@ -1,7 +1,6 @@
 //! SSE event loop — subscribe to events, match variants, update state directly.
 
 use futures::StreamExt;
-use tracing::{debug, warn};
 use std::sync::{Arc, Mutex};
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
@@ -30,7 +29,6 @@ pub async fn sse_event_loop(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut backoff_ms: u64 = 2000;
-    let mut reconnect_count: u64 = 0;
     let mut reconnect_attempt: u32 = 0;
 
     // Effective max retries: use config value, but treat 0 as "use default"
@@ -44,16 +42,12 @@ pub async fn sse_event_loop(
     loop {
         // Check shutdown before each connection attempt.
         if *shutdown.borrow() {
-            debug!("SSE event loop shutting down (received signal)");
             return;
         }
-
-        debug!("Subscribing to SSE events from {}", client.base_url());
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
                 backoff_ms = 2000; // Reset backoff on successful connection
-                reconnect_count += 1;
                 reconnect_attempt = 0; // Reset consecutive failure counter on success
                 let mut stream = stream;
 
@@ -66,19 +60,11 @@ pub async fn sse_event_loop(
                     state.permanently_disconnected = false;
                 }
 
-                if reconnect_count > 1 {
-                    debug!(
-                        "SSE reconnected successfully (reconnect #{})",
-                        reconnect_count - 1,
-                    );
-                }
-
                 loop {
                     tokio::select! {
                         event_result = stream.next() => {
                             let Some(event_result) = event_result else {
                                 // Stream closed by the server.
-                                warn!("SSE stream ended, reconnecting...");
                                 {
                                     let mut state = state.lock().unwrap();
                                     state.reconnecting = true;
@@ -91,32 +77,46 @@ pub async fn sse_event_loop(
                                 Err(e) => {
                                     let msg = e.to_string();
                                     if msg.contains("unknown variant") {
-                                        debug!("SSE unknown event type: {}", msg);
+                                        // Skip unknown variants silently
                                     } else {
-                                        warn!("SSE event error: {}", msg);
+                                        // Skip SSE event errors
                                     }
                                     continue;
                                 }
                             };
 
-                            let (action, finalize_session_id) = {
+                            let (action, finalize_session_id, finalize_task_id) = {
                                 let mut state = state.lock().unwrap();
                                 let (action, finalize_session_id) =
                                     process_event(&event, &mut state, &client, &columns_config);
                                 // Close the race window: set Running status + agent_type while
                                 // still holding the lock, same as the manual move path in app.rs.
                                 // Also capture previous agent for cross-contamination detection.
-                                let action = match action {
+                                let (action, finalize_task_id) = match action {
                                     Some(a) => {
                                         let previous_agent = state.tasks.get(&a.task_id)
                                             .and_then(|t| t.agent_type.clone());
+                                        // Clear old session mapping immediately so stale SessionStatus
+                                        // events for the old session can't find this task and overwrite
+                                        // the Running status we're about to set.
+                                        let old_session_id = state.tasks.get(&a.task_id)
+                                            .and_then(|t| t.session_id.clone());
+                                        if let Some(old_sid) = old_session_id {
+                                            state.session_to_task.remove(&old_sid);
+                                            // Keep the session_id on the task for now so start_agent()
+                                            // can detect the agent change and create a fresh session.
+                                            // The mapping is what matters for event routing.
+                                        }
                                         state.update_task_agent_status(&a.task_id, AgentStatus::Running);
                                         state.set_task_agent_type(&a.task_id, Some(a.agent.clone()));
-                                        Some((a, previous_agent))
+                                        // Return the task_id for finalization since we just broke the
+                                        // session→task lookup that the finalize logic depends on.
+                                        let finalize_task_id = Some(a.task_id.clone());
+                                        (Some((a, previous_agent)), finalize_task_id)
                                     }
-                                    None => None,
+                                    None => (None, None),
                                 };
-                                (action, finalize_session_id)
+                                (action, finalize_session_id, finalize_task_id)
                             };
 
                             // Start deferred agent if auto-progression triggered one.
@@ -139,11 +139,13 @@ pub async fn sse_event_loop(
                             if let Some(session_id) = finalize_session_id {
                                 // Look up the task_id while we can, but the actual
                                 // fetch must happen after the lock is released.
-                                let task_id = {
+                                // Use finalize_task_id if available (auto-progression may
+                                // have cleared the session→task mapping to prevent stale events).
+                                let task_id = finalize_task_id.or_else(|| {
                                     let s = state.lock().unwrap();
                                     s.get_task_id_by_session(&session_id)
                                         .map(|tid| tid.to_string())
-                                };
+                                });
                                 if let Some(task_id) = task_id {
                                     let client_clone = client.clone();
                                     let state_clone = state.clone();
@@ -155,32 +157,15 @@ pub async fn sse_event_loop(
                                                 .is_some_and(|ts| ts.streaming_text.is_some())
                                         };
                                         if !needs_finalize {
-                                            debug!(
-                                                "No streaming text to finalize for session {} (task {})",
-                                                session_id, task_id
-                                            );
                                             return;
                                         }
 
-                                        debug!(
-                                            "Finalizing streaming text for session {} (task {})",
-                                            session_id, task_id
-                                        );
                                         match client_clone.fetch_session_messages(&session_id).await {
                                             Ok(messages) => {
                                                 let mut s = state_clone.lock().unwrap();
-                                                let msg_count = messages.len();
                                                 s.finalize_session_streaming(&task_id, messages);
-                                                debug!(
-                                                    "Finalized session {}: {} messages, streaming cleared",
-                                                    session_id, msg_count
-                                                );
                                             }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Failed to finalize session {} (task {}): {}",
-                                                    session_id, task_id, e
-                                                );
+                                            Err(_e) => {
                                                 // Clear streaming_text even on failure to prevent stale data
                                                 let mut s = state_clone.lock().unwrap();
                                                 s.update_streaming_text(&task_id, None);
@@ -192,7 +177,6 @@ pub async fn sse_event_loop(
                         }
                         result = shutdown.changed() => {
                             if result.is_err() || *shutdown.borrow() {
-                                debug!("SSE event loop shutting down (received signal during stream)");
                                 return;
                             }
                         }
@@ -200,7 +184,7 @@ pub async fn sse_event_loop(
                 }
             }
             Err(e) => {
-                warn!("Failed to subscribe to SSE events: {}", e);
+                let _ = e;
                 {
                     let mut state = state.lock().unwrap();
                     state.reconnecting = true;
@@ -210,12 +194,6 @@ pub async fn sse_event_loop(
 
         // Check if we've exceeded the max retry limit.
         if reconnect_attempt >= max_retries {
-            warn!(
-                "SSE reconnection failed after {} consecutive attempts (max: {}). \
-                 Giving up — the project will be marked as permanently disconnected. \
-                 Restart the application to retry.",
-                reconnect_attempt, max_retries,
-            );
             {
                 let mut state = state.lock().unwrap();
                 state.reconnecting = false;
@@ -239,7 +217,6 @@ pub async fn sse_event_loop(
             _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
             _ = shutdown.changed() => {
                 if *shutdown.borrow() {
-                    debug!("SSE event loop shutting down during backoff");
                     return;
                 }
             }
@@ -287,6 +264,18 @@ fn process_event(
 
         EventListResponse::SessionIdle { properties } => {
             let action = if let Some(task_id) = state.process_session_idle(&properties.session_id) {
+                // process_session_idle sets Complete by default — override to Ready
+                // when the task has a plan ready for the next step, or when the
+                // column has auto_progress_to configured.
+                if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
+                    let has_auto_progress = columns_config.auto_progress_for(&col.0).is_some();
+                    let has_plan = state.tasks.get(&task_id)
+                        .and_then(|t| t.plan_output.as_ref())
+                        .is_some_and(|p| !p.is_empty());
+                    if has_auto_progress || has_plan {
+                        state.update_task_agent_status(&task_id, AgentStatus::Ready);
+                    }
+                }
                 // Trigger auto-progression if configured for this column
                 on_agent_completed(&task_id, state, columns_config)
             } else {
@@ -330,11 +319,8 @@ fn process_event(
                     let client_clone = client.clone();
                     let sid = session_id.clone();
                     let pid = perm_id.clone();
-                    let tool_name_clone = tool_name.clone();
                     tokio::spawn(async move {
-                        debug!("Auto-approving safe tool: {} ({})", tool_name_clone, pid);
-                        if let Err(e) = client_clone.resolve_permission(&sid, &pid, true).await {
-                            warn!("Failed to auto-approve permission: {}", e);
+                        if let Err(_e) = client_clone.resolve_permission(&sid, &pid, true).await {
                         }
                     });
 
@@ -608,7 +594,7 @@ mod tests {
     // ── SessionIdle ─────────────────────────────────────────────────────
 
     #[test]
-    fn session_idle_marks_task_complete_and_shows_notification() {
+    fn session_idle_sets_ready_for_intermediate_column_and_shows_notification() {
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
         let columns_config = make_columns_config();
@@ -621,7 +607,8 @@ mod tests {
         let (_action, finalize) = process_event(&event, &mut state, &client, &columns_config);
 
         let task = state.tasks.get(&task_id).unwrap();
-        assert_eq!(task.agent_status, AgentStatus::Complete);
+        // Task was in "planning" which has auto_progress_to → Ready, not Complete
+        assert_eq!(task.agent_status, AgentStatus::Ready);
         // Notification should be set
         let notif = state.ui.notifications.back().unwrap();
         assert!(notif.message.contains("completed"));
@@ -976,5 +963,264 @@ mod tests {
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
         assert!(state.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    // ── Race condition fix: stale SessionStatus can't overwrite Running ───
+
+    #[test]
+    fn stale_session_status_does_not_overwrite_after_mapping_cleared() {
+        // Simulate the core invariant of the race condition fix:
+        // After the session→task mapping is cleared (by auto-progression),
+        // a stale SessionStatus "complete" for the OLD session cannot find
+        // the task and therefore cannot overwrite its status.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Simulate auto-progression clearing the session mapping
+        state.session_to_task.remove(&session_id);
+
+        // Set the task to Running (as auto-progression would)
+        state.update_task_agent_status(&task_id, AgentStatus::Running);
+
+        // Now a stale SessionStatus "complete" arrives for the old session
+        let stale_event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        let (_action, _finalize) = process_event(&stale_event, &mut state, &client, &columns_config);
+
+        // Task should still be Running — the stale event couldn't find it
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Running,
+            "Stale SessionStatus should not overwrite Running when mapping is cleared"
+        );
+    }
+
+    #[test]
+    fn session_mapping_present_allows_status_update() {
+        // Control test: when the session→task mapping IS present, SessionStatus
+        // updates the task as expected.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Mapping is present (from make_test_state)
+        assert!(state.get_task_id_by_session(&session_id).is_some());
+
+        let event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Task status should be updated to Complete
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete,
+        );
+    }
+
+    // ── Ready vs Complete status ─────────────────────────────────────────
+
+    #[test]
+    fn terminal_column_gets_complete_not_ready() {
+        // When a task is in a terminal column (no auto_progress_to), SessionIdle
+        // should set Complete, not Ready.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config without auto-progression for "planning"
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
+
+        // Move task to "running" (terminal column — no auto_progress_to)
+        state.move_task(&task_id, KanbanColumn("running".to_string()));
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Terminal column should get Complete, not Ready
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete
+        );
+    }
+
+    // ── Ready status from plan_output ────────────────────────────────────
+
+    #[test]
+    fn session_idle_sets_ready_when_plan_output_exists() {
+        // A task in a terminal column (no auto_progress_to) should still get
+        // Ready status when it has a non-empty plan_output.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config without auto-progression for "planning"
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
+
+        // Pre-set plan_output on the task (simulating what extract_plan_output does)
+        state.tasks.get_mut(&task_id).unwrap().plan_output = Some(
+            "Here is the plan:\n1. Do X\n2. Do Y".to_string()
+        );
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Should get Ready because plan_output is non-empty, even though
+        // the column has no auto_progress_to.
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Ready
+        );
+    }
+
+    #[test]
+    fn terminal_column_without_plan_output_gets_complete() {
+        // A task in a terminal column (no auto_progress_to) WITHOUT plan_output
+        // should get Complete (not Ready).
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config without auto-progression for "planning"
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
+
+        // Move task to "running" (terminal column — no auto_progress_to)
+        state.move_task(&task_id, KanbanColumn("running".to_string()));
+
+        // No plan_output set — task.plan_output is None
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Terminal column without plan_output → Complete
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete
+        );
+    }
+
+    #[test]
+    fn empty_plan_output_does_not_trigger_ready() {
+        // An empty string plan_output should NOT trigger Ready status.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config without auto-progression for "planning"
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
+
+        // Set an empty plan_output
+        state.tasks.get_mut(&task_id).unwrap().plan_output = Some(String::new());
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Empty plan_output should not trigger Ready
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete
+        );
+    }
+
+    // ── Plan output extraction ───────────────────────────────────────────
+
+    #[test]
+    fn extract_plan_output_from_messages() {
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // Add messages to the session
+        state.task_sessions.entry(task_id.clone()).or_default().messages = vec![
+            TaskMessage {
+                id: "msg-1".to_string(),
+                role: MessageRole::User,
+                parts: vec![TaskMessagePart::Text { text: "Plan this".to_string() }],
+                created_at: None,
+            },
+            TaskMessage {
+                id: "msg-2".to_string(),
+                role: MessageRole::Assistant,
+                parts: vec![TaskMessagePart::Text { text: "Here is the plan:\n1. Do X\n2. Do Y".to_string() }],
+                created_at: None,
+            },
+        ];
+
+        state.extract_plan_output(&task_id);
+
+        let task = state.tasks.get(&task_id).unwrap();
+        assert!(task.plan_output.is_some());
+        let plan = task.plan_output.as_ref().unwrap();
+        assert!(plan.contains("Here is the plan"));
+        assert!(plan.contains("Do X"));
+        assert!(plan.contains("Do Y"));
+    }
+
+    #[test]
+    fn extract_plan_output_from_streaming_text() {
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // Add streaming text (no finalized messages)
+        let session = state.task_sessions.entry(task_id.clone()).or_default();
+        session.streaming_text = Some("Streaming plan output...".to_string());
+
+        state.extract_plan_output(&task_id);
+
+        let task = state.tasks.get(&task_id).unwrap();
+        assert_eq!(task.plan_output.as_deref(), Some("Streaming plan output..."));
+    }
+
+    #[test]
+    fn extract_plan_output_noop_when_no_session() {
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // No session data at all
+        state.extract_plan_output(&task_id);
+
+        let task = state.tasks.get(&task_id).unwrap();
+        assert!(task.plan_output.is_none());
+    }
+
+    #[test]
+    fn extract_plan_output_marks_task_dirty() {
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // Clear dirty flag
+        state.dirty_tasks.clear();
+
+        state.task_sessions.entry(task_id.clone()).or_default().messages = vec![
+            TaskMessage {
+                id: "msg-1".to_string(),
+                role: MessageRole::Assistant,
+                parts: vec![TaskMessagePart::Text { text: "Plan".to_string() }],
+                created_at: None,
+            },
+        ];
+
+        state.extract_plan_output(&task_id);
+
+        assert!(state.dirty_tasks.contains(&task_id));
     }
 }

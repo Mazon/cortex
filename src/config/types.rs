@@ -35,7 +35,7 @@ pub struct LogConfig {
 }
 
 fn default_log_level() -> String {
-    "info".to_string()
+    "error".to_string()
 }
 
 impl Default for LogConfig {

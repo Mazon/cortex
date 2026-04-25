@@ -10,8 +10,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use tracing_subscriber::prelude::*;
-
 use config::types::CortexConfig;
 use persistence::db::Db;
 use state::types::AppState;
@@ -45,93 +43,14 @@ fn main() -> Result<()> {
 
     let mut config = config::load_config(&config_path)?;
 
-    // Initialize tracing with file appender
-    let log_dir = config::xdg_data_home()
-        .join("cortex")
-        .join("logs");
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
-
-    let file_appender = tracing_appender::rolling::never(&log_dir, "cortex.log");
-    // IMPORTANT: This guard must live until program exit. When dropped, it flushes all buffered log writes to disk.
-    let (non_blocking, _log_flush_guard) = tracing_appender::non_blocking(file_appender);
-
-    // Build filter: config sets default, RUST_LOG env var overrides
+    // Initialize tracing — writes to stderr by default
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log.level));
 
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false)
-                .with_target(false),
-        )
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
         .init();
-
-    tracing::debug!("Logging to {}/cortex.log", log_dir.display());
-    tracing::info!("Logger initialized — writing to {}/cortex.log", log_dir.display());
-    tracing::info!("Starting cortex...");
-
-    // Redirect stderr to the log file so nothing leaks to the TUI
-    #[cfg(unix)]
-    {
-        let log_file_path = log_dir.join("cortex-stderr.log");
-        let stderr_log = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path)
-            .with_context(|| format!("Failed to open stderr log: {}", log_file_path.display()))?;
-        use std::os::unix::io::AsRawFd;
-        let fd = stderr_log.as_raw_fd();
-        // SAFETY: dup2 duplicates `fd` onto stderr (fd 2). This is safe because:
-        // 1. `fd` is a valid, open file descriptor obtained from OpenOptions above.
-        // 2. fd 2 (stderr) is a valid file descriptor.
-        // 3. We are in single-threaded startup code with no concurrent access to fd.
-        unsafe {
-            libc::dup2(fd, 2); // fd 2 = stderr
-        }
-        // stderr_log handle can be dropped — dup2 duplicates the fd
-    }
-
-    // On non-Unix platforms (e.g. Windows), stderr cannot be redirected via dup2.
-    // Create the stderr log file so it exists, and rely on the panic hook below
-    // to capture panic output to both cortex.log and cortex-stderr.log.
-    #[cfg(not(unix))]
-    {
-        let log_file_path = log_dir.join("cortex-stderr.log");
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file_path);
-        tracing::debug!(
-            "stderr redirect not supported on this platform; \
-             panic output will be written to cortex.log and cortex-stderr.log via panic hook"
-        );
-    }
-
-    // Install custom panic hook that writes to the log file instead of stderr.
-    // On Unix, stderr is already redirected to cortex-stderr.log, so the default
-    // panic output also lands there. On non-Unix, we explicitly write to both
-    // cortex.log and cortex-stderr.log since stderr redirect is unavailable.
-    let panic_log_dir = log_dir.clone();
-    std::panic::set_hook(Box::new(move |info| {
-        let msg = format!("PANIC: {:?}", info);
-        let log_file = panic_log_dir.join("cortex.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_file) {
-            use std::io::Write;
-            let _ = writeln!(f, "{}", msg);
-        }
-        #[cfg(not(unix))]
-        {
-            let stderr_log = panic_log_dir.join("cortex-stderr.log");
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&stderr_log) {
-                use std::io::Write;
-                let _ = writeln!(f, "{}", msg);
-            }
-        }
-    }));
 
     // Enter alternate screen early to hide any residual startup output
     App::setup_terminal()?;
@@ -172,7 +91,6 @@ fn main() -> Result<()> {
         let db_path = persistence::db::default_db_path();
         if cli.reset {
             if db_path.exists() {
-                tracing::info!("Resetting database: {:?}", db_path);
                 std::fs::remove_file(&db_path)?;
             }
         }
@@ -201,7 +119,7 @@ fn main() -> Result<()> {
         {
             let mut state = state.lock().unwrap();
             if let Err(e) = persistence::restore_state(&mut state, &db) {
-                tracing::warn!("Failed to restore state: {}", e);
+                let _ = e;
             }
         }
 
@@ -247,7 +165,6 @@ fn main() -> Result<()> {
 
             match server_manager.start_shared(&config.opencode, working_dir).await {
                 Ok(url) => {
-                    tracing::info!("Shared server started at {}", url);
                     // Create a single shared client
                     match opencode::client::OpenCodeClient::new(&url) {
                         Ok(client) => {
@@ -257,15 +174,11 @@ fn main() -> Result<()> {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to create OpenCode client: {}", e);
+                            let _ = e;
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to start shared server: {}. Continuing without server.",
-                        e
-                    );
+                Err(_e) => {
                 }
             }
         }
@@ -292,10 +205,6 @@ fn main() -> Result<()> {
         for (project_id, client) in &opencode_clients {
             let url = client.base_url().to_string();
             if !seen_urls.insert(url) {
-                tracing::debug!(
-                    "Skipping duplicate SSE loop for project {} (server already subscribed)",
-                    project_id
-                );
                 continue;
             }
             let client = client.clone();
@@ -305,7 +214,6 @@ fn main() -> Result<()> {
             let opencode_config = config.opencode.clone();
             let shutdown_rx = sse_shutdown_rx.clone();
             let handle = tokio::spawn(async move {
-                tracing::info!("Starting SSE event loop for project {}", pid);
                 opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx).await;
             });
             sse_handles.push(handle);
@@ -337,11 +245,6 @@ fn main() -> Result<()> {
 
                 // If we're in backoff mode, sleep extra before retrying.
                 if db_error_backoff_ms > 0 {
-                    tracing::warn!(
-                        "DB backoff: waiting {}ms before retry (consecutive errors: {})",
-                        db_error_backoff_ms,
-                        consecutive_db_errors,
-                    );
                     tokio::time::sleep(std::time::Duration::from_millis(db_error_backoff_ms)).await;
                 }
 
@@ -371,7 +274,6 @@ fn main() -> Result<()> {
                         // Success — reset backoff
                         consecutive_db_errors = 0;
                         db_error_backoff_ms = 0;
-                        tracing::debug!("State saved (periodic)");
                     }
                 }
             }
@@ -382,7 +284,6 @@ fn main() -> Result<()> {
         let result = app.run().await;
 
         // Graceful shutdown
-        tracing::info!("Shutting down...");
 
         // Cancel persistence task
         persistence_handle.abort();
@@ -404,8 +305,6 @@ fn main() -> Result<()> {
             if let Ok(db) = Db::new(&db_path) {
                 if let Err(e) = persistence::save_state(&mut state, &db) {
                     tracing::error!("Failed to save state on shutdown: {}", e);
-                } else {
-                    tracing::info!("State saved on shutdown");
                 }
             }
         }
@@ -420,7 +319,6 @@ fn main() -> Result<()> {
     });
 
     result?;
-    tracing::info!("cortex exited cleanly");
     Ok(())
 }
 

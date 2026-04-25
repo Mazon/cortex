@@ -1,7 +1,6 @@
 //! OpenCode server manager — single shared server for all projects.
 
 use anyhow::{Context, Result};
-use tracing::{debug, info, warn};
 use tokio::process::{Child, Command};
 use tokio::time::Duration;
 
@@ -47,7 +46,6 @@ impl ServerManager {
         if let Some(ref url) = self.url {
             let running = self.server.as_mut().map(|s| s.is_running()).unwrap_or(false);
             if running {
-                debug!("Shared server already running at {}", url);
                 return Ok(url.clone());
             }
         }
@@ -58,14 +56,12 @@ impl ServerManager {
 
         self.url = Some(url.clone());
         self.server = Some(server);
-        info!("Shared server started on {}", url);
         Ok(url)
     }
 
     /// Stop the shared server.
     pub async fn stop_all(&mut self) {
         if let Some(mut server) = self.server.take() {
-            info!("Stopping shared server");
             let _ = server.stop().await;
         }
         self.url = None;
@@ -100,34 +96,41 @@ impl OpenCodeServer {
 
         let server_config_json = build_opencode_config_json(config);
 
+        let mut last_err: Option<anyhow::Error> = None;
+
         for attempt in 0..=MAX_START_RETRIES {
             if attempt > 0 {
-                info!("Retrying server start (attempt {}/{})", attempt, MAX_START_RETRIES);
                 tokio::time::sleep(RETRY_DELAY).await;
             }
 
             match self.spawn_server(host, port, &server_config_json, working_dir).await {
                 Ok(()) => match self.wait_for_healthy().await {
                     Ok(()) => {
-                        info!(
-                            "Server healthy on {} (pid: {:?})",
-                            self.url,
-                            self.process.as_ref().map(|p| p.id())
-                        );
                         return Ok(());
                     }
                     Err(e) => {
-                        warn!("Server failed health check (attempt {}): {}", attempt + 1, e);
+                        last_err = Some(e);
                         self.kill_process().await;
                     }
                 },
                 Err(e) => {
-                    warn!("Failed to spawn server (attempt {}): {}", attempt + 1, e);
+                    last_err = Some(e);
                 }
             }
         }
 
-        anyhow::bail!("Server failed to start after {} attempts", MAX_START_RETRIES + 1);
+        let msg = match &last_err {
+            Some(e) => format!(
+                "Server failed to start after {} attempts: {}",
+                MAX_START_RETRIES + 1,
+                e
+            ),
+            None => format!(
+                "Server failed to start after {} attempts",
+                MAX_START_RETRIES + 1
+            ),
+        };
+        anyhow::bail!("{}", msg);
     }
 
     async fn spawn_server(
@@ -137,8 +140,6 @@ impl OpenCodeServer {
         config_json: &str,
         working_dir: &str,
     ) -> Result<()> {
-        info!("Spawning: opencode serve --hostname={} --port={} (cwd: {})", host, port, working_dir);
-
         let child = Command::new("opencode")
             .arg("serve")
             .arg(format!("--hostname={}", host))
@@ -174,14 +175,11 @@ impl OpenCodeServer {
 
             match self.http_client.get(&health_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    debug!("Health check passed: GET {} → {}", health_url, resp.status());
                     return Ok(());
                 }
-                Ok(resp) => {
-                    debug!("Health check not ready: GET {} → {}", health_url, resp.status());
+                Ok(_resp) => {
                 }
-                Err(e) => {
-                    debug!("Health check failed: GET {} → {}", health_url, e);
+                Err(_e) => {
                 }
             }
 
@@ -192,18 +190,16 @@ impl OpenCodeServer {
     /// Stop the server process.
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.process.take() {
-            info!("Stopping server...");
             match child.start_kill() {
-                Ok(()) => debug!("Sent kill signal"),
+                Ok(()) => {}
                 Err(e) => {
-                    warn!("Failed to kill process: {}", e);
                     return Err(e).context("Failed to stop process");
                 }
             }
             match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
-                Ok(Ok(status)) => info!("Server exited with status: {}", status),
-                Ok(Err(e)) => warn!("Error waiting for process: {}", e),
-                Err(_) => warn!("Server did not exit within 5s"),
+                Ok(Ok(_status)) => {}
+                Ok(Err(e)) => { let _ = e; }
+                Err(_) => {}
             }
         }
         Ok(())

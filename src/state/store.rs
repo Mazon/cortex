@@ -839,14 +839,6 @@ impl AppState {
         // Reverse index: child session → parent task
         self.subagent_to_parent
             .insert(session_id.to_string(), parent_task_id.to_string());
-
-        tracing::debug!(
-            "Registered subagent session {} (agent: {}) under task {} (depth: {})",
-            session_id,
-            agent_name,
-            parent_task_id,
-            depth,
-        );
     }
 
     /// Mark a subagent session as inactive (completed or errored).
@@ -1012,6 +1004,47 @@ impl AppState {
 
     // ─── SSE Processing Helpers ──────────────────────────────────────────
 
+    /// Extract plan output from the session's streaming text or message history
+    /// and store it in `task.plan_output`. Called when an agent completes,
+    /// before auto-progression starts the next agent.
+    pub fn extract_plan_output(&mut self, task_id: &str) {
+        let plan = if let Some(session) = self.task_sessions.get(task_id) {
+            // Prefer finalized messages (assistant text parts)
+            let from_messages: String = session.messages.iter()
+                .rev()
+                .filter_map(|msg| {
+                    if matches!(msg.role, MessageRole::Assistant) {
+                        msg.parts.iter().filter_map(|p| {
+                            if let TaskMessagePart::Text { text } = p {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        }).collect::<Vec<_>>().join("\n").into()
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if !from_messages.is_empty() {
+                from_messages
+            } else if let Some(ref text) = session.streaming_text {
+                text.clone()
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.plan_output = Some(plan);
+            self.mark_task_dirty(task_id);
+        }
+    }
+
     /// Truncate streaming text from the beginning to enforce the cap.
     /// Keeps the most recent content (tail of the buffer).
     /// Handles UTF-8 boundary safety.
@@ -1076,6 +1109,12 @@ impl AppState {
             .map(|s| s.to_string())
             .map(|task_id| {
                 self.update_task_agent_status(&task_id, AgentStatus::Complete);
+
+                // Extract plan output from the completed agent's session.
+                // Must happen BEFORE on_agent_completed() triggers auto-progression,
+                // so the "do" agent can read the plan via build_prompt_for_agent().
+                self.extract_plan_output(&task_id);
+
                 self.set_notification(
                     format!("Task agent completed"),
                     NotificationVariant::Success,
@@ -1207,14 +1246,12 @@ impl AppState {
 
         match status {
             "complete" | "completed" => {
-                tracing::debug!("Subagent session {} completed", session_id);
                 // Clear dedup tracking when subagent completes.
                 entry.seen_delta_keys.clear();
                 entry.last_delta_key = None;
                 entry.last_delta_content = None;
             }
             "error" => {
-                tracing::debug!("Subagent session {} errored", session_id);
                 entry.seen_delta_keys.clear();
                 entry.last_delta_key = None;
                 entry.last_delta_content = None;
@@ -1227,7 +1264,6 @@ impl AppState {
 
     /// Handle an idle event for a subagent session.
     fn process_subagent_idle(&mut self, session_id: &str, _parent_task_id: &str) {
-        tracing::debug!("Subagent session {} went idle", session_id);
         self.mark_subagent_inactive(session_id);
         // Clear dedup tracking for the subagent session.
         if let Some(entry) = self.subagent_session_data.get_mut(session_id) {

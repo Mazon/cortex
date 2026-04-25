@@ -114,13 +114,10 @@ pub fn render_task_detail(
     let used_fixed = metadata_height + breadcrumb_rows + spacer_height + permission_rows + footer_height;
     let remaining = inner.height.saturating_sub(used_fixed);
 
-    // Description block: min 3 rows (border), max 30% of remaining
+    // Description block: min 3 rows (border), max 25% of remaining
     let desc_min = if remaining >= 6 { 4u16 } else { 3u16 };
-    let desc_height = remaining.max(desc_min).min(remaining) / 3;
+    let desc_height = remaining.max(desc_min).min(remaining) / 4;
     let desc_height = desc_height.max(desc_min).min(remaining.saturating_sub(3));
-
-    // Streaming block gets the rest
-    let _stream_height = remaining.saturating_sub(desc_height);
 
     let v_constraints: Vec<Constraint> = vec![
         Constraint::Length(metadata_height), // Metadata line
@@ -146,47 +143,45 @@ pub fn render_task_detail(
     }
 
     // ── 3. Description block ─────────────────────────────────────────
-    render_description_block(f, v_layout[2 + breadcrumb_rows as usize], task);
+    render_description_block(f, v_layout[3], task);
 
     // ── 4. Streaming output + messages ───────────────────────────────
     if is_drilled {
         // Render subagent's output
-        render_subagent_streaming_block(f, v_layout[3 + breadcrumb_rows as usize], state);
+        render_subagent_streaming_block(f, v_layout[4], state);
     } else {
         // Render parent task's output
-        render_streaming_block(f, v_layout[3 + breadcrumb_rows as usize], state, task_id);
+        render_streaming_block(f, v_layout[4], state, task_id);
     }
 
     // ── 5. Pending permissions / questions ───────────────────────────
-    let perm_idx = 4 + breadcrumb_rows as usize;
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[perm_idx], session);
+                    render_permissions(f, v_layout[5], session);
                 }
             }
         } else if let Some(session) = state.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[perm_idx], session);
+            render_permissions(f, v_layout[5], session);
         }
     }
 
     // ── 6. Footer key hints ──────────────────────────────────────────
-    let footer_idx = 5 + breadcrumb_rows as usize;
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
             .and_then(|sid| state.cached_streaming_lines.get(sid))
-            .map(|(_, lines)| lines.len() > v_layout[3 + breadcrumb_rows as usize].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     } else {
         state
             .cached_streaming_lines
             .get(task_id)
-            .map(|(_, lines)| lines.len() > v_layout[3 + breadcrumb_rows as usize].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     };
-    render_footer(f, v_layout[footer_idx], has_scrollable_output, is_drilled);
+    render_footer(f, v_layout[6], has_scrollable_output, is_drilled);
 }
 
 /// Render the metadata line: status icon, status text, timer, agent name.
@@ -200,6 +195,7 @@ fn render_metadata_line(
     let status_text = task.agent_status.to_string();
     let status_color = match task.agent_status {
         AgentStatus::Running => theme.working_color(),
+        AgentStatus::Ready => theme.done_color(),
         AgentStatus::Complete => theme.done_color(),
         AgentStatus::Error => theme.error_color(),
         AgentStatus::Hung => theme.question_color(),

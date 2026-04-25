@@ -9,7 +9,6 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use tracing::warn;
 
 use super::types::OpenCodeConfig;
 
@@ -196,11 +195,6 @@ fn resolve_provider_config(
             match std::env::var(raw) {
                 Ok(key) => key,
                 Err(_) => {
-                    warn!(
-                        "Environment variable '{}' referenced in opencode.model.api_key_env is not set — \
-                         API key will be missing from provider config",
-                        raw
-                    );
                     return None;
                 }
             }

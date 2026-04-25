@@ -29,7 +29,6 @@ impl Db {
         // existing databases need ALTER TABLE. SQLite has no ADD COLUMN IF NOT EXISTS,
         // so we ignore "duplicate column" errors.
         for sql in &[
-            "ALTER TABLE tasks ADD COLUMN entered_column_at INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
         ] {
             if let Err(e) = conn.execute(sql, []) {
@@ -40,7 +39,6 @@ impl Db {
             }
         }
 
-        tracing::info!("Database opened: {:?}", path);
         Ok(Self { conn })
     }
 
@@ -392,6 +390,7 @@ fn parse_agent_status(s: &str) -> AgentStatus {
         "pending" => AgentStatus::Pending,
         "working" | "running" => AgentStatus::Running,
         "hung" => AgentStatus::Hung,
+        "ready" => AgentStatus::Ready,
         "done" | "complete" | "completed" => AgentStatus::Complete,
         "failed" | "error" => AgentStatus::Error,
         _ => AgentStatus::Pending,
@@ -426,7 +425,7 @@ fn project_status_to_str(s: &ProjectStatus) -> &'static str {
 /// Returns the default database path: `$XDG_DATA_HOME/cortex/cortex.db`.
 ///
 /// Respects the `XDG_DATA_HOME` environment variable via `config::xdg_data_home()`,
-/// ensuring the database and logs end up in the same directory tree.
+/// ensuring the database ends up in a standard data directory.
 pub fn default_db_path() -> std::path::PathBuf {
     crate::config::xdg_data_home()
         .join("cortex")

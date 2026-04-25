@@ -27,7 +27,6 @@ pub fn xdg_config_home() -> PathBuf {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".config"))
                 .unwrap_or_else(|_| {
-                    tracing::warn!("Falling back to /tmp for config directory — neither $XDG_CONFIG_HOME nor $HOME is set");
                     PathBuf::from("/tmp")
                 })
         })
@@ -44,7 +43,6 @@ pub fn xdg_data_home() -> PathBuf {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_else(|_| {
-                    tracing::warn!("Falling back to /tmp for data directory — neither $XDG_DATA_HOME nor $HOME is set");
                     PathBuf::from("/tmp")
                 })
         })
@@ -60,7 +58,6 @@ pub fn load_config(path: &Path) -> Result<CortexConfig> {
         let config = CortexConfig::default();
         save_config(&config, path)
             .with_context(|| format!("Failed to generate default config at {:?}", path))?;
-        tracing::info!("Generated default config at {:?}", path);
         return Ok(config);
     }
 
@@ -76,7 +73,6 @@ pub fn load_config(path: &Path) -> Result<CortexConfig> {
     // Populate derived caches (e.g. visible column IDs)
     user_config.columns.finalize();
 
-    tracing::info!("Loaded config from {:?}", path);
     Ok(user_config)
 }
 
@@ -92,7 +88,6 @@ pub fn save_config(config: &CortexConfig, path: &Path) -> Result<()> {
     std::fs::write(path, content)
         .with_context(|| format!("Failed to write config file: {:?}", path))?;
 
-    tracing::info!("Saved config to {:?}", path);
     Ok(())
 }
 
@@ -200,10 +195,6 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
             if !config.opencode.agents.is_empty()
                 && !config.opencode.agents.contains_key(agent_name)
             {
-                tracing::warn!(
-                    "Column '{}' references agent '{}' which has no override in [opencode.agents.{}]",
-                    col.id, agent_name, agent_name
-                );
             }
         }
     }

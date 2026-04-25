@@ -32,6 +32,7 @@ pub enum AgentStatus {
     Pending,
     Running,
     Hung,
+    Ready,
     Complete,
     Error,
 }
@@ -43,6 +44,7 @@ impl AgentStatus {
             AgentStatus::Pending => "·",
             AgentStatus::Running => "◐",
             AgentStatus::Hung => "⏸",
+            AgentStatus::Ready => "◉",
             AgentStatus::Complete => "✓",
             AgentStatus::Error => "✗",
         }
@@ -55,6 +57,7 @@ impl std::fmt::Display for AgentStatus {
             AgentStatus::Pending => write!(f, "pending"),
             AgentStatus::Running => write!(f, "working"),
             AgentStatus::Hung => write!(f, "hung"),
+            AgentStatus::Ready => write!(f, "ready"),
             AgentStatus::Complete => write!(f, "done"),
             AgentStatus::Error => write!(f, "failed"),
         }
