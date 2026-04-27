@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Run proptest with more cases in CI for better coverage.
+  # Default is 256; 1024 catches more edge cases without significant slowdown.
+  PROPTEST_CASES: "1024"
 
 jobs:
   build:

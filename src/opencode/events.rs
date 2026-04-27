@@ -1272,4 +1272,211 @@ mod tests {
 
         assert!(state.dirty_flags.dirty_tasks.contains(&task_id));
     }
+
+    // ── Integration-style tests: full event lifecycle ──────────────────
+
+    /// Test the full lifecycle of an agent session through SSE events:
+    /// status:running → delta → delta → status:completed → session:idle.
+    ///
+    /// Verifies that:
+    /// - Streaming text accumulates correctly from deltas
+    /// - Status transitions are correct
+    /// - Finalization session ID is signaled
+    /// - Auto-progression moves the task to the next column
+    #[test]
+    fn integration_full_agent_lifecycle() {
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // 1. Session starts running
+        let event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "running" }),
+            },
+        };
+        let (_action, finalize) = process_event(&event, &mut state, &client, &columns_config);
+        assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Running);
+        assert!(finalize.is_none());
+
+        // 2. Receive streaming deltas
+        for delta in &["Hello ", "world", "! This is a test."] {
+            let delta_event = EventListResponse::MessagePartDelta {
+                properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                    session_id: session_id.clone(),
+                    message_id: "msg-1".to_string(),
+                    part_id: "part-1".to_string(),
+                    field: "text".to_string(),
+                    delta: delta.to_string(),
+                },
+            };
+            process_event(&delta_event, &mut state, &client, &columns_config);
+        }
+
+        // Verify streaming text accumulated
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
+        assert_eq!(session.streaming_text.as_deref(), Some("Hello world! This is a test."));
+
+        // 3. Session completes
+        let complete_event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        let (_action, finalize) = process_event(&complete_event, &mut state, &client, &columns_config);
+        assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Complete);
+        assert_eq!(finalize.as_deref(), Some(session_id.as_str()));
+
+        // 4. Session goes idle → triggers auto-progression
+        let idle_event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (action, finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
+
+        // Task should be in "running" column now (auto-progressed from "planning")
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+        // Should have an auto-progress action
+        assert!(action.is_some());
+        // Should signal finalization
+        assert!(finalize.is_some());
+    }
+
+    /// Test SSE deduplication: receiving the exact same delta twice (same key,
+    /// same content) should not double the streaming text. This simulates
+    /// what happens when concurrent SSE connections deliver the same event.
+    ///
+    /// Also tests that replaying an old part (different key that was already
+    /// seen) is correctly skipped.
+    #[test]
+    fn integration_dedup_prevents_text_doubling() {
+        let (mut state, _task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // 1. Send first delta for part-1
+        let delta1 = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: "Hello ".to_string(),
+            },
+        };
+        process_event(&delta1, &mut state, &client, &columns_config);
+
+        // 2. Send continuation delta for part-1 (same key, different content)
+        let delta2 = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: "World".to_string(),
+            },
+        };
+        process_event(&delta2, &mut state, &client, &columns_config);
+
+        // Verify accumulated text
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
+        assert_eq!(session.streaming_text.as_deref(), Some("Hello World"));
+
+        // 3. Simulate concurrent SSE loop delivering the exact same last delta
+        // (same key, same content) — defense-in-depth dedup should catch this
+        let delta_dup = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: "World".to_string(),  // Same content as last delta
+            },
+        };
+        process_event(&delta_dup, &mut state, &client, &columns_config);
+
+        // Text should NOT have doubled
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
+        assert_eq!(session.streaming_text.as_deref(), Some("Hello World"));
+
+        // 4. Now send a genuinely NEW part — should be accepted
+        let delta_new = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-2".to_string(),
+                field: "text".to_string(),
+                delta: " More text".to_string(),
+            },
+        };
+        process_event(&delta_new, &mut state, &client, &columns_config);
+
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
+        assert_eq!(session.streaming_text.as_deref(), Some("Hello World More text"));
+
+        // 5. Replay an old part that was already seen (different from current)
+        // This simulates server replaying events after reconnection.
+        // Since the key ("msg-1", "part-1") is in seen_delta_keys and
+        // is NOT the current continuation, it's correctly identified as
+        // a replay and skipped.
+        let delta_old_replay = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: "Old replay".to_string(),
+            },
+        };
+        process_event(&delta_old_replay, &mut state, &client, &columns_config);
+
+        // Old replay should be skipped — text unchanged
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
+        assert_eq!(session.streaming_text.as_deref(), Some("Hello World More text"));
+    }
+
+    /// Test error recovery: a session error should mark the task as Error
+    /// and allow a new session to be started afterward.
+    #[test]
+    fn integration_error_then_restart() {
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // 1. Agent starts running
+        let running_event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "running" }),
+            },
+        };
+        process_event(&running_event, &mut state, &client, &columns_config);
+        assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Running);
+
+        // 2. Agent errors
+        let error_event = EventListResponse::SessionError {
+            properties: opencode_sdk_rs::resources::event::SessionErrorProps {
+                error: Some(
+                    opencode_sdk_rs::resources::shared::SessionError::UnknownError {
+                        data: opencode_sdk_rs::resources::shared::UnknownErrorData {
+                            message: "API rate limit exceeded".to_string(),
+                        },
+                    },
+                ),
+                session_id: Some(session_id.clone()),
+            },
+        };
+        process_event(&error_event, &mut state, &client, &columns_config);
+
+        let task = state.tasks.get(&task_id).unwrap();
+        assert_eq!(task.agent_status, AgentStatus::Error);
+        assert!(task.error_message.as_ref().unwrap().contains("API rate limit exceeded"));
+
+        // 3. A new session can be started (simulate by setting Running again)
+        state.update_task_agent_status(&task_id, AgentStatus::Running);
+        assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Running);
+    }
 }

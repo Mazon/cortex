@@ -321,6 +321,7 @@ impl std::error::Error for SseStreamError {
 mod tests {
     use super::*;
     use futures::StreamExt;
+    use proptest::prelude::*;
 
     /// Helper: build an `SseEventStream` from a static byte slice.
     fn stream_from_bytes(data: &'static [u8]) -> SseEventStream<serde_json::Value> {
@@ -446,5 +447,134 @@ mod tests {
         let event = stream.next().await.unwrap().unwrap();
         assert_eq!(event["flushed"], true);
         assert!(stream.next().await.is_none());
+    }
+
+    // ── Property-based tests ───────────────────────────────────────────
+
+    /// Property: the decoder never panics on arbitrary byte input.
+    ///
+    /// This is the most important property — the SSE decoder consumes
+    /// untrusted bytes from the network and must never panic, regardless
+    /// of how malformed the input is. It may produce 0 or more events,
+    /// but it must always return successfully.
+    proptest! {
+        #[test]
+        fn proptest_decoder_never_panics(
+            bytes in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..=MAX_BUFFER_SIZE + 1024)
+        ) {
+            let mut decoder = SseDecoder::new();
+            // Must not panic — this is the core invariant
+            let _events = decoder.feed(&bytes);
+        }
+    }
+
+    /// Property: well-formed SSE events are always parsed correctly,
+    /// regardless of how the bytes are chunked.
+    ///
+    /// Given a valid JSON payload wrapped in SSE framing, splitting it
+    /// at any boundary and feeding the chunks one byte at a time should
+    /// produce the same events as feeding it all at once.
+    proptest! {
+        #[test]
+        fn proptest_events_parsed_correctly_regardless_of_chunk_boundaries(
+            payload in proptest::collection::vec(proptest::arbitrary::any::<u8>(), 0..100)
+        ) {
+            // Build a well-formed SSE event with ASCII-safe payload as the data value.
+            let safe_payload: String = payload
+                .iter()
+                .filter(|&&b| b >= 0x20 && b < 0x7f && b != b'"' && b != b'\\')
+                .map(|&b| b as char)
+                .collect();
+            let json_val = serde_json::to_string(&safe_payload).unwrap_or_else(|_| "\"\"".to_string());
+            let sse_event = format!("data: {}\n\n", json_val);
+
+            // Feed all at once
+            let mut decoder_full = SseDecoder::new();
+            let events_full = decoder_full.feed(sse_event.as_bytes());
+
+            // Feed one byte at a time
+            let mut decoder_chunked = SseDecoder::new();
+            let mut events_chunked = Vec::new();
+            for byte in sse_event.as_bytes() {
+                events_chunked.extend(decoder_chunked.feed(&[*byte]));
+            }
+
+            // Both approaches should produce the same number of events
+            prop_assert_eq!(
+                events_full.len(),
+                events_chunked.len()
+            );
+
+            // If events were produced, their data should be identical
+            for (full, chunked) in events_full.iter().zip(events_chunked.iter()) {
+                prop_assert_eq!(&full.data, &chunked.data);
+            }
+        }
+    }
+
+    /// Property: comment lines (starting with ':') are always silently
+    /// ignored, even when interspersed with valid events.
+    proptest! {
+        #[test]
+        fn proptest_comment_lines_are_always_ignored(
+            comment_text in "[a-zA-Z0-9 ]{0,100}"
+        ) {
+            let json = "{\"type\":\"test\"}";
+            let sse = format!(
+                ": {}\ndata: {}\n: another comment\n\n",
+                comment_text, json
+            );
+
+            let mut decoder = SseDecoder::new();
+            let events = decoder.feed(sse.as_bytes());
+
+            // Should produce exactly one event (the data line)
+            prop_assert_eq!(events.len(), 1);
+            prop_assert_eq!(&events[0].data, json);
+        }
+    }
+
+    /// Property: CRLF and LF line endings produce identical results.
+    proptest! {
+        #[test]
+        fn proptest_crlf_and_lf_produce_identical_results(
+            data_value in "[a-zA-Z0-9 ]{0,100}"
+        ) {
+            let json = serde_json::to_string(&data_value).unwrap_or_else(|_| "\"\"".to_string());
+
+            let sse_lf = format!("data: {}\n\n", json);
+            let sse_crlf = format!("data: {}\r\n\r\n", json);
+
+            let mut decoder_lf = SseDecoder::new();
+            let events_lf = decoder_lf.feed(sse_lf.as_bytes());
+
+            let mut decoder_crlf = SseDecoder::new();
+            let events_crlf = decoder_crlf.feed(sse_crlf.as_bytes());
+
+            prop_assert_eq!(events_lf.len(), events_crlf.len());
+            if !events_lf.is_empty() {
+                prop_assert_eq!(&events_lf[0].data, &events_crlf[0].data);
+            }
+        }
+    }
+
+    /// Property: the decoder handles empty data fields (heartbeats)
+    /// without producing events.
+    proptest! {
+        #[test]
+        fn proptest_empty_data_fields_produce_no_events(
+            count in 0..10usize
+        ) {
+            let mut sse = String::new();
+            for _ in 0..count {
+                sse.push_str("data:\n\n");
+            }
+
+            let mut decoder = SseDecoder::new();
+            let events = decoder.feed(sse.as_bytes());
+
+            // Empty data fields should not produce events (no non-data fields set)
+            prop_assert_eq!(events.len(), 0);
+        }
     }
 }
