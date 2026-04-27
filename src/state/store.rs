@@ -21,17 +21,17 @@ impl AppState {
 
     /// Register a new project. Marks state dirty.
     pub fn add_project(&mut self, project: CortexProject) {
-        self.projects.push(project);
+        self.project_registry.projects.push(project);
         self.mark_dirty();
     }
 
     /// Remove a project and all its tasks. If this was the active project,
     /// falls back to the first remaining project. Marks state dirty.
     pub fn remove_project(&mut self, project_id: &str) {
-        self.projects.retain(|p| p.id != project_id);
+        self.project_registry.projects.retain(|p| p.id != project_id);
 
         // Track this project for deletion from the database
-        self.deleted_projects.insert(project_id.to_string());
+        self.dirty_flags.deleted_projects.insert(project_id.to_string());
 
         // Collect task IDs for this project before removing them
         let project_task_ids: Vec<String> = self
@@ -43,7 +43,7 @@ impl AppState {
 
         // Track tasks for deletion from the database
         for task_id in &project_task_ids {
-            self.deleted_tasks.insert(task_id.clone());
+            self.dirty_flags.deleted_tasks.insert(task_id.clone());
         }
 
         // Remove tasks and clean up associated data
@@ -51,18 +51,18 @@ impl AppState {
             // Remove session mapping
             if let Some(task) = self.tasks.get(task_id) {
                 if let Some(ref sid) = task.session_id {
-                    self.session_to_task.remove(sid);
+                    self.session_tracker.session_to_task.remove(sid);
                 }
             }
             // Remove session data and streaming cache
-            self.task_sessions.remove(task_id);
-            self.cached_streaming_lines.remove(task_id);
-            self.dirty_tasks.remove(task_id);
+            self.session_tracker.task_sessions.remove(task_id);
+            self.session_tracker.cached_streaming_lines.remove(task_id);
+            self.dirty_flags.dirty_tasks.remove(task_id);
             // Clean up subagent data for each task in this project
-            if let Some(sessions) = self.subagent_sessions.remove(task_id) {
+            if let Some(sessions) = self.session_tracker.subagent_sessions.remove(task_id) {
                 for sub in &sessions {
-                    self.subagent_to_parent.remove(&sub.session_id);
-                    self.subagent_session_data.remove(&sub.session_id);
+                    self.session_tracker.subagent_to_parent.remove(&sub.session_id);
+                    self.session_tracker.subagent_session_data.remove(&sub.session_id);
                 }
             }
         }
@@ -82,15 +82,15 @@ impl AppState {
             }
         }
 
-        if self.active_project_id.as_deref() == Some(project_id) {
-            self.active_project_id = self.projects.first().map(|p| p.id.clone());
+        if self.project_registry.active_project_id.as_deref() == Some(project_id) {
+            self.project_registry.active_project_id = self.project_registry.projects.first().map(|p| p.id.clone());
         }
         self.mark_dirty();
     }
 
     /// Set the active project and rebuild the kanban board for it.
     pub fn select_project(&mut self, project_id: &str) {
-        self.active_project_id = Some(project_id.to_string());
+        self.project_registry.active_project_id = Some(project_id.to_string());
         // Rebuild kanban for selected project
         self.rebuild_kanban_for_project(project_id);
     }
@@ -108,7 +108,7 @@ impl AppState {
     ) -> CortexTask {
         let id = uuid::Uuid::new_v4().to_string();
         let number = self
-            .task_number_counters
+            .project_registry.task_number_counters
             .entry(project_id.to_string())
             .or_insert(0);
         *number += 1;
@@ -193,27 +193,27 @@ impl AppState {
             // Remove session mapping
             let session_id = task.session_id.clone();
             if let Some(ref sid) = session_id {
-                self.session_to_task.remove(sid);
+                self.session_tracker.session_to_task.remove(sid);
             }
             // Remove render cache for deleted task
-            self.cached_streaming_lines.remove(task_id);
+            self.session_tracker.cached_streaming_lines.remove(task_id);
             // Remove session data for deleted task
-            self.task_sessions.remove(task_id);
+            self.session_tracker.task_sessions.remove(task_id);
             // Remove from dirty set (task no longer exists)
-            self.dirty_tasks.remove(task_id);
+            self.dirty_flags.dirty_tasks.remove(task_id);
             // Track deletion for persistence — save_state will DELETE from DB
-            self.deleted_tasks.insert(task_id.to_string());
+            self.dirty_flags.deleted_tasks.insert(task_id.to_string());
             // Clean up subagent data for this task
-            if let Some(sessions) = self.subagent_sessions.remove(task_id) {
+            if let Some(sessions) = self.session_tracker.subagent_sessions.remove(task_id) {
                 for sub in &sessions {
-                    self.subagent_to_parent.remove(&sub.session_id);
-                    self.subagent_session_data.remove(&sub.session_id);
+                    self.session_tracker.subagent_to_parent.remove(&sub.session_id);
+                    self.session_tracker.subagent_session_data.remove(&sub.session_id);
                 }
             }
             // Also clean up subagent session data keyed by this task's own session_id
             // (if this task was a subagent of another)
             if let Some(ref sid) = session_id {
-                self.subagent_session_data.remove(sid);
+                self.session_tracker.subagent_session_data.remove(sid);
             }
             self.mark_dirty();
             session_id
@@ -295,12 +295,12 @@ impl AppState {
         if let Some(task) = self.tasks.get_mut(task_id) {
             // Remove old mapping
             if let Some(ref old_sid) = task.session_id {
-                self.session_to_task.remove(old_sid);
+                self.session_tracker.session_to_task.remove(old_sid);
             }
             // Set new mapping
             task.session_id = session_id.clone();
             if let Some(ref sid) = session_id {
-                self.session_to_task
+                self.session_tracker.session_to_task
                     .insert(sid.clone(), task_id.to_string());
             }
             self.mark_task_dirty(task_id);
@@ -310,14 +310,14 @@ impl AppState {
         // Without this, streaming_text from the previous agent run persists into
         // the new session's output, causing text duplication (Bug 1).
         if session_id.is_some() {
-            if let Some(session) = self.task_sessions.get_mut(task_id) {
+            if let Some(session) = self.session_tracker.task_sessions.get_mut(task_id) {
                 session.streaming_text = None;
                 session.messages.clear();
                 session.seen_delta_keys.clear();
                 session.last_delta_key = None;
                 session.last_delta_content = None;
                 session.render_version += 1;
-                self.cached_streaming_lines.remove(task_id);
+                self.session_tracker.cached_streaming_lines.remove(task_id);
             }
         }
     }
@@ -345,7 +345,7 @@ impl AppState {
 
     /// Look up the task ID associated with a given OpenCode session ID.
     pub fn get_task_id_by_session(&self, session_id: &str) -> Option<&str> {
-        self.session_to_task.get(session_id).map(|s| s.as_str())
+        self.session_tracker.session_to_task.get(session_id).map(|s| s.as_str())
     }
 
     // ─── Session Data ────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ impl AppState {
         agent_name: &str,
     ) {
         // Skip if already registered
-        if self.subagent_to_parent.contains_key(session_id) {
+        if self.session_tracker.subagent_to_parent.contains_key(session_id) {
             return;
         }
 
@@ -380,9 +380,9 @@ impl AppState {
             1
         } else {
             // If the parent session is itself a subagent, find its depth
-            self.subagent_to_parent
+            self.session_tracker.subagent_to_parent
                 .get(&parent_session_id)
-                .and_then(|ptid| self.subagent_sessions.get(ptid))
+                .and_then(|ptid| self.session_tracker.subagent_sessions.get(ptid))
                 .and_then(|sessions| sessions.iter().find(|s| s.session_id == parent_session_id).map(|s| s.depth))
                 .map(|d| d + 1)
                 .unwrap_or(1)
@@ -398,20 +398,20 @@ impl AppState {
         };
 
         // Store under parent task
-        self.subagent_sessions
+        self.session_tracker.subagent_sessions
             .entry(parent_task_id.to_string())
             .or_default()
             .push(subagent.clone());
 
         // Reverse index: child session → parent task
-        self.subagent_to_parent
+        self.session_tracker.subagent_to_parent
             .insert(session_id.to_string(), parent_task_id.to_string());
     }
 
     /// Mark a subagent session as inactive (completed or errored).
     pub fn mark_subagent_inactive(&mut self, session_id: &str) {
-        if let Some(parent_task_id) = self.subagent_to_parent.get(session_id).cloned() {
-            if let Some(sessions) = self.subagent_sessions.get_mut(&parent_task_id) {
+        if let Some(parent_task_id) = self.session_tracker.subagent_to_parent.get(session_id).cloned() {
+            if let Some(sessions) = self.session_tracker.subagent_sessions.get_mut(&parent_task_id) {
                 for sub in sessions.iter_mut() {
                     if sub.session_id == session_id {
                         sub.active = false;
@@ -424,12 +424,12 @@ impl AppState {
 
     /// Get the parent task ID for a subagent session.
     pub fn get_parent_task_for_subagent(&self, session_id: &str) -> Option<&str> {
-        self.subagent_to_parent.get(session_id).map(|s| s.as_str())
+        self.session_tracker.subagent_to_parent.get(session_id).map(|s| s.as_str())
     }
 
     /// Get all subagent sessions for a parent task.
     pub fn get_subagent_sessions(&self, parent_task_id: &str) -> &[SubagentSession] {
-        self.subagent_sessions
+        self.session_tracker.subagent_sessions
             .get(parent_task_id)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
@@ -449,7 +449,7 @@ impl AppState {
         }
 
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -462,7 +462,7 @@ impl AppState {
     /// Set or clear the streaming text buffer for a task's session.
     pub fn update_streaming_text(&mut self, task_id: &str, text: Option<String>) {
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -474,82 +474,45 @@ impl AppState {
 
     // ─── Dirty Flag ──────────────────────────────────────────────────────
 
-    /// Set the persistence dirty flag.
-    pub fn mark_dirty(&self) {
-        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
     /// Mark a specific task as needing to be persisted on the next save.
     /// Also sets the global dirty flag so the persistence loop knows to run.
     pub fn mark_task_dirty(&mut self, task_id: &str) {
-        self.dirty_tasks.insert(task_id.to_string());
-        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Atomically take (clear) the persistence dirty flag.
-    /// Returns `true` if the flag was set, `false` otherwise.
-    pub fn take_dirty(&self) -> bool {
-        self.dirty
-            .compare_exchange(
-                true,
-                false,
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .is_ok()
-    }
-
-    /// Mark that the state has changed and a re-render is needed.
-    pub fn mark_render_dirty(&self) {
-        self.render_dirty
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Atomically take the render-dirty flag (returns `true` and resets to
-    /// `false` if the flag was set; returns `false` otherwise).
-    pub fn take_render_dirty(&self) -> bool {
-        self.render_dirty
-            .compare_exchange(
-                true,
-                false,
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .is_ok()
+        self.dirty_flags.dirty_tasks.insert(task_id.to_string());
+        self.dirty_flags.mark_dirty();
     }
 
     /// Evict stale entries from the streaming render cache.
     ///
     /// Removes cached lines whose key no longer has a corresponding live
     /// session — either a main task in `self.tasks` (keyed by `task_id`)
-    /// or a drilled-down subagent in `self.subagent_session_data` (keyed
+    /// or a drilled-down subagent in `self.session_tracker.subagent_session_data` (keyed
     /// by `session_id`).  If the cache still exceeds `max_entries` after
     /// that, the oldest half is evicted (by insertion order).
     pub fn prune_streaming_cache(&mut self, max_entries: usize) {
         // Remove entries whose backing session no longer exists.
         // Main sessions are keyed by task_id; subagent sessions by session_id.
-        self.cached_streaming_lines
+        self.session_tracker.cached_streaming_lines
             .retain(|key, _| {
                 self.tasks.contains_key(key)
-                    || self.subagent_session_data.contains_key(key)
+                    || self.session_tracker.subagent_session_data.contains_key(key)
             });
 
         // Also evict subagent session data for sessions whose parent task no longer exists
-        self.subagent_session_data.retain(|session_id, _| {
-            self.subagent_to_parent.contains_key(session_id)
+        self.session_tracker.subagent_session_data.retain(|session_id, _| {
+            self.session_tracker.subagent_to_parent.contains_key(session_id)
         });
 
         // If still too large, remove the oldest half (first N/2 entries)
-        if self.cached_streaming_lines.len() > max_entries {
-            let to_remove = self.cached_streaming_lines.len() / 2;
+        if self.session_tracker.cached_streaming_lines.len() > max_entries {
+            let to_remove = self.session_tracker.cached_streaming_lines.len() / 2;
             let keys: Vec<String> = self
-                .cached_streaming_lines
+                .session_tracker.cached_streaming_lines
                 .keys()
                 .take(to_remove)
                 .cloned()
                 .collect();
             for key in keys {
-                self.cached_streaming_lines.remove(&key);
+                self.session_tracker.cached_streaming_lines.remove(&key);
             }
         }
     }
@@ -566,20 +529,20 @@ impl AppState {
         active_project_id: Option<String>,
         counters: HashMap<String, u32>,
     ) {
-        self.projects = projects;
+        self.project_registry.projects = projects;
         self.tasks.clear();
         for task in tasks {
             let id = task.id.clone();
             if let Some(ref sid) = task.session_id {
-                self.session_to_task.insert(sid.clone(), id.clone());
+                self.session_tracker.session_to_task.insert(sid.clone(), id.clone());
             }
             self.tasks.insert(id, task);
         }
         self.kanban.columns = kanban_columns;
-        self.active_project_id = active_project_id;
-        self.task_number_counters = counters;
+        self.project_registry.active_project_id = active_project_id;
+        self.project_registry.task_number_counters = counters;
 
-        let pid = self.active_project_id.clone();
+        let pid = self.project_registry.active_project_id.clone();
         if let Some(pid) = pid {
             self.rebuild_kanban_for_project(&pid);
         }
@@ -661,7 +624,7 @@ impl AppState {
             ProjectStatus::Idle
         };
 
-        for project in &mut self.projects {
+        for project in &mut self.project_registry.projects {
             if project.id == project_id {
                 project.status = status;
                 break;
@@ -689,7 +652,7 @@ mod tests {
             ..Default::default()
         };
         state.add_project(project);
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.active_project_id = Some("proj-1".to_string());
 
         // Add tasks to columns
         for i in 0..3 {
@@ -1230,12 +1193,12 @@ mod tests {
         let mut state = make_state_with_tasks();
         state.tasks.get_mut("task-1").unwrap().session_id = Some("session-abc".to_string());
         state
-            .session_to_task
+            .session_tracker.session_to_task
             .insert("session-abc".to_string(), "task-1".to_string());
 
         let deleted = state.delete_task("task-1");
         assert_eq!(deleted, Some("session-abc".to_string()));
-        assert!(!state.session_to_task.contains_key("session-abc"));
+        assert!(!state.session_tracker.session_to_task.contains_key("session-abc"));
     }
 
     // ── Task operations: move ───────────────────────────────────────────
@@ -1391,7 +1354,7 @@ mod tests {
         state.add_project(p2);
 
         state.select_project("p2");
-        assert_eq!(state.active_project_id, Some("p2".to_string()));
+        assert_eq!(state.project_registry.active_project_id, Some("p2".to_string()));
     }
 
     // ── Dirty flag ──────────────────────────────────────────────────────
@@ -1399,9 +1362,9 @@ mod tests {
     #[test]
     fn mark_dirty_sets_flag() {
         let state = AppState::default();
-        assert!(!state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!state.dirty_flags.dirty.load(std::sync::atomic::Ordering::Relaxed));
         state.mark_dirty();
-        assert!(state.dirty.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state.dirty_flags.dirty.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]
@@ -1504,7 +1467,7 @@ mod tests {
             Some(("Test Project".to_string(), "New Project Name".to_string()))
         );
         assert_eq!(state.ui.mode, AppMode::Normal);
-        assert_eq!(state.projects[0].name, "New Project Name");
+        assert_eq!(state.project_registry.projects[0].name, "New Project Name");
         assert!(state.ui.input_text.is_empty());
         assert_eq!(state.ui.input_cursor, 0);
         assert!(state.ui.prompt_label.is_empty());
@@ -1523,7 +1486,7 @@ mod tests {
         // Mode should still be ProjectRename (not reset)
         assert_eq!(state.ui.mode, AppMode::ProjectRename);
         // Project name should be unchanged
-        assert_eq!(state.projects[0].name, "Test Project");
+        assert_eq!(state.project_registry.projects[0].name, "Test Project");
     }
 
     #[test]
@@ -1541,7 +1504,7 @@ mod tests {
         assert!(state.ui.prompt_label.is_empty());
         assert!(state.ui.prompt_context.is_none());
         // Project name should be unchanged
-        assert_eq!(state.projects[0].name, "Test Project");
+        assert_eq!(state.project_registry.projects[0].name, "Test Project");
     }
 
     // ── Working directory ───────────────────────────────────────────────
@@ -1586,7 +1549,7 @@ mod tests {
 
         assert_eq!(result, Ok(true));
         assert_eq!(state.ui.mode, AppMode::Normal);
-        assert_eq!(state.projects[0].working_directory, "/tmp");
+        assert_eq!(state.project_registry.projects[0].working_directory, "/tmp");
         assert!(state.ui.input_text.is_empty());
         assert_eq!(state.ui.input_cursor, 0);
         assert!(state.ui.prompt_label.is_empty());
@@ -1603,7 +1566,7 @@ mod tests {
 
         assert_eq!(result, Ok(false));
         // Working directory should be unchanged
-        assert_eq!(state.projects[0].working_directory, "/tmp");
+        assert_eq!(state.project_registry.projects[0].working_directory, "/tmp");
     }
 
     #[test]
@@ -1633,7 +1596,7 @@ mod tests {
         // Should stay in prompt mode (not reset)
         assert_eq!(state.ui.mode, AppMode::InputPrompt);
         // Working directory should be unchanged
-        assert_eq!(state.projects[0].working_directory, "/tmp");
+        assert_eq!(state.project_registry.projects[0].working_directory, "/tmp");
     }
 
     #[test]
@@ -1652,7 +1615,7 @@ mod tests {
         // Should stay in prompt mode
         assert_eq!(state.ui.mode, AppMode::InputPrompt);
         // Working directory should be unchanged
-        assert_eq!(state.projects[0].working_directory, "/tmp");
+        assert_eq!(state.project_registry.projects[0].working_directory, "/tmp");
     }
 
     #[test]
@@ -1670,7 +1633,7 @@ mod tests {
         assert!(state.ui.prompt_label.is_empty());
         assert!(state.ui.prompt_context.is_none());
         // Working directory should be unchanged
-        assert_eq!(state.projects[0].working_directory, "/tmp");
+        assert_eq!(state.project_registry.projects[0].working_directory, "/tmp");
     }
 
     // ── Streaming text cap ─────────────────────────────────────────────
@@ -1681,14 +1644,14 @@ mod tests {
         // Set up a session mapping
         let session_id = "session-abc";
         state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
-        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+        state.session_tracker.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
         // Fill buffer well past the 1MB cap (write 1.1MB of ASCII)
         let chunk_size = STREAMING_TEXT_CAP_BYTES + 100_000;
         let big_chunk = "x".repeat(chunk_size);
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", &big_chunk);
 
-        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+        let text = state.session_tracker.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
         // Should be truncated to at most the cap size
         assert!(
@@ -1708,13 +1671,13 @@ mod tests {
         let mut state = make_state_with_tasks();
         let session_id = "session-abc";
         state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
-        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+        state.session_tracker.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
         // Write data well below the cap
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "hello world");
         state.process_message_part_delta(session_id, "msg-1", "part-2", "text", " and more");
 
-        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+        let text = state.session_tracker.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
         assert_eq!(text, "hello world and more");
     }
 
@@ -1723,7 +1686,7 @@ mod tests {
         let mut state = make_state_with_tasks();
         let session_id = "session-abc";
         state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
-        state.session_to_task.insert(session_id.to_string(), "task-0".to_string());
+        state.session_tracker.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
         // Fill past the cap with multi-byte characters (emoji are 4 bytes each)
         let emoji = "🎉"; // 4 bytes
@@ -1731,7 +1694,7 @@ mod tests {
         let big_chunk = emoji.repeat(count);
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", &big_chunk);
 
-        let text = state.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
+        let text = state.session_tracker.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
         // Should be valid UTF-8 (no panic from invalid boundary)
         assert!(text.is_char_boundary(text.len()));
@@ -1745,15 +1708,15 @@ mod tests {
     fn restore_state_empty_input_clears_existing_data() {
         let mut state = make_state_with_tasks();
         assert!(!state.tasks.is_empty());
-        assert!(!state.projects.is_empty());
+        assert!(!state.project_registry.projects.is_empty());
 
         state.restore_state(vec![], vec![], HashMap::new(), None, HashMap::new());
 
         assert!(state.tasks.is_empty());
-        assert!(state.projects.is_empty());
-        assert!(state.active_project_id.is_none());
-        assert!(state.task_number_counters.is_empty());
-        assert!(state.session_to_task.is_empty());
+        assert!(state.project_registry.projects.is_empty());
+        assert!(state.project_registry.active_project_id.is_none());
+        assert!(state.project_registry.task_number_counters.is_empty());
+        assert!(state.session_tracker.session_to_task.is_empty());
     }
 
     #[test]
@@ -1800,12 +1763,12 @@ mod tests {
             counters,
         );
 
-        assert_eq!(state.projects.len(), 1);
+        assert_eq!(state.project_registry.projects.len(), 1);
         assert_eq!(state.tasks.len(), 1);
-        assert_eq!(state.active_project_id, Some("proj-1".to_string()));
-        assert_eq!(state.task_number_counters.get("proj-1"), Some(&5));
+        assert_eq!(state.project_registry.active_project_id, Some("proj-1".to_string()));
+        assert_eq!(state.project_registry.task_number_counters.get("proj-1"), Some(&5));
         assert_eq!(
-            state.session_to_task.get("sess-1"),
+            state.session_tracker.session_to_task.get("sess-1"),
             Some(&"task-1".to_string())
         );
         assert_eq!(state.tasks.get("task-1").unwrap().title, "Restored Task");
@@ -1924,7 +1887,7 @@ mod tests {
             HashMap::new(),
         );
 
-        assert!(state.active_project_id.is_none());
+        assert!(state.project_registry.active_project_id.is_none());
         // Kanban columns should be empty since no active project triggered a rebuild
         assert!(state.kanban.columns.is_empty());
     }
@@ -1988,8 +1951,8 @@ mod tests {
             HashMap::new(),
         );
 
-        assert_eq!(state.session_to_task.get("sess-a"), Some(&"task-1".to_string()));
-        assert_eq!(state.session_to_task.get("sess-b"), Some(&"task-2".to_string()));
+        assert_eq!(state.session_tracker.session_to_task.get("sess-a"), Some(&"task-1".to_string()));
+        assert_eq!(state.session_tracker.session_to_task.get("sess-b"), Some(&"task-2".to_string()));
     }
 
     #[test]
@@ -2016,8 +1979,8 @@ mod tests {
             counters,
         );
 
-        assert_eq!(state.task_number_counters.get("proj-1"), Some(&42));
-        assert_eq!(state.task_number_counters.get("proj-2"), Some(&7));
+        assert_eq!(state.project_registry.task_number_counters.get("proj-1"), Some(&42));
+        assert_eq!(state.project_registry.task_number_counters.get("proj-2"), Some(&7));
     }
 
     // ── remove_project ───────────────────────────────────────────────────
@@ -2056,13 +2019,13 @@ mod tests {
         };
         state.tasks.insert("task-p2".to_string(), p2_task);
 
-        assert_eq!(state.projects.len(), 2);
+        assert_eq!(state.project_registry.projects.len(), 2);
         assert_eq!(state.tasks.len(), 4); // 3 from proj-1 + 1 from proj-2
 
         state.remove_project("proj-1");
 
-        assert_eq!(state.projects.len(), 1);
-        assert_eq!(state.projects[0].id, "proj-2");
+        assert_eq!(state.project_registry.projects.len(), 1);
+        assert_eq!(state.project_registry.projects[0].id, "proj-2");
         // Only the proj-2 task should remain
         assert_eq!(state.tasks.len(), 1);
         assert!(state.tasks.contains_key("task-p2"));
@@ -2074,22 +2037,22 @@ mod tests {
         let mut state = make_state_with_tasks();
         // Add session data for a task in proj-1
         state.tasks.get_mut("task-0").unwrap().session_id = Some("sess-1".to_string());
-        state.session_to_task.insert("sess-1".to_string(), "task-0".to_string());
-        state.task_sessions.insert("task-0".to_string(), TaskDetailSession {
+        state.session_tracker.session_to_task.insert("sess-1".to_string(), "task-0".to_string());
+        state.session_tracker.task_sessions.insert("task-0".to_string(), TaskDetailSession {
             task_id: "task-0".to_string(),
             session_id: Some("sess-1".to_string()),
             ..Default::default()
         });
-        state.cached_streaming_lines.insert("task-0".to_string(), (0, vec![]));
+        state.session_tracker.cached_streaming_lines.insert("task-0".to_string(), (0, vec![]));
 
         state.remove_project("proj-1");
 
         // session_to_task should be cleaned
-        assert!(!state.session_to_task.contains_key("sess-1"));
+        assert!(!state.session_tracker.session_to_task.contains_key("sess-1"));
         // task_sessions should be cleaned
-        assert!(!state.task_sessions.contains_key("task-0"));
+        assert!(!state.session_tracker.task_sessions.contains_key("task-0"));
         // cached_streaming_lines should be cleaned
-        assert!(!state.cached_streaming_lines.contains_key("task-0"));
+        assert!(!state.session_tracker.cached_streaming_lines.contains_key("task-0"));
         // All tasks should be gone
         assert!(state.tasks.is_empty());
     }
@@ -2109,7 +2072,7 @@ mod tests {
     #[test]
     fn remove_active_project_falls_back_to_first_remaining() {
         let mut state = make_state_with_tasks();
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.active_project_id = Some("proj-1".to_string());
 
         let p2 = CortexProject {
             id: "proj-2".to_string(),
@@ -2123,28 +2086,28 @@ mod tests {
 
         state.remove_project("proj-1");
 
-        assert_eq!(state.active_project_id, Some("proj-2".to_string()));
+        assert_eq!(state.project_registry.active_project_id, Some("proj-2".to_string()));
     }
 
     #[test]
     fn remove_only_project_clears_active_project() {
         let mut state = make_state_with_tasks();
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.active_project_id = Some("proj-1".to_string());
 
         state.remove_project("proj-1");
 
-        assert!(state.active_project_id.is_none());
+        assert!(state.project_registry.active_project_id.is_none());
     }
 
     #[test]
     fn remove_nonexistent_project_is_noop() {
         let mut state = make_state_with_tasks();
-        let project_count = state.projects.len();
+        let project_count = state.project_registry.projects.len();
         let task_count = state.tasks.len();
 
         state.remove_project("nonexistent");
 
-        assert_eq!(state.projects.len(), project_count);
+        assert_eq!(state.project_registry.projects.len(), project_count);
         assert_eq!(state.tasks.len(), task_count);
     }
 
@@ -2266,7 +2229,7 @@ mod tests {
     fn setup_session_mapping(state: &mut AppState, task_id: &str, session_id: &str) {
         state.tasks.get_mut(task_id).unwrap().session_id = Some(session_id.to_string());
         state
-            .session_to_task
+            .session_tracker.session_to_task
             .insert(session_id.to_string(), task_id.to_string());
     }
 
@@ -2296,7 +2259,7 @@ mod tests {
         state.process_message_part_delta(session_1, "msg-1", "part-2", "text", "world");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2310,7 +2273,7 @@ mod tests {
         state.set_task_session_id("task-0", Some(session_2.to_string()));
 
         // Verify streaming_text is cleared
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(
             session.streaming_text.is_none(),
             "streaming_text should be cleared when a new session starts on the same task"
@@ -2327,7 +2290,7 @@ mod tests {
         );
         // Verify cached_streaming_lines was removed
         assert!(
-            !state.cached_streaming_lines.contains_key("task-0"),
+            !state.session_tracker.cached_streaming_lines.contains_key("task-0"),
             "cached_streaming_lines should be removed for the task"
         );
     }
@@ -2348,11 +2311,11 @@ mod tests {
 
         // The session entry should still exist
         assert!(
-            state.task_sessions.contains_key("task-0"),
+            state.session_tracker.task_sessions.contains_key("task-0"),
             "TaskDetailSession entry should still exist for the task"
         );
         // But with cleaned fields
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert_eq!(session.task_id, "task-0");
         assert!(session.streaming_text.is_none());
         assert!(session.messages.is_empty());
@@ -2383,7 +2346,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-2", "text", "fix");
 
         let text_before = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2398,7 +2361,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "the ");
 
         let text_after = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2430,7 +2393,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-2", "part-1", "text", "!");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2465,7 +2428,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-3", "text", "gamma");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2494,7 +2457,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "d");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2522,10 +2485,10 @@ mod tests {
         state.register_subagent_session("task-0", sub_session, "do");
 
         // Simulate subagent streaming some text
-        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+        state.session_tracker.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "subagent output ");
 
-        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        let entry = state.session_tracker.subagent_session_data.get(sub_session).unwrap();
         assert_eq!(
             entry.streaming_text.as_ref().unwrap(),
             "subagent output "
@@ -2540,13 +2503,13 @@ mod tests {
         // should be cleared. In the actual app, this happens in
         // handle_drill_down_subagent(). Here we test that clearing
         // streaming_text prevents double-rendering.
-        if let Some(entry) = state.subagent_session_data.get_mut(sub_session) {
+        if let Some(entry) = state.session_tracker.subagent_session_data.get_mut(sub_session) {
             entry.streaming_text = None; // This is what handle_drill_down_subagent does
             entry.render_version += 1;
         }
 
         // After drill-down, streaming_text should be None (not duplicated)
-        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        let entry = state.session_tracker.subagent_session_data.get(sub_session).unwrap();
         assert!(
             entry.streaming_text.is_none(),
             "streaming_text should be cleared on drill-down to prevent double-rendering"
@@ -2561,7 +2524,7 @@ mod tests {
 
         setup_session_mapping(&mut state, "task-0", parent_session);
         state.register_subagent_session("task-0", sub_session, "do");
-        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+        state.session_tracker.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
 
         // Subagent receives deltas: part-1 then part-2
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "hello ");
@@ -2571,7 +2534,7 @@ mod tests {
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "hello ");
 
         let text = state
-            .subagent_session_data
+            .session_tracker.subagent_session_data
             .get(sub_session)
             .unwrap()
             .streaming_text
@@ -2598,7 +2561,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "the fix");
 
         // Verify streaming text exists
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert_eq!(
             session.streaming_text.as_ref().unwrap(),
             "the fix"
@@ -2613,7 +2576,7 @@ mod tests {
         // Should report that there was streaming text to finalize
         assert!(had_streaming, "finalize should report streaming was present");
 
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         // Messages should now contain the completed text
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].id, "msg-1");
@@ -2637,7 +2600,7 @@ mod tests {
             "finalize should report no-op when no streaming text exists"
         );
 
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert_eq!(session.messages.len(), 1);
         assert!(session.streaming_text.is_none());
     }
@@ -2650,12 +2613,12 @@ mod tests {
         setup_session_mapping(&mut state, "task-0", session_id);
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "text");
 
-        let version_before = state.task_sessions.get("task-0").unwrap().render_version;
+        let version_before = state.session_tracker.task_sessions.get("task-0").unwrap().render_version;
 
         let messages = vec![make_text_message("msg-1", MessageRole::Assistant, "text")];
         state.finalize_session_streaming("task-0", messages);
 
-        let version_after = state.task_sessions.get("task-0").unwrap().render_version;
+        let version_after = state.session_tracker.task_sessions.get("task-0").unwrap().render_version;
         assert!(
             version_after > version_before,
             "render_version should be bumped after finalization"
@@ -2674,7 +2637,7 @@ mod tests {
         // Send a "reasoning" field delta — should NOT be appended to streaming_text
         state.process_message_part_delta(session_id, "msg-1", "part-1", "reasoning", "thinking...");
 
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(
             session.streaming_text.is_none(),
             "reasoning field deltas should NOT be appended to streaming_text"
@@ -2696,7 +2659,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-3", "part-1", "text", " here");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2721,7 +2684,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "reasoning", "thinking");
 
         // The key should be recorded even though no text was appended
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(
             session.seen_delta_keys.contains(&(String::from("msg-1"), String::from("part-1"))),
             "Non-text deltas should still record their dedup key"
@@ -2738,12 +2701,12 @@ mod tests {
 
         setup_session_mapping(&mut state, "task-0", parent_session);
         state.register_subagent_session("task-0", sub_session, "do");
-        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+        state.session_tracker.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
 
         // Subagent receives a reasoning delta — should be ignored
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "reasoning", "thinking...");
 
-        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        let entry = state.session_tracker.subagent_session_data.get(sub_session).unwrap();
         assert!(
             entry.streaming_text.is_none(),
             "Subagent reasoning deltas should not appear in streaming_text"
@@ -2752,7 +2715,7 @@ mod tests {
         // But a text delta should work
         state.process_message_part_delta(sub_session, "msg-1", "part-2", "text", "actual text");
 
-        let entry = state.subagent_session_data.get(sub_session).unwrap();
+        let entry = state.session_tracker.subagent_session_data.get(sub_session).unwrap();
         assert_eq!(
             entry.streaming_text.as_ref().unwrap(),
             "actual text"
@@ -2777,14 +2740,14 @@ mod tests {
         let messages_1 = vec![make_text_message("msg-1", MessageRole::Assistant, "first run")];
         state.finalize_session_streaming("task-0", messages_1);
 
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(session.streaming_text.is_none());
         assert_eq!(session.messages.len(), 1);
 
         // Phase 3: New session starts (auto-progression)
         state.set_task_session_id("task-0", Some(session_2.to_string()));
 
-        let session = state.task_sessions.get("task-0").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(session.streaming_text.is_none());
         assert!(session.messages.is_empty(), "messages cleared for new session");
 
@@ -2796,7 +2759,7 @@ mod tests {
         state.process_message_part_delta(session_2, "msg-2", "part-1", "text", "second ");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2835,7 +2798,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "Hello ");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2863,7 +2826,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "user ");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2890,7 +2853,7 @@ mod tests {
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", "chunk3");
 
         let text = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get("task-0")
             .unwrap()
             .streaming_text
@@ -2911,14 +2874,14 @@ mod tests {
 
         setup_session_mapping(&mut state, "task-0", parent_session);
         state.register_subagent_session("task-0", sub_session, "do");
-        state.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
+        state.session_tracker.subagent_to_parent.insert(sub_session.to_string(), "task-0".to_string());
 
         // Simulate two SSE loops delivering the same subagent delta
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "sub ");
         state.process_message_part_delta(sub_session, "msg-1", "part-1", "text", "sub ");
 
         let text = state
-            .subagent_session_data
+            .session_tracker.subagent_session_data
             .get(sub_session)
             .unwrap()
             .streaming_text
@@ -2945,7 +2908,7 @@ mod tests {
 
         state.update_project_status("proj-1");
 
-        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let project = state.project_registry.projects.iter().find(|p| p.id == "proj-1").unwrap();
         assert_eq!(
             project.status,
             ProjectStatus::Question,
@@ -2963,7 +2926,7 @@ mod tests {
 
         state.update_project_status("proj-1");
 
-        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let project = state.project_registry.projects.iter().find(|p| p.id == "proj-1").unwrap();
         assert_eq!(
             project.status,
             ProjectStatus::Error,
@@ -2981,7 +2944,7 @@ mod tests {
 
         state.update_project_status("proj-1");
 
-        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let project = state.project_registry.projects.iter().find(|p| p.id == "proj-1").unwrap();
         assert_eq!(
             project.status,
             ProjectStatus::Working,
@@ -2996,7 +2959,7 @@ mod tests {
         // All tasks default to AgentStatus::Pending with pending_question_count = 0
         state.update_project_status("proj-1");
 
-        let project = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let project = state.project_registry.projects.iter().find(|p| p.id == "proj-1").unwrap();
         assert_eq!(
             project.status,
             ProjectStatus::Idle,
@@ -3027,8 +2990,8 @@ mod tests {
         // Only update proj-1
         state.update_project_status("proj-1");
 
-        let proj1 = state.projects.iter().find(|p| p.id == "proj-1").unwrap();
-        let proj2 = state.projects.iter().find(|p| p.id == "proj-2").unwrap();
+        let proj1 = state.project_registry.projects.iter().find(|p| p.id == "proj-1").unwrap();
+        let proj2 = state.project_registry.projects.iter().find(|p| p.id == "proj-2").unwrap();
         assert_eq!(proj1.status, ProjectStatus::Question);
         assert_eq!(
             proj2.status,
@@ -3049,7 +3012,7 @@ mod tests {
             .unwrap()
             .session_id = Some(session_id.to_string());
         state
-            .session_to_task
+            .session_tracker.session_to_task
             .insert(session_id.to_string(), "task-0".to_string());
 
         state.process_session_status(session_id, "busy");

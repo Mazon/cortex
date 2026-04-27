@@ -20,7 +20,7 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if state.projects.is_empty() {
+    if state.project_registry.projects.is_empty() {
         let empty_text = Paragraph::new("No projects")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
@@ -29,12 +29,12 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
     }
 
     let mut y = inner.y;
-    for project in &state.projects {
+    for project in &state.project_registry.projects {
         if y >= inner.y + inner.height {
             break;
         }
 
-        let is_active = state.active_project_id.as_deref() == Some(project.id.as_str());
+        let is_active = state.project_registry.active_project_id.as_deref() == Some(project.id.as_str());
         let icon = project.status.icon();
 
         let name_style = if is_active {

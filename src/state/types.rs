@@ -855,99 +855,31 @@ pub struct SessionRef {
     pub depth: u32,
 }
 
-// ─── Top-Level State ──────────────────────────────────────────────────────
+// ─── Sub-Structs ──────────────────────────────────────────────────────────
 
-/// The single source of truth for all application state.
-#[derive(Debug, Clone)]
-pub struct AppState {
+/// Project registry — manages projects, active project, and task counters.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectRegistry {
     /// All registered projects.
     pub projects: Vec<CortexProject>,
-    /// All tasks keyed by task ID.
-    pub tasks: HashMap<String, CortexTask>,
-    /// Kanban board layout — column ordering and task placement.
-    pub kanban: KanbanState,
-    /// UI state — current mode, focus, notifications.
-    pub ui: UIState,
     /// ID of the currently active project.
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
     pub task_number_counters: HashMap<String, u32>,
-    /// Reverse index: session_id → task_id for O(1) lookup.
-    pub session_to_task: HashMap<String, String>,
-    /// Session data for task detail view, keyed by task_id.
-    pub task_sessions: HashMap<String, TaskDetailSession>,
-    /// Render cache for streaming lines in the task detail view.
-    ///
-    /// Shared by both main sessions (keyed by `task_id`) and drilled-down
-    /// subagent sessions (keyed by `session_id`).  Each entry stores
-    /// `(render_version, lines)` — lines are only rebuilt when the live
-    /// `render_version` differs from the cached one.
-    ///
-    /// See the render cache invariant on [`TaskDetailSession`].
-    pub cached_streaming_lines: HashMap<String, (u64, Vec<ratatui::prelude::Line<'static>>)>,
-    /// Subagent sessions keyed by parent task_id.
-    /// Each parent task can have multiple subagent sessions (e.g., a
-    /// planning agent that spawns multiple `do` agents).
-    pub subagent_sessions: HashMap<String, Vec<SubagentSession>>,
-    /// Reverse index: subagent session_id → parent task_id.
-    /// Used to route SSE events for child sessions to the correct parent.
-    pub subagent_to_parent: HashMap<String, String>,
-    /// Session detail data for drilled-down subagents (lazy-loaded).
-    /// Keyed by subagent session_id.
-    pub subagent_session_data: HashMap<String, TaskDetailSession>,
-    /// Dirty flag for persistence — set when state changes need to be saved.
-    pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Dirty flag for render optimization — set when state changes,
-    /// checked by the TUI event loop to skip unnecessary full re-renders.
-    pub render_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Set of task IDs that have been modified since the last save.
-    /// Used by `save_state` to skip writing unchanged tasks to the database.
-    pub dirty_tasks: HashSet<String>,
-    /// Set of task IDs that have been deleted from in-memory state but not yet
-    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
-    pub deleted_tasks: HashSet<String>,
-    /// Set of project IDs that have been removed from in-memory state but not yet
-    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
-    pub deleted_projects: HashSet<String>,
-    /// Whether a persistence save is currently in progress.
-    /// Set to `true` before acquiring the state lock for saving, cleared after.
-    /// Read by the TUI status bar (via `Arc<AtomicBool>` — no lock needed) to show
-    /// a "saving..." indicator.
-    pub saving_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            projects: Vec::new(),
-            tasks: HashMap::new(),
-            kanban: KanbanState::default(),
-            ui: UIState::default(),
-            active_project_id: None,
-            task_number_counters: HashMap::new(),
-            session_to_task: HashMap::new(),
-            task_sessions: HashMap::new(),
-            cached_streaming_lines: HashMap::new(),
-            subagent_sessions: HashMap::new(),
-            subagent_to_parent: HashMap::new(),
-            subagent_session_data: HashMap::new(),
-            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dirty_tasks: HashSet::new(),
-            deleted_tasks: HashSet::new(),
-            deleted_projects: HashSet::new(),
-            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-}
-
-impl AppState {
-    /// Get connection state for the active project.
-    /// Returns defaults (disconnected, not reconnecting) if no project is active.
-    pub fn connection_state(&self) -> (bool, bool, u32, bool) {
+impl ProjectRegistry {
+    /// Get the active project, if one is set and exists.
+    pub fn active_project(&self) -> Option<&CortexProject> {
         self.active_project_id
             .as_ref()
             .and_then(|pid| self.projects.iter().find(|p| &p.id == pid))
+    }
+
+    /// Get connection state for the active project.
+    /// Returns defaults (disconnected, not reconnecting) if no project is active.
+    pub fn connection_state(&self) -> (bool, bool, u32, bool) {
+        self.active_project()
             .map(|p| (p.connected, p.reconnecting, p.reconnect_attempt, p.permanently_disconnected))
             .unwrap_or((false, false, 0, false))
     }
@@ -1006,6 +938,224 @@ impl AppState {
             p.permanently_disconnected = true;
             p.reconnect_attempt = 0;
         }
+    }
+}
+
+/// Session tracker — manages session-to-task mappings, session data,
+/// subagent relationships, and the streaming render cache.
+#[derive(Debug, Clone, Default)]
+pub struct SessionTracker {
+    /// Reverse index: session_id → task_id for O(1) lookup.
+    pub session_to_task: HashMap<String, String>,
+    /// Session data for task detail view, keyed by task_id.
+    pub task_sessions: HashMap<String, TaskDetailSession>,
+    /// Render cache for streaming lines in the task detail view.
+    ///
+    /// Shared by both main sessions (keyed by `task_id`) and drilled-down
+    /// subagent sessions (keyed by `session_id`).  Each entry stores
+    /// `(render_version, lines)` — lines are only rebuilt when the live
+    /// `render_version` differs from the cached one.
+    ///
+    /// See the render cache invariant on [`TaskDetailSession`].
+    pub cached_streaming_lines: HashMap<String, (u64, Vec<ratatui::prelude::Line<'static>>)>,
+    /// Subagent sessions keyed by parent task_id.
+    /// Each parent task can have multiple subagent sessions (e.g., a
+    /// planning agent that spawns multiple `do` agents).
+    pub subagent_sessions: HashMap<String, Vec<SubagentSession>>,
+    /// Reverse index: subagent session_id → parent task_id.
+    /// Used to route SSE events for child sessions to the correct parent.
+    pub subagent_to_parent: HashMap<String, String>,
+    /// Session detail data for drilled-down subagents (lazy-loaded).
+    /// Keyed by subagent session_id.
+    pub subagent_session_data: HashMap<String, TaskDetailSession>,
+}
+
+/// Dirty flags — tracks persistence and render dirty state.
+///
+/// Uses `Arc<AtomicBool>` for flags that need to be checked without
+/// holding the main state mutex (e.g., the saving indicator in the
+/// status bar, or the render-dirty check in the TUI event loop).
+#[derive(Debug, Clone)]
+pub struct DirtyFlags {
+    /// Dirty flag for persistence — set when state changes need to be saved.
+    pub dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Dirty flag for render optimization — set when state changes,
+    /// checked by the TUI event loop to skip unnecessary full re-renders.
+    pub render_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set of task IDs that have been modified since the last save.
+    /// Used by `save_state` to skip writing unchanged tasks to the database.
+    pub dirty_tasks: HashSet<String>,
+    /// Set of task IDs that have been deleted from in-memory state but not yet
+    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
+    pub deleted_tasks: HashSet<String>,
+    /// Set of project IDs that have been removed from in-memory state but not yet
+    /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
+    pub deleted_projects: HashSet<String>,
+    /// Whether a persistence save is currently in progress.
+    /// Set to `true` before acquiring the state lock for saving, cleared after.
+    /// Read by the TUI status bar (via `Arc<AtomicBool>` — no lock needed) to show
+    /// a "saving..." indicator.
+    pub saving_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for DirtyFlags {
+    fn default() -> Self {
+        Self {
+            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            dirty_tasks: HashSet::new(),
+            deleted_tasks: HashSet::new(),
+            deleted_projects: HashSet::new(),
+            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
+impl DirtyFlags {
+    /// Set the persistence dirty flag.
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Atomically take (clear) the persistence dirty flag.
+    /// Returns `true` if the flag was set, `false` otherwise.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty
+            .compare_exchange(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+    }
+
+    /// Mark that the state has changed and a re-render is needed.
+    pub fn mark_render_dirty(&self) {
+        self.render_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Atomically take the render-dirty flag (returns `true` and resets to
+    /// `false` if the flag was set; returns `false` otherwise).
+    pub fn take_render_dirty(&self) -> bool {
+        self.render_dirty
+            .compare_exchange(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+    }
+}
+
+// ─── Top-Level State ──────────────────────────────────────────────────────
+
+/// The single source of truth for all application state.
+///
+/// State is organized into focused sub-structs for clear ownership:
+/// - [`ProjectRegistry`] — projects, active project, task counters
+/// - [`KanbanState`] — column ordering and task placement
+/// - [`UIState`] — mode, focus, notifications, editor
+/// - [`SessionTracker`] — session mappings, session data, subagent tracking
+/// - [`DirtyFlags`] — persistence and render dirty tracking
+///
+/// Access is via a single `Arc<Mutex<AppState>>` — no multiple locks.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    /// Project registry — projects, active project, and task number counters.
+    pub project_registry: ProjectRegistry,
+    /// All tasks keyed by task ID.
+    pub tasks: HashMap<String, CortexTask>,
+    /// Kanban board layout — column ordering and task placement.
+    pub kanban: KanbanState,
+    /// UI state — current mode, focus, notifications.
+    pub ui: UIState,
+    /// Session tracker — session mappings, data, subagent relationships.
+    pub session_tracker: SessionTracker,
+    /// Dirty flags — persistence and render dirty state.
+    pub dirty_flags: DirtyFlags,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            project_registry: ProjectRegistry::default(),
+            tasks: HashMap::new(),
+            kanban: KanbanState::default(),
+            ui: UIState::default(),
+            session_tracker: SessionTracker::default(),
+            dirty_flags: DirtyFlags::default(),
+        }
+    }
+}
+
+impl AppState {
+    /// Get connection state for the active project.
+    /// Returns defaults (disconnected, not reconnecting) if no project is active.
+    pub fn connection_state(&self) -> (bool, bool, u32, bool) {
+        self.project_registry.connection_state()
+    }
+
+    /// Whether the active project's server is connected.
+    pub fn is_connected(&self) -> bool {
+        self.project_registry.is_connected()
+    }
+
+    /// Whether the active project's server is reconnecting.
+    pub fn is_reconnecting(&self) -> bool {
+        self.project_registry.is_reconnecting()
+    }
+
+    /// Reconnection attempt number for the active project.
+    pub fn reconnect_attempt(&self) -> u32 {
+        self.project_registry.reconnect_attempt()
+    }
+
+    /// Whether the active project has permanently disconnected.
+    pub fn is_permanently_disconnected(&self) -> bool {
+        self.project_registry.is_permanently_disconnected()
+    }
+
+    /// Set a project's connection state. No-op if the project doesn't exist.
+    pub fn set_project_connected(&mut self, project_id: &str, connected: bool) {
+        self.project_registry.set_project_connected(project_id, connected);
+    }
+
+    /// Set a project's reconnecting state. No-op if the project doesn't exist.
+    pub fn set_project_reconnecting(&mut self, project_id: &str, reconnecting: bool) {
+        self.project_registry.set_project_reconnecting(project_id, reconnecting);
+    }
+
+    /// Set a project's reconnect attempt. No-op if the project doesn't exist.
+    pub fn set_project_reconnect_attempt(&mut self, project_id: &str, attempt: u32) {
+        self.project_registry.set_project_reconnect_attempt(project_id, attempt);
+    }
+
+    /// Mark a project as permanently disconnected. No-op if the project doesn't exist.
+    pub fn set_project_permanently_disconnected(&mut self, project_id: &str) {
+        self.project_registry.set_project_permanently_disconnected(project_id);
+    }
+
+    /// Set the persistence dirty flag.
+    pub fn mark_dirty(&self) {
+        self.dirty_flags.mark_dirty();
+    }
+
+    /// Mark that the state has changed and a re-render is needed.
+    pub fn mark_render_dirty(&self) {
+        self.dirty_flags.mark_render_dirty();
+    }
+
+    /// Atomically take (clear) the persistence dirty flag.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty_flags.take_dirty()
+    }
+
+    /// Atomically take the render-dirty flag.
+    pub fn take_render_dirty(&self) -> bool {
+        self.dirty_flags.take_render_dirty()
     }
 }
 

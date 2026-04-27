@@ -10,7 +10,7 @@ impl AppState {
     /// Updates the task's `pending_permission_count`.
     pub fn add_permission_request(&mut self, task_id: &str, request: PermissionRequest) {
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -31,7 +31,7 @@ impl AppState {
         _approved: bool,
     ) {
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -49,7 +49,7 @@ impl AppState {
     /// Updates the task's `pending_question_count`.
     pub fn add_question_request(&mut self, task_id: &str, request: QuestionRequest) {
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -65,7 +65,7 @@ impl AppState {
     /// Updates the task's `pending_question_count`.
     pub fn resolve_question_request(&mut self, task_id: &str, question_id: &str) {
         let session = self
-            .task_sessions
+            .session_tracker.task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),

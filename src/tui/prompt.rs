@@ -123,7 +123,7 @@ pub fn render_confirm_dialog(f: &mut Frame, state: &crate::state::types::AppStat
     let (title, message, hint) = match &state.ui.confirm_action {
         Some(crate::state::types::ConfirmableAction::DeleteProject(project_id)) => {
             let project_name = state
-                .projects
+                .project_registry.projects
                 .iter()
                 .find(|p| p.id == *project_id)
                 .map(|p| p.name.clone())

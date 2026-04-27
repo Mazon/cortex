@@ -216,7 +216,7 @@ impl AppState {
             None => {
                 // Creating new task
                 let project_id = self
-                    .active_project_id
+                    .project_registry.active_project_id
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
                 let task = self.create_todo(title, description, &project_id);
@@ -257,9 +257,9 @@ impl AppState {
     /// Pre-populates the input with the current working directory.
     /// No-op if no project is active.
     pub fn open_set_working_directory(&mut self) {
-        let current_dir = match self.active_project_id.as_ref() {
+        let current_dir = match self.project_registry.active_project_id.as_ref() {
             Some(pid) => self
-                .projects
+                .project_registry.projects
                 .iter()
                 .find(|p| &p.id == pid)
                 .map(|p| p.working_directory.clone()),
@@ -298,7 +298,7 @@ impl AppState {
             self.ui.input_text.trim().to_string()
         };
 
-        let project_id = match self.active_project_id.clone() {
+        let project_id = match self.project_registry.active_project_id.clone() {
             Some(id) => id,
             None => return Ok(false),
         };
@@ -312,7 +312,7 @@ impl AppState {
             return Err(format!("Path is not a directory: {}", dir));
         }
 
-        if let Some(project) = self.projects.iter_mut().find(|p| p.id == project_id) {
+        if let Some(project) = self.project_registry.projects.iter_mut().find(|p| p.id == project_id) {
             project.working_directory = dir;
             // Reset prompt state and return to normal mode
             self.ui.input_text.clear();
@@ -342,9 +342,9 @@ impl AppState {
     /// Open the project rename prompt, pre-populating the input with the
     /// current project name. No-op if no project is active.
     pub fn open_project_rename(&mut self) {
-        let current_name = match self.active_project_id.as_ref() {
+        let current_name = match self.project_registry.active_project_id.as_ref() {
             Some(pid) => self
-                .projects
+                .project_registry.projects
                 .iter()
                 .find(|p| &p.id == pid)
                 .map(|p| p.name.clone()),
@@ -378,9 +378,9 @@ impl AppState {
             self.ui.input_text.trim().to_string()
         };
 
-        let project_id = self.active_project_id.clone()?;
+        let project_id = self.project_registry.active_project_id.clone()?;
         let old_name = self
-            .projects
+            .project_registry.projects
             .iter_mut()
             .find(|p| p.id == project_id)
             .map(|p| {

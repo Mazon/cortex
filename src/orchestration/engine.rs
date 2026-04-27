@@ -375,7 +375,7 @@ mod tests {
             ..Default::default()
         };
         state.add_project(project);
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.active_project_id = Some("proj-1".to_string());
 
         let task_id = "task-1".to_string();
         let task = CortexTask {

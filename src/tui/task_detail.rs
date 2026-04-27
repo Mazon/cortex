@@ -43,12 +43,12 @@ pub fn render_task_detail(
         // For drilled-down subagents, check subagent session data
         drilled_session_id
             .as_ref()
-            .and_then(|sid| state.subagent_session_data.get(sid))
+            .and_then(|sid| state.session_tracker.subagent_session_data.get(sid))
             .map(|s| !s.pending_permissions.is_empty() || !s.pending_questions.is_empty())
             .unwrap_or(false)
     } else {
         state
-            .task_sessions
+            .session_tracker.task_sessions
             .get(task_id)
             .map(|s| !s.pending_permissions.is_empty() || !s.pending_questions.is_empty())
             .unwrap_or(false)
@@ -141,11 +141,11 @@ pub fn render_task_detail(
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
-                if let Some(session) = state.subagent_session_data.get(sid) {
+                if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
                     render_permissions(f, v_layout[5], session);
                 }
             }
-        } else if let Some(session) = state.task_sessions.get(task_id) {
+        } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
             render_permissions(f, v_layout[5], session);
         }
     }
@@ -154,12 +154,12 @@ pub fn render_task_detail(
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
-            .and_then(|sid| state.cached_streaming_lines.get(sid))
+            .and_then(|sid| state.session_tracker.cached_streaming_lines.get(sid))
             .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     } else {
         state
-            .cached_streaming_lines
+            .session_tracker.cached_streaming_lines
             .get(task_id)
             .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
@@ -284,7 +284,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
     // We estimate the inner height (area minus 2 for borders) to compute
     // scroll info before rendering the block itself.
     let total_lines = state
-        .cached_streaming_lines
+        .session_tracker.cached_streaming_lines
         .get(task_id)
         .map(|(_, lines)| lines.len())
         .unwrap_or(0);
@@ -311,7 +311,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         && scroll_offset < auto_scroll_offset;
 
     // ── Block title with scroll position indicator ───────────────────
-    let has_session = state.task_sessions.contains_key(task_id);
+    let has_session = state.session_tracker.task_sessions.contains_key(task_id);
     let block_title = if can_scroll && has_session {
         let first_visible = scroll_offset + 1;
         let last_visible = (scroll_offset + visible_height).min(total_lines);
@@ -355,14 +355,14 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
 
     // Extract the session's render_version (short-lived borrow, then dropped).
     let current_version = state
-        .task_sessions
+        .session_tracker.task_sessions
         .get(task_id)
         .map(|s| s.render_version)
         .unwrap_or(0);
 
     // Check render cache: only rebuild lines when the session version changes.
     let cached_version = state
-        .cached_streaming_lines
+        .session_tracker.cached_streaming_lines
         .get(task_id)
         .map(|(v, _)| *v)
         .unwrap_or(0);
@@ -370,7 +370,7 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
     let lines: Vec<Line<'static>> = if current_version == cached_version {
         // Cache hit — reuse previously built lines
         state
-            .cached_streaming_lines
+            .session_tracker.cached_streaming_lines
             .get(task_id)
             .map(|(_, lines)| lines.clone())
             .unwrap_or_default()
@@ -379,12 +379,12 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         // write to cache (mutable). These borrows are sequential, not
         // simultaneous, so the borrow checker is happy.
         let built = state
-            .task_sessions
+            .session_tracker.task_sessions
             .get(task_id)
             .map(|s| build_streaming_lines(s))
             .unwrap_or_default();
         state
-            .cached_streaming_lines
+            .session_tracker.cached_streaming_lines
             .insert(task_id.to_string(), (current_version, built.clone()));
         // Evict stale entries when cache grows too large
         state.prune_streaming_cache(10);
@@ -597,7 +597,7 @@ fn render_subagent_streaming_block(f: &mut Frame, area: Rect, state: &mut AppSta
 
     // Pre-compute scroll metrics
     let total_lines = state
-        .cached_streaming_lines
+        .session_tracker.cached_streaming_lines
         .get(&session_id)
         .map(|(_, lines)| lines.len())
         .unwrap_or(0);
@@ -656,31 +656,31 @@ fn render_subagent_streaming_block(f: &mut Frame, area: Rect, state: &mut AppSta
 
     // Check render cache
     let current_version = state
-        .subagent_session_data
+        .session_tracker.subagent_session_data
         .get(&session_id)
         .map(|s| s.render_version)
         .unwrap_or(0);
 
     let cached_version = state
-        .cached_streaming_lines
+        .session_tracker.cached_streaming_lines
         .get(&session_id)
         .map(|(v, _)| *v)
         .unwrap_or(0);
 
     let lines: Vec<Line<'static>> = if current_version == cached_version {
         state
-            .cached_streaming_lines
+            .session_tracker.cached_streaming_lines
             .get(&session_id)
             .map(|(_, lines)| lines.clone())
             .unwrap_or_default()
     } else {
         let built = state
-            .subagent_session_data
+            .session_tracker.subagent_session_data
             .get(&session_id)
             .map(|s| build_streaming_lines(s))
             .unwrap_or_default();
         state
-            .cached_streaming_lines
+            .session_tracker.cached_streaming_lines
             .insert(session_id.clone(), (current_version, built.clone()));
         state.prune_streaming_cache(10);
         built

@@ -280,7 +280,7 @@ impl App {
                         .ui
                         .viewing_task_id
                         .as_ref()
-                        .and_then(|tid| state.cached_streaming_lines.get(tid))
+                        .and_then(|tid| state.session_tracker.cached_streaming_lines.get(tid))
                         .map(|(_, lines)| lines.len())
                         .unwrap_or(0);
 
@@ -340,11 +340,11 @@ impl App {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let perm = state
-                            .task_sessions
+                            .session_tracker.task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_permissions.first().cloned());
                         let client = state
-                            .active_project_id
+                            .project_registry.active_project_id
                             .as_ref()
                             .and_then(|pid| self.opencode_clients.get(pid))
                             .cloned();
@@ -409,12 +409,12 @@ impl App {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let question = state
-                            .task_sessions
+                            .session_tracker.task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_questions.first().cloned())
                             .filter(|q| answer_index < q.answers.len());
                         let client = state
-                            .active_project_id
+                            .project_registry.active_project_id
                             .as_ref()
                             .and_then(|pid| self.opencode_clients.get(pid))
                             .cloned();
@@ -465,7 +465,7 @@ impl App {
                     if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
                         if let Some(ref tid) = state.ui.viewing_task_id {
                             if state
-                                .task_sessions
+                                .session_tracker.task_sessions
                                 .get(tid)
                                 .map(|s| !s.pending_questions.is_empty())
                                 .unwrap_or(false)
@@ -532,7 +532,7 @@ impl App {
     fn handle_new_project(&mut self) {
         let mut state = self.state.lock().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
-        let pos = state.projects.len();
+        let pos = state.project_registry.projects.len();
         let project = crate::state::types::CortexProject {
             id: id.clone(),
             name: format!("Project {}", pos + 1),
@@ -565,10 +565,10 @@ impl App {
     fn handle_delete_project(&mut self) {
         let (project_id, _project_name) = {
             let state = self.state.lock().unwrap();
-            match state.active_project_id.as_ref() {
+            match state.project_registry.active_project_id.as_ref() {
                 Some(pid) => {
                     let name = state
-                        .projects
+                        .project_registry.projects
                         .iter()
                         .find(|p| &p.id == pid)
                         .map(|p| p.name.clone())
@@ -692,7 +692,7 @@ impl App {
                                 );
                             }
                         } else {
-                            if let Some(project_id) = state.active_project_id.clone() {
+                            if let Some(project_id) = state.project_registry.active_project_id.clone() {
                                 if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
                                     // Capture the PREVIOUS agent type before overwriting it,
                                     // so start_agent can detect the change and create a fresh session.
@@ -799,7 +799,7 @@ impl App {
         };
         let project_id = {
             let state = self.state.lock().unwrap();
-            state.active_project_id.clone()
+            state.project_registry.active_project_id.clone()
         };
         let mut state = self.state.lock().unwrap();
         match task_id {
@@ -870,7 +870,7 @@ impl App {
                 .and_then(|tid| state.tasks.get(tid))
                 .and_then(|t| t.session_id.clone());
             let client = state
-                .active_project_id
+                .project_registry.active_project_id
                 .as_ref()
                 .and_then(|pid| self.opencode_clients.get(pid))
                 .cloned();
@@ -955,7 +955,7 @@ impl App {
             // Check if we already have cached data
             let needs_fetch = {
                 let s = state.lock().unwrap();
-                s.subagent_session_data.get(&session_id)
+                s.session_tracker.subagent_session_data.get(&session_id)
                     .map(|d| d.messages.is_empty())
                     .unwrap_or(true)
             };
@@ -966,7 +966,7 @@ impl App {
                         Ok(messages) => {
                             let mut s = state.lock().unwrap();
                             let entry = s
-                                .subagent_session_data
+                                .session_tracker.subagent_session_data
                                 .entry(session_id.clone())
                                 .or_insert_with(crate::state::types::TaskDetailSession::default);
                             entry.session_id = Some(session_id.clone());
@@ -1041,7 +1041,7 @@ impl App {
 
         if let Some(scan_id) = session_id_to_scan {
             // Scanning subagent session data
-            if let Some(session_data) = state.subagent_session_data.get(&scan_id) {
+            if let Some(session_data) = state.session_tracker.subagent_session_data.get(&scan_id) {
                 let task_id = state.ui.viewing_task_id.clone().unwrap_or_default();
                 let current_depth = state.ui.session_nav_stack.last().map(|r| r.depth).unwrap_or(0);
                 for msg in &session_data.messages {
@@ -1062,7 +1062,7 @@ impl App {
         } else {
             // Scanning parent task's messages
             if let Some(ref tid) = state.ui.viewing_task_id {
-                if let Some(session) = state.task_sessions.get(tid) {
+                if let Some(session) = state.session_tracker.task_sessions.get(tid) {
                     let task_id = tid.clone();
                     for msg in &session.messages {
                         for part in &msg.parts {
@@ -1126,7 +1126,7 @@ impl App {
                             let (sessions_to_abort, project_name) = {
                                 let state = self.state.lock().unwrap();
                                 let project_name = state
-                                    .projects
+                                    .project_registry.projects
                                     .iter()
                                     .find(|p| p.id == project_id)
                                     .map(|p| p.name.clone())
@@ -1158,7 +1158,7 @@ impl App {
                             state.remove_project(&project_id);
 
                             // If there are remaining projects, select the first one.
-                            let first_id = state.projects.first().map(|p| p.id.clone());
+                            let first_id = state.project_registry.projects.first().map(|p| p.id.clone());
                             if let Some(id) = first_id {
                                 state.select_project(&id);
                             }
@@ -1171,7 +1171,7 @@ impl App {
 
                             // If the user just deleted the last project, show a
                             // prominent notification prompting them to create one.
-                            if state.projects.is_empty() {
+                            if state.project_registry.projects.is_empty() {
                                 state.set_notification(
                                     "All projects deleted. Press Ctrl+N to create a new one.".to_string(),
                                     crate::state::types::NotificationVariant::Info,
@@ -1198,17 +1198,17 @@ impl App {
     /// Wraps around at the boundaries.
     fn switch_project_offset(&mut self, direction: i32) {
         let mut state = self.state.lock().unwrap();
-        let len = state.projects.len();
+        let len = state.project_registry.projects.len();
         if len <= 1 {
             return;
         }
         let current_idx = state
-            .active_project_id
+            .project_registry.active_project_id
             .as_ref()
-            .and_then(|id| state.projects.iter().position(|p| &p.id == id))
+            .and_then(|id| state.project_registry.projects.iter().position(|p| &p.id == id))
             .unwrap_or(0);
         let new_idx = (current_idx as i32 + direction).rem_euclid(len as i32) as usize;
-        let new_id = state.projects[new_idx].id.clone();
+        let new_id = state.project_registry.projects[new_idx].id.clone();
         state.select_project(&new_id);
     }
 
@@ -1423,7 +1423,7 @@ impl App {
                                         );
                                     }
                                 } else {
-                                    if let Some(project_id) = state.active_project_id.clone() {
+                                    if let Some(project_id) = state.project_registry.active_project_id.clone() {
                                         if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
                                             // Capture the PREVIOUS agent type before overwriting it,
                                             // so start_agent can detect the change and create a fresh session.
@@ -1536,7 +1536,7 @@ impl App {
     fn get_active_client(&self) -> Option<OpenCodeClient> {
         let state = self.state.lock().unwrap();
         state
-            .active_project_id
+            .project_registry.active_project_id
             .as_ref()
             .and_then(|pid| self.opencode_clients.get(pid))
             .cloned()

@@ -127,7 +127,7 @@ fn main() -> Result<()> {
         // If no projects exist, create a default one
         {
             let mut state = state.lock().unwrap();
-            if state.projects.is_empty() {
+            if state.project_registry.projects.is_empty() {
                 let id = uuid::Uuid::new_v4().to_string();
                 let project = state::types::CortexProject {
                     id: id.clone(),
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
         let projects_snapshot: Vec<(String, String, String)> = state
             .lock()
             .unwrap()
-            .projects
+            .project_registry.projects
             .iter()
             .map(|p| (p.id.clone(), p.name.clone(), p.working_directory.clone()))
             .collect();
@@ -229,7 +229,7 @@ fn main() -> Result<()> {
             let project_ids: Vec<String> = state
                 .lock()
                 .unwrap()
-                .projects
+                .project_registry.projects
                 .iter()
                 .map(|p| p.id.clone())
                 .collect();
@@ -278,7 +278,7 @@ fn main() -> Result<()> {
 
                 let mut state = state_for_save.lock().unwrap();
                 if state.take_dirty() {
-                    state.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
+                    state.dirty_flags.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
                     if let Err(e) = persistence::save_state(&mut state, &db) {
                         consecutive_db_errors += 1;
                         db_error_backoff_ms = (2000u64 * (1 << consecutive_db_errors.min(4))).min(30_000);
@@ -291,7 +291,7 @@ fn main() -> Result<()> {
                         consecutive_db_errors = 0;
                         db_error_backoff_ms = 0;
                     }
-                    state.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
+                    state.dirty_flags.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -320,11 +320,11 @@ fn main() -> Result<()> {
             let mut state = state.lock().unwrap();
             let db_path = persistence::db::default_db_path();
             if let Ok(db) = Db::new(&db_path) {
-                state.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
+                state.dirty_flags.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
                 if let Err(e) = persistence::save_state(&mut state, &db) {
                     tracing::error!("Failed to save state on shutdown: {}", e);
                 }
-                state.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
+                state.dirty_flags.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
             }
         }
 

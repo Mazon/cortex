@@ -48,7 +48,7 @@ impl AppState {
             .map(|s| s.to_string())
         {
             let session = self
-                .task_sessions
+                .session_tracker.task_sessions
                 .entry(task_id.clone())
                 .or_insert_with(|| TaskDetailSession {
                     task_id,
@@ -115,7 +115,7 @@ impl AppState {
     fn process_subagent_status(&mut self, session_id: &str, _parent_task_id: &str, status: &str) {
         // Ensure subagent session data exists
         let entry = self
-            .subagent_session_data
+            .session_tracker.subagent_session_data
             .entry(session_id.to_string())
             .or_insert_with(TaskDetailSession::default);
         entry.session_id = Some(session_id.to_string());
@@ -142,7 +142,7 @@ impl AppState {
     fn process_subagent_idle(&mut self, session_id: &str, _parent_task_id: &str) {
         self.mark_subagent_inactive(session_id);
         // Clear dedup tracking for the subagent session.
-        if let Some(entry) = self.subagent_session_data.get_mut(session_id) {
+        if let Some(entry) = self.session_tracker.subagent_session_data.get_mut(session_id) {
             entry.seen_delta_keys.clear();
             entry.last_delta_key = None;
             entry.last_delta_content = None;
@@ -163,7 +163,7 @@ impl AppState {
         delta: &str,
     ) {
         let entry = self
-            .subagent_session_data
+            .session_tracker.subagent_session_data
             .entry(session_id.to_string())
             .or_insert_with(TaskDetailSession::default);
         entry.session_id = Some(session_id.to_string());
@@ -330,7 +330,7 @@ impl AppState {
     /// and store it in `task.plan_output`. Called when an agent completes,
     /// before auto-progression starts the next agent.
     pub fn extract_plan_output(&mut self, task_id: &str) {
-        let plan = if let Some(session) = self.task_sessions.get(task_id) {
+        let plan = if let Some(session) = self.session_tracker.task_sessions.get(task_id) {
             // Prefer finalized messages (assistant text parts)
             let from_messages: String = session.messages.iter()
                 .rev()
@@ -396,7 +396,7 @@ impl AppState {
         messages: Vec<TaskMessage>,
     ) -> bool {
         let has_streaming = self
-            .task_sessions
+            .session_tracker.task_sessions
             .get(task_id)
             .is_some_and(|s| s.streaming_text.is_some());
 
@@ -420,7 +420,7 @@ impl AppState {
         // For main sessions this is the only place these are cleared
         // (subagents also clear on complete/idle/error in
         // process_session_status / process_session_idle).
-        if let Some(session) = self.task_sessions.get_mut(task_id) {
+        if let Some(session) = self.session_tracker.task_sessions.get_mut(task_id) {
             session.seen_delta_keys.clear();
             session.last_delta_key = None;
             session.last_delta_content = None;

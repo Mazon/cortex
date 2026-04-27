@@ -26,7 +26,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
         .values()
         .filter(|t| {
             state
-                .active_project_id
+                .project_registry.active_project_id
                 .as_ref()
                 .map_or(false, |pid| t.project_id == *pid)
         })
@@ -64,7 +64,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
     };
 
     // Check if a persistence save is in progress
-    let is_saving = state.saving_in_progress.load(Ordering::Relaxed);
+    let is_saving = state.dirty_flags.saving_in_progress.load(Ordering::Relaxed);
 
     // Connection status (left) — uses per-project connection state from the active project
     let (conn_text, conn_color) = if state.is_permanently_disconnected() {
@@ -84,10 +84,10 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
 
     // Active project name + task count (displayed between connection status and notifications)
     let project_info = state
-        .active_project_id
+        .project_registry.active_project_id
         .as_ref()
         .and_then(|pid| {
-            state.projects.iter().find(|p| &p.id == pid).map(|p| {
+            state.project_registry.projects.iter().find(|p| &p.id == pid).map(|p| {
                 let task_count = state
                     .tasks
                     .values()
@@ -301,7 +301,7 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
                     // If viewing a task with pending permissions
                     if let Some(ref tid) = state.ui.viewing_task_id {
                         if state
-                            .task_sessions
+                            .session_tracker.task_sessions
                             .get(tid)
                             .map_or(false, |s| !s.pending_permissions.is_empty())
                         {
@@ -309,7 +309,7 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
                         }
                         // If viewing a task with pending questions
                         if state
-                            .task_sessions
+                            .session_tracker.task_sessions
                             .get(tid)
                             .map_or(false, |s| !s.pending_questions.is_empty())
                         {
@@ -403,8 +403,8 @@ mod tests {
             connected: true,
             ..Default::default()
         };
-        state.projects.push(project);
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.projects.push(project);
+        state.project_registry.active_project_id = Some("proj-1".to_string());
         state
     }
 
@@ -613,7 +613,7 @@ mod tests {
             last_delta_key: None,
             last_delta_content: None,
         };
-        state.task_sessions.insert("task-1".to_string(), session);
+        state.session_tracker.task_sessions.insert("task-1".to_string(), session);
 
         let hints = build_contextual_hints(&state);
         assert!(hints.contains(&"y: approve  n: reject  Esc: back".to_string()));
@@ -645,7 +645,7 @@ mod tests {
             last_delta_key: None,
             last_delta_content: None,
         };
-        state.task_sessions.insert("task-1".to_string(), session);
+        state.session_tracker.task_sessions.insert("task-1".to_string(), session);
 
         let hints = build_contextual_hints(&state);
         assert!(hints.contains(&"1-9: answer question  Esc: back".to_string()));

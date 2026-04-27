@@ -14,21 +14,21 @@ use std::collections::HashMap;
 /// If any write fails (returning `Err`), the `Transaction` guard's `Drop`
 /// implementation automatically rolls back — no partial saves.
 ///
-/// Only tasks whose IDs are in `state.dirty_tasks` are written; unchanged
+/// Only tasks whose IDs are in `state.dirty_flags.dirty_tasks` are written; unchanged
 /// tasks are skipped. The dirty set is cleared on successful commit.
 pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     let tx = db.conn.unchecked_transaction()?;
 
     // Save all projects
-    for project in &state.projects {
+    for project in &state.project_registry.projects {
         db.save_project_with_conn(project, &tx)?;
     }
 
     // Save only dirty tasks (depends on projects — saved above)
-    if state.dirty_tasks.is_empty() {
+    if state.dirty_flags.dirty_tasks.is_empty() {
         // No tasks changed — skip task writes but still save kanban/metadata.
     } else {
-        for task_id in &state.dirty_tasks {
+        for task_id in &state.dirty_flags.dirty_tasks {
             if let Some(task) = state.tasks.get(task_id) {
                 db.save_task_with_conn(task, &tx)?;
             }
@@ -36,15 +36,15 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     }
 
     // Delete tasks that were removed from in-memory state
-    if !state.deleted_tasks.is_empty() {
-        for task_id in &state.deleted_tasks {
+    if !state.dirty_flags.deleted_tasks.is_empty() {
+        for task_id in &state.dirty_flags.deleted_tasks {
             db.delete_task_with_conn(task_id, &tx)?;
         }
     }
 
     // Delete projects that were removed from in-memory state
-    if !state.deleted_projects.is_empty() {
-        for project_id in &state.deleted_projects {
+    if !state.dirty_flags.deleted_projects.is_empty() {
+        for project_id in &state.dirty_flags.deleted_projects {
             db.delete_project_with_conn(project_id, &tx)?;
         }
     }
@@ -55,23 +55,23 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     }
 
     // Save active project
-    if let Some(ref pid) = state.active_project_id {
+    if let Some(ref pid) = state.project_registry.active_project_id {
         db.set_metadata_with_conn("active_project_id", pid, &tx)?;
     }
 
     // Save task number counters
-    for (pid, counter) in &state.task_number_counters {
+    for (pid, counter) in &state.project_registry.task_number_counters {
         db.set_metadata_with_conn(&format!("counter_{}", pid), &counter.to_string(), &tx)?;
     }
 
     tx.commit()?;
 
     // Clear the dirty set after successful commit
-    state.dirty_tasks.clear();
+    state.dirty_flags.dirty_tasks.clear();
     // Clear the deleted set after successful commit
-    state.deleted_tasks.clear();
+    state.dirty_flags.deleted_tasks.clear();
     // Clear the deleted projects set after successful commit
-    state.deleted_projects.clear();
+    state.dirty_flags.deleted_projects.clear();
 
     Ok(())
 }
@@ -301,7 +301,11 @@ mod tests {
         counters.insert("proj-1".to_string(), 8);
 
         let mut original = AppState {
-            projects: vec![project.clone()],
+            project_registry: crate::state::types::ProjectRegistry {
+                projects: vec![project.clone()],
+                active_project_id: Some("proj-1".to_string()),
+                task_number_counters: counters.clone(),
+            },
             tasks,
             kanban: crate::state::types::KanbanState {
                 columns: kanban_columns.clone(),
@@ -314,31 +318,26 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            active_project_id: Some("proj-1".to_string()),
-            task_number_counters: counters.clone(),
-            session_to_task: {
-                let mut m = HashMap::new();
-                if let Some(ref sid) = task.session_id {
-                    m.insert(sid.clone(), task.id.clone());
-                }
-                m
+            session_tracker: crate::state::types::SessionTracker {
+                session_to_task: {
+                    let mut m = HashMap::new();
+                    if let Some(ref sid) = task.session_id {
+                        m.insert(sid.clone(), task.id.clone());
+                    }
+                    m
+                },
+                task_sessions: HashMap::new(),
+                cached_streaming_lines: HashMap::new(),
+                subagent_sessions: HashMap::new(),
+                subagent_to_parent: HashMap::new(),
+                subagent_session_data: HashMap::new(),
             },
-            task_sessions: HashMap::new(),
-            cached_streaming_lines: HashMap::new(),
-            subagent_sessions: HashMap::new(),
-            subagent_to_parent: HashMap::new(),
-            subagent_session_data: HashMap::new(),
-            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dirty_tasks: std::collections::HashSet::new(),
-            deleted_tasks: std::collections::HashSet::new(),
-            deleted_projects: std::collections::HashSet::new(),
-            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            dirty_flags: crate::state::types::DirtyFlags::default(),
         };
 
         // ── Save ──
         // Mark the task as dirty so it gets written
-        original.dirty_tasks.insert(task.id.clone());
+        original.dirty_flags.dirty_tasks.insert(task.id.clone());
         save_state(&mut original, &db).expect("save_state failed");
 
         // ── Restore into a fresh AppState ──
@@ -346,8 +345,8 @@ mod tests {
         restore_state(&mut restored, &db).expect("restore_state failed");
 
         // ── Assert projects ──
-        assert_eq!(restored.projects.len(), 1);
-        let rp = &restored.projects[0];
+        assert_eq!(restored.project_registry.projects.len(), 1);
+        let rp = &restored.project_registry.projects[0];
         assert_eq!(rp.id, project.id);
         assert_eq!(rp.name, project.name);
         assert_eq!(rp.working_directory, project.working_directory);
@@ -385,13 +384,13 @@ mod tests {
         );
 
         // ── Assert active project ──
-        assert_eq!(restored.active_project_id, Some("proj-1".to_string()));
+        assert_eq!(restored.project_registry.active_project_id, Some("proj-1".to_string()));
 
         // ── Assert task number counter ──
-        assert_eq!(restored.task_number_counters.get("proj-1"), Some(&8u32));
+        assert_eq!(restored.project_registry.task_number_counters.get("proj-1"), Some(&8u32));
 
         // ── Assert session-to-task reverse index ──
-        assert_eq!(restored.session_to_task.get("sess-xyz-999"), Some(&task.id));
+        assert_eq!(restored.session_tracker.session_to_task.get("sess-xyz-999"), Some(&task.id));
 
         // Cleanup
         let _ = std::fs::remove_file(&db_path);
@@ -457,7 +456,11 @@ mod tests {
         kanban_columns.insert("running".to_string(), vec![task1.id.clone(), task2.id.clone()]);
 
         let mut original = AppState {
-            projects: vec![project.clone()],
+            project_registry: crate::state::types::ProjectRegistry {
+                projects: vec![project.clone()],
+                active_project_id: Some("proj-1".to_string()),
+                task_number_counters: HashMap::new(),
+            },
             tasks,
             kanban: crate::state::types::KanbanState {
                 columns: kanban_columns.clone(),
@@ -466,37 +469,25 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            active_project_id: Some("proj-1".to_string()),
-            task_number_counters: HashMap::new(),
-            session_to_task: HashMap::new(),
-            task_sessions: HashMap::new(),
-            cached_streaming_lines: HashMap::new(),
-            subagent_sessions: HashMap::new(),
-            subagent_to_parent: HashMap::new(),
-            subagent_session_data: HashMap::new(),
-            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dirty_tasks: std::collections::HashSet::new(),
-            deleted_tasks: std::collections::HashSet::new(),
-            deleted_projects: std::collections::HashSet::new(),
-            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            session_tracker: crate::state::types::SessionTracker::default(),
+            dirty_flags: crate::state::types::DirtyFlags::default(),
         };
 
         // ── Save both tasks to DB ──
-        original.dirty_tasks.insert(task1.id.clone());
-        original.dirty_tasks.insert(task2.id.clone());
+        original.dirty_flags.dirty_tasks.insert(task1.id.clone());
+        original.dirty_flags.dirty_tasks.insert(task2.id.clone());
         save_state(&mut original, &db).expect("save_state failed (initial)");
-        assert!(original.dirty_tasks.is_empty());
-        assert!(original.deleted_tasks.is_empty());
+        assert!(original.dirty_flags.dirty_tasks.is_empty());
+        assert!(original.dirty_flags.deleted_tasks.is_empty());
 
         // ── Delete task2 via AppState::delete_task ──
         let _session = original.delete_task(&task2.id);
         assert!(!original.tasks.contains_key(&task2.id));
-        assert!(original.deleted_tasks.contains(&task2.id));
+        assert!(original.dirty_flags.deleted_tasks.contains(&task2.id));
 
         // ── Save again (should flush the deletion to DB) ──
         save_state(&mut original, &db).expect("save_state failed (after delete)");
-        assert!(original.deleted_tasks.is_empty());
+        assert!(original.dirty_flags.deleted_tasks.is_empty());
 
         // ── Restore into a fresh AppState ──
         let mut restored = AppState::default();
@@ -544,7 +535,11 @@ mod tests {
         counters.insert("proj-1".to_string(), 8);
 
         let mut original = AppState {
-            projects: vec![project.clone()],
+            project_registry: crate::state::types::ProjectRegistry {
+                projects: vec![project.clone()],
+                active_project_id: Some("proj-1".to_string()),
+                task_number_counters: counters.clone(),
+            },
             tasks,
             kanban: crate::state::types::KanbanState {
                 columns: kanban_columns.clone(),
@@ -553,29 +548,17 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            active_project_id: Some("proj-1".to_string()),
-            task_number_counters: counters.clone(),
-            session_to_task: HashMap::new(),
-            task_sessions: HashMap::new(),
-            cached_streaming_lines: HashMap::new(),
-            subagent_sessions: HashMap::new(),
-            subagent_to_parent: HashMap::new(),
-            subagent_session_data: HashMap::new(),
-            dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            dirty_tasks: std::collections::HashSet::new(),
-            deleted_tasks: std::collections::HashSet::new(),
-            deleted_projects: std::collections::HashSet::new(),
-            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            session_tracker: crate::state::types::SessionTracker::default(),
+            dirty_flags: crate::state::types::DirtyFlags::default(),
         };
 
         // ── Save project + tasks to DB ──
-        original.dirty_tasks.insert(task1.id.clone());
-        original.dirty_tasks.insert(task2.id.clone());
+        original.dirty_flags.dirty_tasks.insert(task1.id.clone());
+        original.dirty_flags.dirty_tasks.insert(task2.id.clone());
         save_state(&mut original, &db).expect("save_state failed (initial)");
-        assert!(original.dirty_tasks.is_empty(), "dirty_tasks should be cleared after save");
-        assert!(original.deleted_tasks.is_empty(), "deleted_tasks should be cleared after save");
-        assert!(original.deleted_projects.is_empty(), "deleted_projects should be cleared after save");
+        assert!(original.dirty_flags.dirty_tasks.is_empty(), "dirty_tasks should be cleared after save");
+        assert!(original.dirty_flags.deleted_tasks.is_empty(), "deleted_tasks should be cleared after save");
+        assert!(original.dirty_flags.deleted_projects.is_empty(), "deleted_projects should be cleared after save");
 
         // ── Verify DB has the project and tasks before deletion ──
         let db_projects = db.load_projects().expect("load_projects failed");
@@ -585,29 +568,29 @@ mod tests {
 
         // ── Delete the project via remove_project() ──
         original.remove_project("proj-1");
-        assert!(original.projects.is_empty(), "projects should be empty after remove");
+        assert!(original.project_registry.projects.is_empty(), "projects should be empty after remove");
         assert!(original.tasks.is_empty(), "tasks should be empty after remove");
         assert!(
-            original.deleted_projects.contains("proj-1"),
+            original.dirty_flags.deleted_projects.contains("proj-1"),
             "deleted_projects should contain proj-1"
         );
         assert!(
-            original.deleted_tasks.contains(&task1.id),
+            original.dirty_flags.deleted_tasks.contains(&task1.id),
             "deleted_tasks should contain task1"
         );
         assert!(
-            original.deleted_tasks.contains(&task2.id),
+            original.dirty_flags.deleted_tasks.contains(&task2.id),
             "deleted_tasks should contain task2"
         );
 
         // ── Save again (should flush project + task deletions to DB) ──
         save_state(&mut original, &db).expect("save_state failed (after project delete)");
         assert!(
-            original.deleted_projects.is_empty(),
+            original.dirty_flags.deleted_projects.is_empty(),
             "deleted_projects should be cleared after save"
         );
         assert!(
-            original.deleted_tasks.is_empty(),
+            original.dirty_flags.deleted_tasks.is_empty(),
             "deleted_tasks should be cleared after save"
         );
 
@@ -631,7 +614,7 @@ mod tests {
         restore_state(&mut restored, &db).expect("restore_state failed");
 
         assert_eq!(
-            restored.projects.len(),
+            restored.project_registry.projects.len(),
             0,
             "restored state should have 0 projects"
         );

@@ -119,7 +119,7 @@ pub async fn sse_event_loop(
                                         let old_session_id = state.tasks.get(&a.task_id)
                                             .and_then(|t| t.session_id.clone());
                                         if let Some(old_sid) = old_session_id {
-                                            state.session_to_task.remove(&old_sid);
+                                            state.session_tracker.session_to_task.remove(&old_sid);
                                             // Keep the session_id on the task for now so start_agent()
                                             // can detect the agent change and create a fresh session.
                                             // The mapping is what matters for event routing.
@@ -170,7 +170,7 @@ pub async fn sse_event_loop(
                                         // Check if there's streaming text to finalize
                                         let needs_finalize = {
                                             let s = state_clone.lock().unwrap();
-                                            s.task_sessions.get(&task_id)
+                                            s.session_tracker.task_sessions.get(&task_id)
                                                 .is_some_and(|ts| ts.streaming_text.is_some())
                                         };
                                         if !needs_finalize {
@@ -464,7 +464,7 @@ mod tests {
             ..Default::default()
         };
         state.add_project(project);
-        state.active_project_id = Some("proj-1".to_string());
+        state.project_registry.active_project_id = Some("proj-1".to_string());
 
         let task_id = "task-1".to_string();
         let session_id = "session-abc".to_string();
@@ -495,7 +495,7 @@ mod tests {
             .or_default()
             .push(task_id.clone());
         state
-            .session_to_task
+            .session_tracker.session_to_task
             .insert(session_id.clone(), task_id.clone());
 
         // Tests that need a client construct their own; process_event only uses
@@ -557,7 +557,7 @@ mod tests {
             AgentStatus::Running
         );
         // render_dirty should be set
-        assert!(state.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state.dirty_flags.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
         // No finalization for "running" status
         assert!(_finalize.is_none());
     }
@@ -763,7 +763,7 @@ mod tests {
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
-        let session = state.task_sessions.get("task-1").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
         assert_eq!(session.streaming_text.as_deref(), Some("Hello "));
 
         // Append more text
@@ -778,7 +778,7 @@ mod tests {
         };
         let (_action, _finalize) = process_event(&event2, &mut state, &client, &columns_config);
 
-        let session = state.task_sessions.get("task-1").unwrap();
+        let session = state.session_tracker.task_sessions.get("task-1").unwrap();
         assert_eq!(session.streaming_text.as_deref(), Some("Hello World"));
     }
 
@@ -804,7 +804,7 @@ mod tests {
         let task = state.tasks.get(&task_id).unwrap();
         assert_eq!(task.pending_permission_count, 1);
 
-        let session = state.task_sessions.get(&task_id).unwrap();
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert_eq!(session.pending_permissions.len(), 1);
         assert_eq!(session.pending_permissions[0].id, "perm-001");
         assert_eq!(session.pending_permissions[0].tool_name, "bash");
@@ -843,7 +843,7 @@ mod tests {
 
         // Permission should be resolved (count back to 0)
         assert_eq!(state.tasks.get(&task_id).unwrap().pending_permission_count, 0);
-        let session = state.task_sessions.get(&task_id).unwrap();
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert!(session.pending_permissions.is_empty());
     }
 
@@ -866,7 +866,7 @@ mod tests {
         assert!(notif.message.contains("Question pending"));
         assert!(notif.message.contains("Which approach"));
         assert_eq!(notif.variant, NotificationVariant::Warning);
-        let session = state.task_sessions.get(&task_id).unwrap();
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert_eq!(session.pending_questions.len(), 1);
         assert_eq!(session.pending_questions[0].id, "q-001");
         assert_eq!(session.pending_questions[0].question, "Which approach should I use for the refactoring?");
@@ -888,7 +888,7 @@ mod tests {
             }),
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
-        let session = state.task_sessions.get(&task_id).unwrap();
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert_eq!(session.pending_questions.len(), 1);
         assert_eq!(session.pending_questions[0].answers, vec!["Option A", "Option B", "Option C"]);
     }
@@ -934,7 +934,7 @@ mod tests {
             },
         };
         let (_action, _finalize) = process_event(&reply_event, &mut state, &client, &columns_config);
-        let session = state.task_sessions.get(&task_id).unwrap();
+        let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert!(session.pending_questions.is_empty());
         assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 0);
     }
@@ -961,7 +961,7 @@ mod tests {
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
         // render_dirty should still be set
-        assert!(state.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state.dirty_flags.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     // ── render_dirty always set ─────────────────────────────────────────
@@ -974,7 +974,7 @@ mod tests {
 
         // Clear the flag first
         state
-            .render_dirty
+            .dirty_flags.render_dirty
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
         let event = EventListResponse::ServerConnected {
@@ -982,7 +982,7 @@ mod tests {
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
-        assert!(state.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(state.dirty_flags.render_dirty.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     // ── Race condition fix: stale SessionStatus can't overwrite Running ───
@@ -998,7 +998,7 @@ mod tests {
         let columns_config = make_columns_config();
 
         // Simulate auto-progression clearing the session mapping
-        state.session_to_task.remove(&session_id);
+        state.session_tracker.session_to_task.remove(&session_id);
 
         // Set the task to Running (as auto-progression would)
         state.update_task_agent_status(&task_id, AgentStatus::Running);
@@ -1202,7 +1202,7 @@ mod tests {
         let (mut state, task_id, _session_id) = make_test_state();
 
         // Add messages to the session
-        state.task_sessions.entry(task_id.clone()).or_default().messages = vec![
+        state.session_tracker.task_sessions.entry(task_id.clone()).or_default().messages = vec![
             TaskMessage {
                 id: "msg-1".to_string(),
                 role: MessageRole::User,
@@ -1232,7 +1232,7 @@ mod tests {
         let (mut state, task_id, _session_id) = make_test_state();
 
         // Add streaming text (no finalized messages)
-        let session = state.task_sessions.entry(task_id.clone()).or_default();
+        let session = state.session_tracker.task_sessions.entry(task_id.clone()).or_default();
         session.streaming_text = Some("Streaming plan output...".to_string());
 
         state.extract_plan_output(&task_id);
@@ -1257,9 +1257,9 @@ mod tests {
         let (mut state, task_id, _session_id) = make_test_state();
 
         // Clear dirty flag
-        state.dirty_tasks.clear();
+        state.dirty_flags.dirty_tasks.clear();
 
-        state.task_sessions.entry(task_id.clone()).or_default().messages = vec![
+        state.session_tracker.task_sessions.entry(task_id.clone()).or_default().messages = vec![
             TaskMessage {
                 id: "msg-1".to_string(),
                 role: MessageRole::Assistant,
@@ -1270,6 +1270,6 @@ mod tests {
 
         state.extract_plan_output(&task_id);
 
-        assert!(state.dirty_tasks.contains(&task_id));
+        assert!(state.dirty_flags.dirty_tasks.contains(&task_id));
     }
 }
