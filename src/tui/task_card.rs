@@ -17,6 +17,10 @@ pub fn render_task_card(
 ) {
     let border_color = if is_selected {
         Color::Cyan
+    } else if task.agent_status == AgentStatus::Running {
+        // Running tasks get a colored border using the theme working color
+        // for a subtle visual indicator that distinguishes them from idle tasks.
+        theme.working_color()
     } else {
         Color::DarkGray
     };

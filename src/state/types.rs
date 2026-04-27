@@ -886,6 +886,11 @@ pub struct AppState {
     /// Set of project IDs that have been removed from in-memory state but not yet
     /// removed from the database. Flushed by `save_state()` on the next persistence cycle.
     pub deleted_projects: HashSet<String>,
+    /// Whether a persistence save is currently in progress.
+    /// Set to `true` before acquiring the state lock for saving, cleared after.
+    /// Read by the TUI status bar (via `Arc<AtomicBool>` — no lock needed) to show
+    /// a "saving..." indicator.
+    pub saving_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for AppState {
@@ -912,6 +917,7 @@ impl Default for AppState {
             dirty_tasks: HashSet::new(),
             deleted_tasks: HashSet::new(),
             deleted_projects: HashSet::new(),
+            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }

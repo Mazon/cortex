@@ -267,6 +267,7 @@ fn main() -> Result<()> {
 
                 let mut state = state_for_save.lock().unwrap();
                 if state.take_dirty() {
+                    state.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
                     if let Err(e) = persistence::save_state(&mut state, &db) {
                         consecutive_db_errors += 1;
                         db_error_backoff_ms = (2000u64 * (1 << consecutive_db_errors.min(4))).min(30_000);
@@ -279,6 +280,7 @@ fn main() -> Result<()> {
                         consecutive_db_errors = 0;
                         db_error_backoff_ms = 0;
                     }
+                    state.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -307,9 +309,11 @@ fn main() -> Result<()> {
             let mut state = state.lock().unwrap();
             let db_path = persistence::db::default_db_path();
             if let Ok(db) = Db::new(&db_path) {
+                state.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
                 if let Err(e) = persistence::save_state(&mut state, &db) {
                     tracing::error!("Failed to save state on shutdown: {}", e);
                 }
+                state.saving_in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
             }
         }
 

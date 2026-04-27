@@ -6,18 +6,20 @@
 //! permissions), hints rotate on a ~3-second cycle so the user can discover
 //! all applicable shortcuts. `?:help` is always shown as a fallback.
 
+use crate::config::types::ThemeConfig;
 use crate::state::types::{
     AgentStatus, AppMode, AppState, FocusedPanel, NotificationVariant, MAX_NOTIFICATIONS,
 };
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Seconds between hint rotations when multiple context groups apply.
 const HINT_ROTATION_SECS: u64 = 3;
 
 /// Render the status bar at the bottom of the kanban area.
-pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &ThemeConfig) {
     // Count pending permissions and questions across all tasks for the active project
     let (total_permissions, total_questions) = state
         .tasks
@@ -61,20 +63,23 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         String::new()
     };
 
-    // Connection status (left)
+    // Check if a persistence save is in progress
+    let is_saving = state.saving_in_progress.load(Ordering::Relaxed);
+
+    // Connection status (left) — uses configurable theme colors
     let (conn_text, conn_color) = if state.permanently_disconnected {
-        ("✕ disconnected (max retries exceeded — restart to retry)".to_string(), Color::Red)
+        ("✕ disconnected (max retries exceeded — restart to retry)".to_string(), theme.error_color())
     } else if state.reconnecting {
         let attempt = state.reconnect_attempt;
         if attempt > 0 {
-            (format!("◐ reconnecting ({})...", attempt), Color::Yellow)
+            (format!("◐ reconnecting ({})...", attempt), theme.reconnecting_color())
         } else {
-            ("◐ reconnecting...".to_string(), Color::Yellow)
+            ("◐ reconnecting...".to_string(), theme.reconnecting_color())
         }
     } else if state.connected {
-        ("● connected".to_string(), Color::Green)
+        ("● connected".to_string(), theme.connected_color())
     } else {
-        ("○ disconnected".to_string(), Color::DarkGray)
+        ("○ disconnected".to_string(), theme.disconnected_color())
     };
 
     // Active project name + task count (displayed between connection status and notifications)
@@ -99,12 +104,13 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or_default();
 
     // Notification (center) — show most recent with queue count indicator
+    // Uses configurable theme colors
     let (notif_text, notif_color) = if let Some(n) = state.ui.notifications.back() {
         let color = match n.variant {
-            NotificationVariant::Info => Color::Blue,
-            NotificationVariant::Success => Color::Green,
-            NotificationVariant::Warning => Color::Yellow,
-            NotificationVariant::Error => Color::Red,
+            NotificationVariant::Info => theme.info_color(),
+            NotificationVariant::Success => theme.done_color(),
+            NotificationVariant::Warning => theme.question_color(),
+            NotificationVariant::Error => theme.error_color(),
         };
         let count = state.ui.notifications.len();
         if count > 1 {
@@ -113,6 +119,9 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState) {
         } else {
             (n.message.clone(), color)
         }
+    } else if is_saving {
+        // Show "saving..." indicator when persistence is active
+        ("saving...".to_string(), theme.info_color())
     } else {
         (String::new(), Color::Reset)
     };

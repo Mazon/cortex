@@ -535,6 +535,9 @@ pub struct ThemeConfig {
     pub sidebar_width: u16,
     #[serde(default = "default_column_width")]
     pub column_width: u16,
+    /// Tick rate in milliseconds for the TUI event loop. Default: 100.
+    #[serde(default = "default_tick_rate_ms")]
+    pub tick_rate_ms: u64,
     #[serde(default = "default_status_working")]
     pub status_working: String,
     #[serde(default = "default_status_done")]
@@ -543,6 +546,15 @@ pub struct ThemeConfig {
     pub status_question: String,
     #[serde(default = "default_status_error")]
     pub status_error: String,
+    /// Status bar color for "connected". Default: "#4CAF50" (green).
+    #[serde(default = "default_status_connected")]
+    pub status_connected: String,
+    /// Status bar color for "disconnected". Default: "#888888" (gray).
+    #[serde(default = "default_status_disconnected")]
+    pub status_disconnected: String,
+    /// Status bar color for "reconnecting". Default: "#FFC107" (amber).
+    #[serde(default = "default_status_reconnecting")]
+    pub status_reconnecting: String,
 }
 
 fn default_sidebar_width() -> u16 {
@@ -550,6 +562,9 @@ fn default_sidebar_width() -> u16 {
 }
 fn default_column_width() -> u16 {
     30
+}
+fn default_tick_rate_ms() -> u64 {
+    100
 }
 fn default_status_working() -> String {
     "#2196F3".to_string()
@@ -563,16 +578,29 @@ fn default_status_question() -> String {
 fn default_status_error() -> String {
     "#F44336".to_string()
 }
+fn default_status_connected() -> String {
+    "#4CAF50".to_string()
+}
+fn default_status_disconnected() -> String {
+    "#888888".to_string()
+}
+fn default_status_reconnecting() -> String {
+    "#FFC107".to_string()
+}
 
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             sidebar_width: default_sidebar_width(),
             column_width: default_column_width(),
+            tick_rate_ms: default_tick_rate_ms(),
             status_working: default_status_working(),
             status_done: default_status_done(),
             status_question: default_status_question(),
             status_error: default_status_error(),
+            status_connected: default_status_connected(),
+            status_disconnected: default_status_disconnected(),
+            status_reconnecting: default_status_reconnecting(),
         }
     }
 }
@@ -608,6 +636,26 @@ impl ThemeConfig {
     /// Uses the configured `status_error` hex color, falling back to red.
     pub fn error_color(&self) -> ratatui::prelude::Color {
         parse_hex_color_or(&self.status_error, ratatui::prelude::Color::Rgb(244, 67, 54))
+    }
+
+    /// Status bar color for "connected". Default: green.
+    pub fn connected_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_connected, ratatui::prelude::Color::Rgb(76, 175, 80))
+    }
+
+    /// Status bar color for "disconnected". Default: gray.
+    pub fn disconnected_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_disconnected, ratatui::prelude::Color::Rgb(136, 136, 136))
+    }
+
+    /// Status bar color for "reconnecting". Default: amber.
+    pub fn reconnecting_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_reconnecting, ratatui::prelude::Color::Rgb(255, 193, 7))
+    }
+
+    /// Notification color for info messages. Reuses `status_working` (blue).
+    pub fn info_color(&self) -> ratatui::prelude::Color {
+        parse_hex_color_or(&self.status_working, ratatui::prelude::Color::Rgb(33, 150, 243))
     }
 }
 

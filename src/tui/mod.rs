@@ -88,5 +88,5 @@ pub fn render_normal(
             }
         }
     }
-    status_bar::render_status_bar(f, kanban_v[1], state);
+    status_bar::render_status_bar(f, kanban_v[1], state, &config.theme);
 }

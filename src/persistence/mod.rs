@@ -270,6 +270,7 @@ mod tests {
             dirty_tasks: std::collections::HashSet::new(),
             deleted_tasks: std::collections::HashSet::new(),
             deleted_projects: std::collections::HashSet::new(),
+            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // ── Save ──
@@ -419,6 +420,7 @@ mod tests {
             dirty_tasks: std::collections::HashSet::new(),
             deleted_tasks: std::collections::HashSet::new(),
             deleted_projects: std::collections::HashSet::new(),
+            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // ── Save both tasks to DB ──
@@ -509,6 +511,7 @@ mod tests {
             dirty_tasks: std::collections::HashSet::new(),
             deleted_tasks: std::collections::HashSet::new(),
             deleted_projects: std::collections::HashSet::new(),
+            saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // ── Save project + tasks to DB ──

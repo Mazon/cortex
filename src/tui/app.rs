@@ -74,7 +74,7 @@ impl App {
 
     /// Run the main event loop.
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let tick_rate = Duration::from_millis(100);
+        let tick_rate = Duration::from_millis(self.config.theme.tick_rate_ms);
 
         // Set up graceful shutdown via a background signal-handler task.
         // Listens for SIGINT (Ctrl+C) and SIGTERM, then notifies the event
