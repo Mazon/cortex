@@ -475,11 +475,23 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 }
 
 /// Migration v0 → v1: Add `last_activity_at` column to `tasks` table.
+/// Includes an idempotency guard: if the column already exists (e.g. from a
+/// concurrent process in WAL mode), the ALTER TABLE is skipped.
 fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
-        [],
-    )?;
+    // Guard: check if column already exists (handles TOCTOU race where
+    // another process may have run this migration concurrently).
+    let has_column: bool = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|c| c == "last_activity_at");
+
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     Ok(())
 }
 
