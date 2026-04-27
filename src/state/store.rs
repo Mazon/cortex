@@ -246,17 +246,24 @@ impl AppState {
         true
     }
 
+    /// Set the search query and its pre-lowercased cache atomically.
+    /// Use this instead of assigning `search_query` directly to ensure
+    /// `search_query_lower` stays in sync.
+    pub fn set_search_query(&mut self, query: Option<String>) {
+        self.ui.search_query_lower = query.as_ref().map(|q| q.to_lowercase());
+        self.ui.search_query = query;
+    }
+
     /// Check if a task matches the current search filter.
     /// Returns `true` if there is no active search, or if the task's title
     /// or description contains the search query (case-insensitive).
     pub fn task_matches_search(&self, task: &CortexTask) -> bool {
-        match &self.ui.search_query {
+        match &self.ui.search_query_lower {
             None => true,
             Some(query) if query.is_empty() => true,
-            Some(query) => {
-                let query_lower = query.to_lowercase();
-                task.title.to_lowercase().contains(&query_lower)
-                    || task.description.to_lowercase().contains(&query_lower)
+            Some(query_lower) => {
+                task.title.to_lowercase().contains(query_lower)
+                    || task.description.to_lowercase().contains(query_lower)
             }
         }
     }

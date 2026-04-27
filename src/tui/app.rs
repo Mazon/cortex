@@ -1786,16 +1786,17 @@ impl App {
             KeyCode::Esc => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.mode = crate::state::types::AppMode::Normal;
-                state.ui.search_query = None;
+                state.set_search_query(None);
                 state.ui.input_text.clear();
             }
             KeyCode::Enter => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if state.ui.input_text.trim().is_empty() {
-                    state.ui.search_query = None;
+                let query = if state.ui.input_text.trim().is_empty() {
+                    None
                 } else {
-                    state.ui.search_query = Some(state.ui.input_text.trim().to_string());
-                }
+                    Some(state.ui.input_text.trim().to_string())
+                };
+                state.set_search_query(query);
                 state.ui.mode = crate::state::types::AppMode::Normal;
             }
             KeyCode::Backspace => {
@@ -1806,11 +1807,12 @@ impl App {
                     state.ui.input_text.remove(pos);
                 }
                 // Live-filter while typing
-                state.ui.search_query = if state.ui.input_text.is_empty() {
+                let query = if state.ui.input_text.is_empty() {
                     None
                 } else {
                     Some(state.ui.input_text.clone())
                 };
+                state.set_search_query(query);
             }
             KeyCode::Char(c) => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1818,7 +1820,8 @@ impl App {
                 state.ui.input_text.insert(pos, c);
                 state.ui.input_cursor += 1;
                 // Live-filter while typing
-                state.ui.search_query = Some(state.ui.input_text.clone());
+                let query = Some(state.ui.input_text.clone());
+                state.set_search_query(query);
             }
             _ => {}
         }

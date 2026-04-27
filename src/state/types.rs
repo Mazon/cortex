@@ -313,6 +313,10 @@ pub struct UIState {
     /// Active search/filter query. When `Some`, only tasks whose title or
     /// description contains this text (case-insensitive) are shown in the kanban.
     pub search_query: Option<String>,
+    /// Pre-lowercased search query cache. Updated atomically alongside
+    /// `search_query` via `set_search_query()` to avoid re-lowercasing on
+    /// every tick/render cycle.
+    pub search_query_lower: Option<String>,
     /// Whether visual (multi-select) mode is active. In this mode, arrow keys
     /// extend the selection range, and bulk actions can be performed.
     pub visual_mode: bool,
@@ -342,6 +346,7 @@ impl Default for UIState {
             user_scroll_offset: None,
             session_nav_stack: Vec::new(),
             search_query: None,
+            search_query_lower: None,
             visual_mode: false,
             selected_tasks: std::collections::HashSet::new(),
             visual_anchor_task_id: None,
