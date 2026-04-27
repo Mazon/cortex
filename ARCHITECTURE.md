@@ -7,7 +7,7 @@ Cortex is a terminal-based Kanban board application that integrates with [OpenCo
 ```
 src/
 ├── main.rs              # Entry point: CLI parsing, config loading, server startup, TUI loop
-├── error.rs             # Application error types (AppError enum + AppResult alias)
+├── error.rs             # Structured application error types (AppError enum + AppResult alias)
 ├── config/
 │   ├── mod.rs           # Config loading, saving, validation (XDG-compliant paths)
 │   ├── types.rs         # Config structs: CortexConfig, ColumnsConfig, OpenCodeConfig, etc.

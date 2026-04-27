@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
+use crate::error::AppError;
 use crate::opencode::client::OpenCodeClient;
 use crate::state::types::{AppState, KanbanColumn};
 
@@ -29,6 +30,19 @@ fn is_retryable(error: &anyhow::Error) -> bool {
         }
     }
     true
+}
+
+/// Structured retry classification using [`AppError`].
+///
+/// This is the **intended** replacement for the string-based [`is_retryable`]
+/// above.  Once the call-sites in this crate return [`AppResult`] instead of
+/// `anyhow::Result`, the legacy function can be removed and this one used
+/// directly via [`AppError::is_retryable`].
+///
+/// Kept as a free function (rather than calling `AppError::is_retryable`)
+/// so that the migration path is explicit and easy to grep for.
+pub fn is_retryable_app(error: &AppError) -> bool {
+    error.is_retryable()
 }
 
 /// Retry an async operation with exponential backoff.
