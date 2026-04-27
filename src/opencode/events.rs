@@ -304,14 +304,13 @@ fn process_event(
                 state.extract_plan_output(&task_id);
 
                 // process_session_idle sets Complete by default — override to Ready
-                // when the task has a plan ready for the next step, or when the
-                // column has auto_progress_to configured.
+                // only when the column has auto_progress_to configured, meaning
+                // the agent completed but the task has a next step.
+                // Terminal columns (no auto_progress_to) always stay Complete ("done"),
+                // even if plan_output was set by a previous agent run.
                 if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
                     let has_auto_progress = columns_config.auto_progress_for(&col.0).is_some();
-                    let has_plan = state.tasks.get(&task_id)
-                        .and_then(|t| t.plan_output.as_ref())
-                        .is_some_and(|p| !p.is_empty());
-                    if has_auto_progress || has_plan {
+                    if has_auto_progress {
                         state.update_task_agent_status(&task_id, AgentStatus::Ready);
                     }
                 }
@@ -1108,9 +1107,10 @@ mod tests {
     // ── Ready status from plan_output ────────────────────────────────────
 
     #[test]
-    fn session_idle_sets_ready_when_plan_output_exists() {
-        // A task in a terminal column (no auto_progress_to) should still get
-        // Ready status when it has a non-empty plan_output.
+    fn terminal_column_with_plan_output_gets_complete() {
+        // A task in a terminal column (no auto_progress_to) should get Complete
+        // ("done") even if it has a non-empty plan_output. Only auto_progress_to
+        // determines Ready status.
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
 
@@ -1130,11 +1130,11 @@ mod tests {
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
-        // Should get Ready because plan_output is non-empty, even though
-        // the column has no auto_progress_to.
+        // Terminal column should get Complete ("done"), not Ready —
+        // plan_output alone does not trigger Ready.
         assert_eq!(
             state.tasks.get(&task_id).unwrap().agent_status,
-            AgentStatus::Ready
+            AgentStatus::Complete
         );
     }
 
