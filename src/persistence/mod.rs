@@ -11,6 +11,8 @@ use std::collections::HashMap;
 ///
 /// All writes are performed inside a single SQLite transaction so that a
 /// crash mid-save never leaves the database in an inconsistent state.
+/// If any write fails (returning `Err`), the `Transaction` guard's `Drop`
+/// implementation automatically rolls back — no partial saves.
 ///
 /// Only tasks whose IDs are in `state.dirty_tasks` are written; unchanged
 /// tasks are skipped. The dirty set is cleared on successful commit.
@@ -75,30 +77,94 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
 }
 
 /// Restore state from the database into AppState.
+///
+/// Includes basic validation: verifies that loaded data is internally
+/// consistent (tasks reference existing projects, kanban order references
+/// existing tasks, active project exists). Invalid entries are logged and
+/// skipped rather than causing a panic.
 pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
     // Load projects
     let projects = db.load_projects()?;
     let mut counters: HashMap<String, u32> = HashMap::new();
 
+    // Build a set of valid project IDs for validation
+    let valid_project_ids: std::collections::HashSet<&str> = projects
+        .iter()
+        .map(|p| p.id.as_str())
+        .collect();
+
     // Load tasks per project
     let mut all_tasks: Vec<CortexTask> = Vec::new();
     for project in &projects {
         let tasks = db.load_tasks(&project.id)?;
+        for task in &tasks {
+            // Validate: task must reference its parent project
+            if task.project_id != project.id {
+                tracing::warn!(
+                    "Task {} references project {} but was loaded under project {}, skipping",
+                    task.id, task.project_id, project.id,
+                );
+                continue;
+            }
+        }
         all_tasks.extend(tasks);
 
         // Load counter
         if let Ok(Some(counter_str)) = db.get_metadata(&format!("counter_{}", project.id)) {
             if let Ok(counter) = counter_str.parse::<u32>() {
                 counters.insert(project.id.clone(), counter);
+            } else {
+                tracing::warn!(
+                    "Invalid task number counter for project {}: {:?}",
+                    project.id, counter_str,
+                );
             }
         }
     }
 
-    // Load kanban order
+    // Build a set of valid task IDs for kanban order validation
+    let valid_task_ids: std::collections::HashSet<&str> = all_tasks
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
+
+    // Load kanban order with validation
     let kanban_order = db.load_kanban_order()?;
+    let kanban_order: HashMap<String, Vec<String>> = kanban_order
+        .into_iter()
+        .map(|(col_id, task_ids)| {
+            let validated: Vec<String> = task_ids
+                .into_iter()
+                .filter(|tid| {
+                    if valid_task_ids.contains(tid.as_str()) {
+                        true
+                    } else {
+                        tracing::warn!(
+                            "Kanban order references unknown task {} in column {}, skipping",
+                            tid, col_id,
+                        );
+                        false
+                    }
+                })
+                .collect();
+            (col_id, validated)
+        })
+        .collect();
 
     // Load active project
     let active_project_id = db.get_metadata("active_project_id")?;
+    // Validate: active project must reference an existing project
+    let active_project_id = active_project_id.filter(|pid| {
+        if valid_project_ids.contains(pid.as_str()) {
+            true
+        } else {
+            tracing::warn!(
+                "Active project ID {:?} does not match any loaded project, ignoring",
+                pid,
+            );
+            false
+        }
+    });
 
     // Restore state
     state.restore_state(
