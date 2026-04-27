@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::error::AppError;
 use crate::opencode::client::OpenCodeClient;
-use crate::state::types::{AppState, KanbanColumn};
+use crate::state::types::{AgentStatus, AppState, KanbanColumn};
 
 /// Maximum backoff delay cap (30 seconds).
 const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(30);
@@ -511,6 +511,9 @@ pub fn on_agent_completed(
                     target_column: KanbanColumn(target),
                     agent,
                 });
+            } else {
+                // Target column has no agent — mark task as Complete ("done")
+                state.update_task_agent_status(task_id, AgentStatus::Complete);
             }
         }
     }
@@ -727,6 +730,49 @@ mod tests {
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn auto_progress_to_column_without_agent_sets_complete_status() {
+        let (mut state, task_id) = make_state_with_task_in_column("running");
+
+        // Config: running → review, but review has NO agent
+        let mut columns_config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig {
+                    id: "running".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("do".to_string()),
+                    auto_progress_to: Some("review".to_string()),
+                },
+                ColumnConfig {
+                    id: "review".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: None, // No agent on target
+                    auto_progress_to: None,
+                },
+            ],
+            visible_ids: Vec::new(),
+        };
+        columns_config.finalize();
+
+        // Set status to Ready (simulating what process_session_idle does
+        // when it sees has_auto_progress=true)
+        state.update_task_agent_status(&task_id, AgentStatus::Ready);
+
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
+
+        // Task should be in "review" column
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        // No action returned (target has no agent)
+        assert!(action.is_none());
+        // Status should be Complete ("done")
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete
+        );
     }
 
     // ── Retry heuristic ───────────────────────────────────────────────────
