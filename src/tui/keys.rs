@@ -224,12 +224,11 @@ fn keys_match(a: &KeyEvent, b: &KeyEvent) -> bool {
     }
     match (a.code, b.code) {
         (KeyCode::Char(a_char), KeyCode::Char(b_char)) => {
-            // Case-insensitive matching for letters (without shift)
-            if a.modifiers.contains(KeyModifiers::SHIFT) {
-                a_char == b_char
-            } else {
-                a_char.eq_ignore_ascii_case(&b_char)
-            }
+            // Always case-insensitive: the SHIFT modifier is already enforced
+            // by the modifier equality check above. Real terminals send
+            // Char('X')+SHIFT when Shift+X is pressed, but parse_key_combo
+            // lowercases to Char('x')+SHIFT, so we must ignore case here.
+            a_char.eq_ignore_ascii_case(&b_char)
         }
         (a_code, b_code) => a_code == b_code,
     }
@@ -429,21 +428,30 @@ mod tests {
     }
 
     #[test]
-    fn shift_modifier_requires_exact_case() {
+    fn shift_keybindings_match_real_terminal_events() {
         let config = KeybindingConfig::default();
         let matcher = KeyMatcher::from_config(&config);
 
-        // shift+m matches MoveBackward (binding is "shift+m" → Char('m') + SHIFT)
+        // Real terminals send Char('M')+SHIFT when Shift+M is pressed.
+        // parse_key_combo lowercases to Char('m')+SHIFT, so matching must
+        // be case-insensitive even when SHIFT is held.
         assert_eq!(
             matcher.match_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT)),
             Some(Action::MoveBackward)
         );
-
-        // When shift is held, matching is case-EXACT, so 'M' + SHIFT does NOT
-        // match the 'm' + SHIFT binding.
         assert_eq!(
             matcher.match_key(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT)),
-            None
+            Some(Action::MoveBackward)
+        );
+
+        // Same for shift+x → DeleteProject (the original reported bug)
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SHIFT)),
+            Some(Action::DeleteProject)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT)),
+            Some(Action::DeleteProject)
         );
     }
 
