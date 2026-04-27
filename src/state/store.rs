@@ -173,9 +173,9 @@ impl AppState {
             from_position,
         };
         if self.undo_stack.len() >= crate::state::types::MAX_UNDO_STACK_SIZE {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
-        self.undo_stack.push(undo);
+        self.undo_stack.push_back(undo);
 
         task.column = to_column.clone();
         let now = chrono::Utc::now().timestamp();
@@ -204,7 +204,7 @@ impl AppState {
     /// Undo the last kanban move operation.
     /// Returns `true` if an action was undone, `false` if the stack was empty.
     pub fn undo_last_move(&mut self) -> bool {
-        let undo = match self.undo_stack.pop() {
+        let undo = match self.undo_stack.pop_back() {
             Some(u) => u,
             None => return false,
         };

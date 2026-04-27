@@ -184,7 +184,7 @@ mod tests {
     use crate::state::types::{
         AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
     };
-    use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
     /// Helper: create a temporary database path that is unique per test invocation.
     fn temp_db_path(suffix: &str) -> std::path::PathBuf {
@@ -334,7 +334,7 @@ mod tests {
                 subagent_session_data: HashMap::new(),
             },
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
         };
 
         // ── Save ──
@@ -474,7 +474,7 @@ mod tests {
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
         };
 
         // ── Save both tasks to DB ──
@@ -555,7 +555,7 @@ mod tests {
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
         };
 
         // ── Save project + tasks to DB ──

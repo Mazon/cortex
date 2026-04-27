@@ -1146,7 +1146,7 @@ pub struct AppState {
     pub dirty_flags: DirtyFlags,
     /// Undo stack for reversible kanban move operations.
     /// Stores previous column + position for the last N moves.
-    pub undo_stack: Vec<UndoAction>,
+    pub undo_stack: VecDeque<UndoAction>,
 }
 
 impl Default for AppState {
@@ -1158,7 +1158,7 @@ impl Default for AppState {
             ui: UIState::default(),
             session_tracker: SessionTracker::default(),
             dirty_flags: DirtyFlags::default(),
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
         }
     }
 }
