@@ -2,6 +2,7 @@
 
 use futures::StreamExt;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::opencode::client::{
@@ -15,6 +16,15 @@ use crate::state::types::{AgentStatus, AppState};
 /// Default maximum consecutive SSE reconnection attempts.
 /// Used when the config field is 0 (which would mean "retry forever").
 const DEFAULT_SSE_MAX_RETRIES: u32 = 50;
+
+/// Maximum concurrent auto-approve tasks. When the semaphore is full,
+/// safe-tool permissions fall through to manual approval.
+const MAX_CONCURRENT_AUTO_APPROVES: usize = 8;
+
+/// Semaphore limiting concurrent auto-approve spawns. Uses `try_acquire`
+/// to avoid blocking — if full, the permission falls through to manual approval.
+static AUTO_APPROVE_SEMAPHORE: std::sync::LazyLock<Semaphore> =
+    std::sync::LazyLock::new(|| Semaphore::new(MAX_CONCURRENT_AUTO_APPROVES));
 
 /// Run the SSE event loop for a single project's OpenCode client.
 /// This is spawned as a tokio task per active project.
@@ -348,10 +358,19 @@ fn process_event(
                     let client_clone = client.clone();
                     let sid = session_id.clone();
                     let pid = perm_id.clone();
-                    tokio::spawn(async move {
-                        if let Err(_e) = client_clone.resolve_permission(&sid, &pid, true).await {
+                    match AUTO_APPROVE_SEMAPHORE.try_acquire() {
+                        Ok(permit) => {
+                            tokio::spawn(async move {
+                                let _permit = permit; // hold permit for duration of task
+                                if let Err(_e) = client_clone.resolve_permission(&sid, &pid, true).await {
+                                }
+                            });
                         }
-                    });
+                        Err(_) => {
+                            // Semaphore full — fall through to manual approval queue
+                            state.process_permission_asked(&session_id, &perm_id, &tool_name, &desc);
+                        }
+                    }
 
                     // Show a brief, non-intrusive notification
                     let preview: String = desc.chars().take(50).collect();
