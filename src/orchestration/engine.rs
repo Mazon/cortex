@@ -11,38 +11,64 @@ use crate::state::types::{AppState, KanbanColumn};
 /// Maximum backoff delay cap (30 seconds).
 const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(30);
 
-/// Check if an error is transient and worth retrying.
+/// Classify an [`anyhow::Error`] as retryable or not.
 ///
-/// Non-retryable errors include client-side HTTP errors (4xx, except 429 rate limit).
-/// Server errors (5xx), rate limits (429), and network-level errors are retryable.
+/// This is the **primary** retry-decision function used by [`retry_with_backoff`].
+///
+/// # Classification strategy
+///
+/// 1. **Structured path** — If the error carries an [`AppError`] (via
+///    `downcast_ref`), we delegate to [`AppError::is_retryable`] which matches
+///    on enum variants rather than string content.
+/// 2. **Fallback heuristic** — For plain `anyhow::Error` values that originate
+///    from the SDK (which still wraps errors in `anyhow::anyhow!`), we parse
+///    the message for HTTP status codes in `(NNN)` form.  This heuristic is
+///    intentionally conservative: anything that doesn't look like a non-retryable
+///    4xx is assumed retryable.
+///
+/// A `tracing::debug!` is emitted on each classification so operators can
+/// verify correct behaviour in the logs.
 fn is_retryable(error: &anyhow::Error) -> bool {
+    // 1. Try the structured path first.
+    if let Some(app_err) = error.downcast_ref::<AppError>() {
+        let retryable = app_err.is_retryable();
+        tracing::debug!(
+            retryable,
+            error_kind = std::any::type_name::<AppError>(),
+            "Retry classification (structured)"
+        );
+        return retryable;
+    }
+
+    // 2. Fallback: heuristic for SDK-originated anyhow errors.
     let msg = error.to_string();
-    // Check for HTTP status codes in the error message (SDK wraps errors in anyhow)
-    // Non-retryable: 4xx client errors (except 429 Too Many Requests)
     for token in msg.split_whitespace() {
         if let Some(code_str) = token.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
             if let Ok(code) = code_str.parse::<u16>() {
+                // Non-retryable: 4xx client errors (except 429 Too Many Requests)
                 if (400..429).contains(&code) || (430..500).contains(&code) {
+                    tracing::debug!(
+                        http_status = code,
+                        "Retry classification (heuristic): NOT retryable — client error"
+                    );
                     return false;
                 }
                 // 429 (rate limit) and 5xx are retryable
+                tracing::debug!(
+                    http_status = code,
+                    "Retry classification (heuristic): retryable"
+                );
+                return true;
             }
         }
     }
-    true
-}
 
-/// Structured retry classification using [`AppError`].
-///
-/// This is the **intended** replacement for the string-based [`is_retryable`]
-/// above.  Once the call-sites in this crate return [`AppResult`] instead of
-/// `anyhow::Result`, the legacy function can be removed and this one used
-/// directly via [`AppError::is_retryable`].
-///
-/// Kept as a free function (rather than calling `AppError::is_retryable`)
-/// so that the migration path is explicit and easy to grep for.
-pub fn is_retryable_app(error: &AppError) -> bool {
-    error.is_retryable()
+    // No status code found in the message — assume retryable (transient network
+    // errors often lack an HTTP status in the SDK's error message).
+    tracing::debug!(
+        "Retry classification (heuristic): retryable — no HTTP status found in message"
+    );
+    true
 }
 
 /// Retry an async operation with exponential backoff.
@@ -70,6 +96,11 @@ where
             Ok(result) => return Ok(result),
             Err(e) => {
                 if !is_retryable(&e) {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        error = %e,
+                        "Operation failed with non-retryable error — aborting retries"
+                    );
                     return Err(e);
                 }
                 last_error = Some(e);
@@ -88,7 +119,13 @@ where
         }
     }
 
-    Err(last_error.expect("retry_with_backoff called with max_attempts >= 1"))
+    let last_error = last_error.expect("retry_with_backoff called with max_attempts >= 1");
+    tracing::error!(
+        max_attempts,
+        error = %last_error,
+        "All retry attempts exhausted"
+    );
+    Err(last_error)
 }
 
 /// Called when a task is moved to a new column.
