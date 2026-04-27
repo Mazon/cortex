@@ -700,6 +700,7 @@ impl AppState {
         // Reset focused column to first visible
         self.kanban.focused_column_index = 0;
         self.kanban.focused_task_index.clear();
+        self.kanban.kanban_scroll_offset = 0;
 
         // Initialize focused_task_id to first task in first column
         let first_col = self.kanban.columns.keys().next().cloned();
