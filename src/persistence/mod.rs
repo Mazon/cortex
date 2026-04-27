@@ -305,6 +305,7 @@ mod tests {
                 projects: vec![project.clone()],
                 active_project_id: Some("proj-1".to_string()),
                 task_number_counters: counters.clone(),
+                circuit_breaker_failures: std::collections::HashMap::new(),
             },
             tasks,
             kanban: crate::state::types::KanbanState {
@@ -461,6 +462,7 @@ mod tests {
                 projects: vec![project.clone()],
                 active_project_id: Some("proj-1".to_string()),
                 task_number_counters: HashMap::new(),
+                circuit_breaker_failures: std::collections::HashMap::new(),
             },
             tasks,
             kanban: crate::state::types::KanbanState {
@@ -541,6 +543,7 @@ mod tests {
                 projects: vec![project.clone()],
                 active_project_id: Some("proj-1".to_string()),
                 task_number_counters: counters.clone(),
+                circuit_breaker_failures: std::collections::HashMap::new(),
             },
             tasks,
             kanban: crate::state::types::KanbanState {

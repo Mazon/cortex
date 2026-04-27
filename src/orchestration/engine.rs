@@ -130,6 +130,8 @@ where
 
 /// Called when a task is moved to a new column.
 /// Starts an agent if the column has one configured.
+/// Respects the circuit breaker — if tripped for the project,
+/// notifies the user and skips agent start.
 pub fn on_task_moved(
     task_id: &str,
     to_column: &KanbanColumn,
@@ -145,7 +147,38 @@ pub fn on_task_moved(
         task_id, to_column.0, agent, previous_agent
     );
     if let Some(agent) = agent {
-        start_agent(task_id, &agent, state, client, opencode_config, previous_agent);
+        // Check circuit breaker before starting agent
+        let project_id = {
+            let s = state.lock().unwrap();
+            s.tasks.get(task_id).map(|t| t.project_id.clone())
+        };
+
+        if let Some(ref pid) = project_id {
+            let s = state.lock().unwrap();
+            if s.project_registry.is_circuit_breaker_tripped(pid, opencode_config.circuit_breaker_threshold) {
+                let failure_count = s.project_registry.circuit_breaker_failures.get(pid).copied().unwrap_or(0);
+                drop(s);
+                tracing::warn!(
+                    task_id = %task_id,
+                    project_id = %pid,
+                    consecutive_failures = failure_count,
+                    threshold = opencode_config.circuit_breaker_threshold,
+                    "Circuit breaker tripped — skipping agent start"
+                );
+                let mut s = state.lock().unwrap();
+                s.set_notification(
+                    format!(
+                        "Circuit breaker tripped ({} consecutive failures) — auto-progression paused. Press Ctrl+R to retry.",
+                        failure_count
+                    ),
+                    crate::state::types::NotificationVariant::Error,
+                    8000,
+                );
+                return;
+            }
+        }
+
+        start_agent(task_id, &agent, state, client, opencode_config, previous_agent, project_id);
     }
 }
 
@@ -157,6 +190,7 @@ fn start_agent(
     client: &OpenCodeClient,
     opencode_config: &OpenCodeConfig,
     previous_agent: Option<String>,
+    project_id: Option<String>,
 ) {
     // Log the full dispatch decision for diagnostics
     {
@@ -179,6 +213,7 @@ fn start_agent(
     let task_id = task_id.to_string();
     let model_id = opencode_config.model.id.clone();
     let model_provider = opencode_config.model.provider.clone();
+    let circuit_breaker_threshold = opencode_config.circuit_breaker_threshold;
 
     // Check if the agent has a specific model configured
     let agent_model = {
@@ -249,6 +284,19 @@ fn start_agent(
                         );
                         let mut s = state.lock().unwrap();
                         s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
+                        if let Some(ref pid) = project_id {
+                            let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                            if tripped {
+                                s.set_notification(
+                                    format!(
+                                        "Circuit breaker tripped ({} consecutive failures) — auto-progression paused.",
+                                        circuit_breaker_threshold
+                                    ),
+                                    crate::state::types::NotificationVariant::Error,
+                                    8000,
+                                );
+                            }
+                        }
                         return;
                     }
                 }
@@ -275,6 +323,20 @@ fn start_agent(
                     );
                     let mut s = state.lock().unwrap();
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
+                    // Record circuit breaker failure
+                    if let Some(ref pid) = project_id {
+                        let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                        if tripped {
+                            s.set_notification(
+                                format!(
+                                    "Circuit breaker tripped ({} consecutive failures) — auto-progression paused.",
+                                    circuit_breaker_threshold
+                                ),
+                                crate::state::types::NotificationVariant::Error,
+                                8000,
+                            );
+                        }
+                    }
                     return;
                 }
             }
@@ -301,7 +363,13 @@ fn start_agent(
         )
         .await
         {
-            Ok(_) => {}
+            Ok(_) => {
+                // Record circuit breaker success (reset consecutive failures)
+                if let Some(ref pid) = project_id {
+                    let mut s = state.lock().unwrap();
+                    s.project_registry.record_agent_success(pid);
+                }
+            }
             Err(e) => {
                 tracing::error!(
                     task_id = %task_id_clone,
@@ -315,6 +383,20 @@ fn start_agent(
                     &task_id_clone,
                     format!("Failed to send prompt: {}", e),
                 );
+                // Record circuit breaker failure
+                if let Some(ref pid) = project_id {
+                    let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                    if tripped {
+                        s.set_notification(
+                            format!(
+                                "Circuit breaker tripped ({} consecutive failures) — auto-progression paused.",
+                                circuit_breaker_threshold
+                            ),
+                            crate::state::types::NotificationVariant::Error,
+                            8000,
+                        );
+                    }
+                }
             }
         }
     });

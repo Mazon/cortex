@@ -160,6 +160,21 @@ impl App {
                 }
             }
 
+            // Periodic hung-agent detection
+            {
+                let timeout_secs = self.config.opencode.hung_agent_timeout_secs as i64;
+                let mut state = self.state.lock().unwrap();
+                let newly_hung = state.check_hung_agents(timeout_secs);
+                if newly_hung > 0 {
+                    state.set_notification(
+                        format!("{} task(s) marked as Hung — no activity for {}s", newly_hung, timeout_secs),
+                        crate::state::types::NotificationVariant::Warning,
+                        5000,
+                    );
+                    state.mark_render_dirty();
+                }
+            }
+
             // Render — only if the state has changed since the last frame.
             // This avoids expensive full UI re-renders every 100 ms tick when
             // nothing has changed.
@@ -530,6 +545,29 @@ impl App {
                     crate::state::types::NotificationVariant::Info,
                     4000,
                 );
+                return;
+            }
+            // Ctrl+R — reset circuit breaker for active project
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                let mut state = self.state.lock().unwrap();
+                let pid = state.project_registry.active_project_id.clone();
+                if let Some(ref pid) = pid {
+                    let was_tripped = state.project_registry.is_circuit_breaker_tripped(pid, self.config.opencode.circuit_breaker_threshold);
+                    state.project_registry.reset_circuit_breaker(pid);
+                    if was_tripped {
+                        state.set_notification(
+                            "Circuit breaker reset — auto-progression resumed.".to_string(),
+                            crate::state::types::NotificationVariant::Success,
+                            3000,
+                        );
+                    } else {
+                        state.set_notification(
+                            "Circuit breaker was not tripped.".to_string(),
+                            crate::state::types::NotificationVariant::Info,
+                            2000,
+                        );
+                    }
+                }
                 return;
             }
             _ => {}

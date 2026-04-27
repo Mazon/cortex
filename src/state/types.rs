@@ -886,6 +886,10 @@ pub struct ProjectRegistry {
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
     pub task_number_counters: HashMap<String, u32>,
+    /// Per-project consecutive agent start failure count.
+    /// When this reaches the circuit breaker threshold, auto-progression
+    /// is paused for that project.
+    pub circuit_breaker_failures: HashMap<String, u32>,
 }
 
 impl ProjectRegistry {
@@ -958,6 +962,32 @@ impl ProjectRegistry {
             p.permanently_disconnected = true;
             p.reconnect_attempt = 0;
         }
+    }
+
+    /// Record a successful agent start for a project (resets circuit breaker).
+    pub fn record_agent_success(&mut self, project_id: &str) {
+        self.circuit_breaker_failures.remove(project_id);
+    }
+
+    /// Record a failed agent start for a project.
+    /// Returns `true` if the circuit breaker just tripped (reached threshold).
+    pub fn record_agent_failure(&mut self, project_id: &str, threshold: u32) -> bool {
+        let count = self.circuit_breaker_failures.entry(project_id.to_string()).or_insert(0);
+        *count += 1;
+        *count >= threshold
+    }
+
+    /// Check whether the circuit breaker is tripped for a project.
+    pub fn is_circuit_breaker_tripped(&self, project_id: &str, threshold: u32) -> bool {
+        self.circuit_breaker_failures
+            .get(project_id)
+            .map(|&c| c >= threshold)
+            .unwrap_or(false)
+    }
+
+    /// Reset the circuit breaker for a project (manual retry by user).
+    pub fn reset_circuit_breaker(&mut self, project_id: &str) {
+        self.circuit_breaker_failures.remove(project_id);
     }
 }
 

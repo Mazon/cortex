@@ -370,6 +370,38 @@ impl AppState {
         }
     }
 
+    /// Check all Running tasks for hung-agent detection.
+    /// A task is considered "Hung" if it has been Running for longer than
+    /// `timeout_secs` without any SSE activity (based on `last_activity_at`).
+    ///
+    /// Returns the number of tasks that were newly marked as Hung.
+    pub fn check_hung_agents(&mut self, timeout_secs: i64) -> usize {
+        let now = chrono::Utc::now().timestamp();
+        let mut newly_hung = 0;
+        let hung_task_ids: Vec<String> = self
+            .tasks
+            .iter()
+            .filter(|(_, task)| {
+                task.agent_status == AgentStatus::Running
+                    && (now - task.last_activity_at) > timeout_secs
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for task_id in &hung_task_ids {
+            tracing::warn!(
+                task_id = %task_id,
+                idle_secs = now - self.tasks.get(task_id).map(|t| t.last_activity_at).unwrap_or(0),
+                "Marking task as Hung — no activity for {}s",
+                timeout_secs
+            );
+            self.update_task_agent_status(task_id, AgentStatus::Hung);
+            newly_hung += 1;
+        }
+
+        newly_hung
+    }
+
     /// Set or clear a task's OpenCode session ID. Maintains the
     /// `session_to_task` reverse index. Marks state dirty.
     pub fn set_task_session_id(&mut self, task_id: &str, session_id: Option<String>) {
@@ -1330,6 +1362,103 @@ mod tests {
         state.move_task("task-0", KanbanColumn("running".to_string()));
         // Should be updated to current time (much larger than 1000)
         assert!(state.tasks.get("task-0").unwrap().entered_column_at > 1000);
+    }
+
+    // ── Hung Agent Detection ─────────────────────────────────────────────
+
+    #[test]
+    fn check_hung_agents_marks_stale_running_tasks() {
+        let mut state = make_state_with_tasks();
+        let now = chrono::Utc::now().timestamp();
+
+        // task-0 is Running with very old last_activity_at
+        {
+            let task = state.tasks.get_mut("task-0").unwrap();
+            task.agent_status = AgentStatus::Running;
+            task.last_activity_at = now - 600; // 10 minutes ago
+        }
+        // task-1 is Running but recent
+        {
+            let task = state.tasks.get_mut("task-1").unwrap();
+            task.agent_status = AgentStatus::Running;
+            task.last_activity_at = now - 10; // 10 seconds ago
+        }
+        // task-2 is Complete (should be ignored)
+        {
+            let task = state.tasks.get_mut("task-2").unwrap();
+            task.agent_status = AgentStatus::Complete;
+            task.last_activity_at = now - 600;
+        }
+
+        // 5 minute timeout
+        let newly_hung = state.check_hung_agents(300);
+        assert_eq!(newly_hung, 1);
+        assert_eq!(state.tasks.get("task-0").unwrap().agent_status, AgentStatus::Hung);
+        assert_eq!(state.tasks.get("task-1").unwrap().agent_status, AgentStatus::Running);
+        assert_eq!(state.tasks.get("task-2").unwrap().agent_status, AgentStatus::Complete);
+    }
+
+    #[test]
+    fn check_hung_agents_does_not_re_mark_already_hung() {
+        let mut state = make_state_with_tasks();
+        let now = chrono::Utc::now().timestamp();
+
+        {
+            let task = state.tasks.get_mut("task-0").unwrap();
+            task.agent_status = AgentStatus::Hung;
+            task.last_activity_at = now - 600;
+        }
+
+        let newly_hung = state.check_hung_agents(300);
+        assert_eq!(newly_hung, 0);
+    }
+
+    // ── Circuit Breaker ──────────────────────────────────────────────────
+
+    #[test]
+    fn circuit_breaker_trips_after_threshold() {
+        let mut state = AppState::default();
+
+        // 2 failures with threshold 3 — not yet tripped
+        assert!(!state.project_registry.record_agent_failure("proj-1", 3));
+        assert!(!state.project_registry.record_agent_failure("proj-1", 3));
+        // 3rd failure — trips
+        assert!(state.project_registry.record_agent_failure("proj-1", 3));
+        assert!(state.project_registry.is_circuit_breaker_tripped("proj-1", 3));
+
+        // Reset
+        state.project_registry.reset_circuit_breaker("proj-1");
+        assert!(!state.project_registry.is_circuit_breaker_tripped("proj-1", 3));
+    }
+
+    #[test]
+    fn circuit_breaker_resets_on_success() {
+        let mut state = AppState::default();
+
+        // 2 failures
+        state.project_registry.record_agent_failure("proj-1", 3);
+        state.project_registry.record_agent_failure("proj-1", 3);
+        // Success resets
+        state.project_registry.record_agent_success("proj-1");
+        assert_eq!(state.project_registry.circuit_breaker_failures.get("proj-1"), None);
+
+        // 3 more failures should trip again
+        state.project_registry.record_agent_failure("proj-1", 3);
+        state.project_registry.record_agent_failure("proj-1", 3);
+        state.project_registry.record_agent_failure("proj-1", 3);
+        assert!(state.project_registry.is_circuit_breaker_tripped("proj-1", 3));
+    }
+
+    #[test]
+    fn circuit_breaker_is_per_project() {
+        let mut state = AppState::default();
+
+        state.project_registry.record_agent_failure("proj-1", 2);
+        state.project_registry.record_agent_failure("proj-1", 2);
+        assert!(state.project_registry.is_circuit_breaker_tripped("proj-1", 2));
+
+        // proj-2 is unaffected
+        assert!(!state.project_registry.is_circuit_breaker_tripped("proj-2", 2));
     }
 
     // ── Notifications ───────────────────────────────────────────────────

@@ -216,6 +216,15 @@ pub struct OpenCodeConfig {
     /// only dies when no data arrives for this duration. Defaults to 60s.
     #[serde(default = "default_sse_read_timeout_secs")]
     pub sse_read_timeout_secs: u64,
+    /// Timeout in seconds after which a Running task with no SSE activity
+    /// is considered "Hung". Defaults to 300 (5 minutes).
+    #[serde(default = "default_hung_agent_timeout_secs")]
+    pub hung_agent_timeout_secs: u64,
+    /// Number of consecutive agent start failures before the circuit
+    /// breaker trips for a project. When tripped, auto-progression is
+    /// paused until the user manually retries. Defaults to 3.
+    #[serde(default = "default_circuit_breaker_threshold")]
+    pub circuit_breaker_threshold: u32,
 }
 
 fn default_sse_max_retries() -> u32 {
@@ -225,6 +234,16 @@ fn default_sse_max_retries() -> u32 {
 /// Default value for `OpenCodeConfig::sse_read_timeout_secs`.
 fn default_sse_read_timeout_secs() -> u64 {
     60
+}
+
+/// Default value for `OpenCodeConfig::hung_agent_timeout_secs`.
+fn default_hung_agent_timeout_secs() -> u64 {
+    300
+}
+
+/// Default value for `OpenCodeConfig::circuit_breaker_threshold`.
+fn default_circuit_breaker_threshold() -> u32 {
+    3
 }
 
 fn default_hostname() -> String {
@@ -246,6 +265,8 @@ impl Default for OpenCodeConfig {
             request_timeout_secs: default_request_timeout_secs(),
             sse_max_retries: default_sse_max_retries(),
             sse_read_timeout_secs: default_sse_read_timeout_secs(),
+            hung_agent_timeout_secs: default_hung_agent_timeout_secs(),
+            circuit_breaker_threshold: default_circuit_breaker_threshold(),
         }
     }
 }

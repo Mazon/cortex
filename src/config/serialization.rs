@@ -248,6 +248,8 @@ mod tests {
             request_timeout_secs: 0,
             sse_max_retries: 50,
             sse_read_timeout_secs: 60,
+            hung_agent_timeout_secs: 300,
+            circuit_breaker_threshold: 3,
         }
     }
 
