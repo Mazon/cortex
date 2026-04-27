@@ -14,7 +14,14 @@ pub mod task_detail;
 pub mod task_editor;
 
 use ratatui::prelude::*;
+use ratatui::widgets::Paragraph;
 use crate::state::types::FocusedPanel;
+
+/// Minimum terminal dimensions (width × height) required for the TUI layout.
+/// Below this, a "terminal too small" message is shown instead of the normal
+/// layout, preventing garbled output from overlapping widgets.
+const MIN_TERM_WIDTH: u16 = 60;
+const MIN_TERM_HEIGHT: u16 = 10;
 
 /// Format elapsed time since the given timestamp.
 pub(crate) fn format_elapsed_time(entered_at: i64, now: i64) -> String {
@@ -40,12 +47,30 @@ pub type CrosstermBackend = ratatui::backend::CrosstermBackend<std::io::Stdout>;
 pub type Terminal = ratatui::Terminal<CrosstermBackend>;
 
 /// Render the normal mode layout: sidebar + kanban + status bar.
+///
+/// If the terminal is too small (below [`MIN_TERM_WIDTH`] × [`MIN_TERM_HEIGHT`]),
+/// renders a centered "terminal too small" message instead of the normal layout
+/// to prevent garbled output from overlapping widgets.
 pub fn render_normal(
     f: &mut ratatui::Frame,
     state: &mut crate::state::types::AppState,
     config: &crate::config::types::CortexConfig,
 ) {
     let area = f.area();
+
+    // Guard: show a fallback message when the terminal is too small.
+    if area.width < MIN_TERM_WIDTH || area.height < MIN_TERM_HEIGHT {
+        let msg = format!(
+            "Terminal too small ({}×{}).\nMinimum required: {}×{}.\nResize your terminal window.",
+            area.width, area.height, MIN_TERM_WIDTH, MIN_TERM_HEIGHT,
+        );
+        let paragraph = Paragraph::new(msg)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
     let now = chrono::Utc::now().timestamp();
 
     // Main horizontal layout: sidebar | kanban

@@ -4,7 +4,7 @@ use crate::config::types::CortexConfig;
 use crate::opencode::client::OpenCodeClient;
 use crate::state::types::AppState;
 use crate::tui::{CrosstermBackend, Terminal};
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind, MouseEvent};
 use ratatui::prelude::Size;
 use std::collections::HashMap;
 use std::io::Write;
@@ -34,7 +34,7 @@ pub struct App {
 }
 
 impl App {
-    /// Setup the terminal: enable raw mode and enter alternate screen.
+    /// Setup the terminal: enable raw mode, mouse capture, and enter alternate screen.
     ///
     /// Call this early in `main()` (before server startup) to hide any
     /// residual log output from the primary terminal buffer.
@@ -43,7 +43,8 @@ impl App {
         crossterm::execute!(
             std::io::stdout(),
             crossterm::terminal::EnterAlternateScreen,
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            crossterm::event::EnableMouseCapture,
         )?;
         std::io::stdout().flush()?;
         Ok(())
@@ -123,7 +124,7 @@ impl App {
                     match result {
                         Ok(Ok(true)) => {
                             // Event available, read it
-                            if let Ok(event) = event::read() {
+                                if let Ok(event) = event::read() {
                                 match event {
                                     Event::Key(key) => {
                                         if key.kind == KeyEventKind::Press {
@@ -139,7 +140,10 @@ impl App {
                                             .unwrap()
                                             .mark_render_dirty();
                                     }
-                                    _ => {} // Ignore mouse / paste events
+                                    Event::Mouse(mouse) => {
+                                        self.handle_mouse_event(mouse);
+                                    }
+                                    _ => {} // Ignore paste events
                                 }
                             }
                         }
@@ -224,6 +228,131 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Handle a mouse event — left-click to focus tasks and columns.
+    ///
+    /// Supports:
+    /// - Click on a kanban column header → focus that column
+    /// - Click on a task card → focus that task
+    /// - Scroll wheel → navigate tasks up/down within the focused column
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        // We only handle left-button press (not release, drag, etc.)
+        let MouseEventKind::Down(MouseButton::Left) = mouse.kind else {
+            // Handle scroll wheel for task navigation
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.handle_nav_task(-1);
+                    return;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.handle_nav_task(1);
+                    return;
+                }
+                _ => return,
+            }
+        };
+
+        let area = match self.terminal.size() {
+            Ok(size) => size,
+            Err(_) => return,
+        };
+
+        let sidebar_width = self.config.theme.sidebar_width;
+        let col_width = self.config.theme.column_width;
+
+        // Ignore clicks in the sidebar area
+        if mouse.column < sidebar_width {
+            return;
+        }
+
+        // Ignore clicks in the status bar (last row)
+        if mouse.row >= area.height.saturating_sub(1) {
+            return;
+        }
+
+        let kanban_x = mouse.column - sidebar_width;
+        let visible = self.config.columns.visible_column_ids();
+
+        // Account for scroll indicators
+        let available_for_columns = area.width.saturating_sub(sidebar_width).saturating_sub(6);
+        let max_visible = std::cmp::max(1, (available_for_columns / col_width) as usize);
+        let can_show_all = visible.len() <= max_visible;
+
+        let has_left_indicator = !can_show_all && {
+            let state = self.state.lock().unwrap();
+            state.kanban.kanban_scroll_offset > 0
+        };
+
+        let scroll_offset = {
+            let state = self.state.lock().unwrap();
+            if can_show_all {
+                0
+            } else {
+                state.kanban.kanban_scroll_offset.min(visible.len().saturating_sub(max_visible))
+            }
+        };
+
+        let x_offset: u16 = if has_left_indicator { 3 } else { 0 };
+
+        // Determine which column was clicked
+        let col_index = if kanban_x >= x_offset {
+            ((kanban_x - x_offset) / col_width) as usize
+        } else {
+            return;
+        };
+
+        if col_index >= max_visible || col_index + scroll_offset >= visible.len() {
+            return;
+        }
+
+        let clicked_col_id = &visible[col_index + scroll_offset];
+
+        // Determine if the click was on the column header (row 0 or 1)
+        // or on a task card (row >= 2)
+        let is_header_click = mouse.row < 2;
+
+        let mut state = self.state.lock().unwrap();
+
+        // Always focus the clicked column
+        let col_idx = col_index + scroll_offset;
+        if let Some(col_id) = visible.get(col_idx) {
+            state.kanban.focused_column_index = col_idx;
+            state.set_focused_column(col_id);
+        }
+        Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
+
+        if is_header_click {
+            // Click on column header — just focus the column (already done above)
+            state.mark_render_dirty();
+        } else {
+            // Click in the task area — determine which task was clicked
+            // Tasks start at row 2 (after the header), each task card is 6 rows
+            // (5 rows for card + 1 row gap)
+            let task_row = (mouse.row - 2) as usize;
+            let card_height = 6usize; // 5 rows for card + 1 row gap
+            let task_index = task_row / card_height;
+
+            let task_id = {
+                let task_ids = state.kanban.columns.get(clicked_col_id.as_str());
+                if let Some(task_ids) = task_ids {
+                    if task_index < task_ids.len() {
+                        task_ids.get(task_index).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(task_id) = task_id {
+                state.kanban.focused_task_index.insert(clicked_col_id.clone(), task_index);
+                state.ui.focused_task_id = Some(task_id);
+            }
+            state.mark_render_dirty();
+        }
     }
 
     /// Handle a key event based on current mode.
@@ -1640,7 +1769,8 @@ impl App {
     pub fn teardown(&mut self) -> anyhow::Result<()> {
         crossterm::execute!(
             self.terminal.backend_mut(),
-            crossterm::terminal::LeaveAlternateScreen
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::event::DisableMouseCapture,
         )?;
         crossterm::terminal::disable_raw_mode()?;
         Ok(())
