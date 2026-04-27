@@ -128,6 +128,8 @@ impl AppState {
             last_activity_at: now,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: now,
@@ -160,23 +162,6 @@ impl AppState {
             return false; // No-op if moving to the same column
         }
 
-        // Record undo action before mutating
-        let from_position = self
-            .kanban
-            .columns
-            .get(&from_column.0)
-            .and_then(|tasks| tasks.iter().position(|id| id == task_id))
-            .unwrap_or(0);
-        let undo = crate::state::types::UndoAction {
-            task_id: task_id.to_string(),
-            from_column: from_column.0.clone(),
-            from_position,
-        };
-        if self.undo_stack.len() >= crate::state::types::MAX_UNDO_STACK_SIZE {
-            self.undo_stack.pop_front();
-        }
-        self.undo_stack.push_back(undo);
-
         task.column = to_column.clone();
         let now = chrono::Utc::now().timestamp();
         task.entered_column_at = now;
@@ -198,51 +183,6 @@ impl AppState {
         self.clamp_focused_task_index(&from_column.0);
 
         self.mark_task_dirty(task_id);
-        true
-    }
-
-    /// Undo the last kanban move operation.
-    /// Returns `true` if an action was undone, `false` if the stack was empty.
-    pub fn undo_last_move(&mut self) -> bool {
-        let undo = match self.undo_stack.pop_back() {
-            Some(u) => u,
-            None => return false,
-        };
-
-        let task = match self.tasks.get_mut(&undo.task_id) {
-            Some(t) => t,
-            None => return false,
-        };
-
-        let current_column = task.column.0.clone();
-
-        // Remove from current column
-        if let Some(tasks) = self.kanban.columns.get_mut(&current_column) {
-            tasks.retain(|id| id != &undo.task_id);
-        }
-
-        // Move task back to the original column
-        let from_col = undo.from_column.clone();
-        task.column = KanbanColumn(from_col.clone());
-        let now = chrono::Utc::now().timestamp();
-        task.entered_column_at = now;
-        task.last_activity_at = now;
-
-        // Insert at original position (clamp if needed)
-        if let Some(tasks) = self.kanban.columns.get_mut(&from_col) {
-            let pos = undo.from_position.min(tasks.len());
-            tasks.insert(pos, undo.task_id.clone());
-        } else {
-            self.kanban
-                .columns
-                .entry(from_col.clone())
-                .or_default()
-                .push(undo.task_id.clone());
-        }
-
-        self.clamp_focused_task_index(&current_column);
-        self.clamp_focused_task_index(&from_col);
-        self.mark_task_dirty(&undo.task_id);
         true
     }
 
@@ -310,69 +250,30 @@ impl AppState {
         }
     }
 
-    /// Reorder a task within its column by swapping it with the task above.
-    /// Returns `true` if the swap was performed, `false` if already at top
-    /// or task not found. Marks state dirty on success.
-    pub fn reorder_task_up(&mut self, task_id: &str) -> bool {
-        let (col_id, idx) = match self.find_task_position(task_id) {
-            Some(pos) => pos,
-            None => return false,
-        };
-        if idx == 0 {
-            return false;
-        }
-        if let Some(tasks) = self.kanban.columns.get_mut(&col_id) {
-            tasks.swap(idx, idx - 1);
-        }
-        if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
-            *focused_idx -= 1;
-        }
-        self.mark_task_dirty(task_id);
-        true
-    }
-
-    /// Reorder a task within its column by swapping it with the task below.
-    /// Returns `true` if the swap was performed, `false` if already at bottom
-    /// or task not found. Marks state dirty on success.
-    pub fn reorder_task_down(&mut self, task_id: &str) -> bool {
-        let (col_id, idx) = match self.find_task_position(task_id) {
-            Some(pos) => pos,
-            None => return false,
-        };
-        let count = self
-            .kanban
-            .columns
-            .get(&col_id)
-            .map(|t| t.len())
-            .unwrap_or(0);
-        if idx + 1 >= count {
-            return false;
-        }
-        if let Some(tasks) = self.kanban.columns.get_mut(&col_id) {
-            tasks.swap(idx, idx + 1);
-        }
-        if let Some(focused_idx) = self.kanban.focused_task_index.get_mut(&col_id) {
-            *focused_idx += 1;
-        }
-        self.mark_task_dirty(task_id);
-        true
-    }
-
-    /// Find a task's column ID and position index within that column.
-    fn find_task_position(&self, task_id: &str) -> Option<(String, usize)> {
-        for (col_id, tasks) in &self.kanban.columns {
-            if let Some(idx) = tasks.iter().position(|id| id == task_id) {
-                return Some((col_id.clone(), idx));
-            }
-        }
-        None
-    }
-
     /// Update a task's agent status and bump `last_activity_at`. Marks state dirty.
+    /// When the new status is `Ready` or `Complete` and the task has a
+    /// `pending_description`, it is applied to the task's `description`
+    /// (and `pending_description` is cleared).
     pub fn update_task_agent_status(&mut self, task_id: &str, status: AgentStatus) {
+        // Check before moving status into the task
+        let should_apply_pending = matches!(status, AgentStatus::Ready | AgentStatus::Complete);
+
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.agent_status = status;
             task.last_activity_at = chrono::Utc::now().timestamp();
+
+            // Apply pending description when task reaches Ready or Complete
+            if should_apply_pending {
+                if let Some(ref pending_desc) = task.pending_description {
+                    let trimmed = pending_desc.trim().to_string();
+                    if !trimmed.is_empty() {
+                        task.description = trimmed;
+                        task.title = derive_title_from_description(&task.description);
+                        task.pending_description = None;
+                    }
+                }
+            }
+
             self.mark_task_dirty(task_id);
         }
     }
@@ -411,6 +312,12 @@ impl AppState {
 
     /// Set or clear a task's OpenCode session ID. Maintains the
     /// `session_to_task` reverse index. Marks state dirty.
+    ///
+    /// **Important:** This method does NOT clear session streaming data
+    /// (streaming_text, messages, etc.). Callers that need to clear stale
+    /// session state must call [`Self::clear_session_data`] explicitly.
+    /// This separation prevents the finalize task from losing streaming
+    /// data when the next agent's session starts concurrently.
     pub fn set_task_session_id(&mut self, task_id: &str, session_id: Option<String>) {
         if let Some(task) = self.tasks.get_mut(task_id) {
             // Remove old mapping
@@ -425,20 +332,26 @@ impl AppState {
             }
             self.mark_task_dirty(task_id);
         }
+    }
 
-        // Clear stale streaming state when a new session starts on an existing task.
-        // Without this, streaming_text from the previous agent run persists into
-        // the new session's output, causing text duplication (Bug 1).
-        if session_id.is_some() {
-            if let Some(session) = self.session_tracker.task_sessions.get_mut(task_id) {
-                session.streaming_text = None;
-                session.messages.clear();
-                session.seen_delta_keys.clear();
-                session.last_delta_key = None;
-                session.last_delta_content = None;
-                session.render_version += 1;
-                self.session_tracker.cached_streaming_lines.remove(task_id);
-            }
+    /// Clear stale streaming state for a task's session.
+    ///
+    /// Call this explicitly when a new session starts on an existing task
+    /// and the old session's streaming data should not persist (e.g., after
+    /// the old session has been finalized).
+    ///
+    /// This is separated from [`Self::set_task_session_id`] so that callers
+    /// can set a new session ID without wiping streaming data that the
+    /// finalize task may still need to read.
+    pub fn clear_session_data(&mut self, task_id: &str) {
+        if let Some(session) = self.session_tracker.task_sessions.get_mut(task_id) {
+            session.streaming_text = None;
+            session.messages.clear();
+            session.seen_delta_keys.clear();
+            session.last_delta_key = None;
+            session.last_delta_content = None;
+            session.render_version += 1;
+            self.session_tracker.cached_streaming_lines.remove(task_id);
         }
     }
 
@@ -806,6 +719,8 @@ mod tests {
                 last_activity_at: 1000,
                 error_message: None,
                 plan_output: None,
+                planning_context: None,
+                pending_description: None,
                 pending_permission_count: 0,
                 pending_question_count: 0,
                 created_at: 1000,
@@ -1184,7 +1099,7 @@ mod tests {
         assert_eq!(state.ui.mode, AppMode::Normal);
         assert!(state.ui.task_editor.is_none());
 
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
         assert!(state.ui.task_editor.is_some());
 
@@ -1219,7 +1134,7 @@ mod tests {
     #[test]
     fn save_task_editor_create_new_task() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
 
         // Set description via editor
         if let Some(editor) = state.get_task_editor_mut() {
@@ -1240,7 +1155,7 @@ mod tests {
     #[test]
     fn save_task_editor_empty_description_fails() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
 
         // Leave description empty
         let result = state.save_task_editor();
@@ -1278,7 +1193,7 @@ mod tests {
     #[test]
     fn cancel_task_editor_resets_mode() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
         assert_eq!(state.ui.mode, AppMode::TaskEditor);
 
         state.cancel_task_editor();
@@ -1289,7 +1204,7 @@ mod tests {
     #[test]
     fn cancel_task_editor_discards_changes() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
 
         if let Some(editor) = state.get_task_editor_mut() {
             editor.set_description("Discard Me");
@@ -1641,7 +1556,7 @@ mod tests {
     #[test]
     fn get_task_editor_mut_allows_mutation() {
         let mut state = make_state_with_tasks();
-        state.open_task_editor_create("todo", vec!["todo".to_string()]);
+        state.open_task_editor_create("todo");
 
         if let Some(editor) = state.get_task_editor_mut() {
             editor.set_description("Mutated");
@@ -1980,6 +1895,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2043,6 +1960,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2062,6 +1981,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2108,6 +2029,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2152,6 +2075,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2171,6 +2096,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2247,6 +2174,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -2504,20 +2433,21 @@ mod tests {
             .clone();
         assert_eq!(text, "hello world");
 
-        // New session starts on the SAME task — this is Bug 1's trigger.
-        // set_task_session_id should clear the old streaming_text.
+        // New session starts on the SAME task — clear_session_data must be
+        // called explicitly to clear old streaming_text.
         state.set_task_session_id("task-0", Some(session_2.to_string()));
+        state.clear_session_data("task-0");
 
         // Verify streaming_text is cleared
         let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(
             session.streaming_text.is_none(),
-            "streaming_text should be cleared when a new session starts on the same task"
+            "streaming_text should be cleared when clear_session_data is called"
         );
         // Verify messages are also cleared
         assert!(
             session.messages.is_empty(),
-            "messages should be cleared when a new session starts on the same task"
+            "messages should be cleared when clear_session_data is called"
         );
         // Verify render_version was bumped (cache invalidation)
         assert!(
@@ -2541,9 +2471,10 @@ mod tests {
         setup_session_mapping(&mut state, "task-0", session_1);
         state.process_message_part_delta(session_1, "msg-1", "part-1", "text", "data");
 
-        // New session starts — should NOT remove the TaskDetailSession entry itself,
-        // just clear its fields
+        // New session starts — clear_session_data should NOT remove the
+        // TaskDetailSession entry itself, just clear its fields
         state.set_task_session_id("task-0", Some(session_2.to_string()));
+        state.clear_session_data("task-0");
 
         // The session entry should still exist
         assert!(
@@ -2555,6 +2486,29 @@ mod tests {
         assert_eq!(session.task_id, "task-0");
         assert!(session.streaming_text.is_none());
         assert!(session.messages.is_empty());
+    }
+
+    #[test]
+    fn set_task_session_id_does_not_clear_session_data() {
+        // Regression test: set_task_session_id should NOT clear streaming data
+        // on its own. Callers must call clear_session_data explicitly.
+        let mut state = make_state_with_tasks();
+        let session_1 = "session-old";
+        let session_2 = "session-new";
+
+        setup_session_mapping(&mut state, "task-0", session_1);
+        state.process_message_part_delta(session_1, "msg-1", "part-1", "text", "important data");
+
+        // Set new session ID WITHOUT calling clear_session_data
+        state.set_task_session_id("task-0", Some(session_2.to_string()));
+
+        // Streaming data should STILL be present
+        let session = state.session_tracker.task_sessions.get("task-0").unwrap();
+        assert_eq!(
+            session.streaming_text.as_deref(),
+            Some("important data"),
+            "streaming_text should NOT be cleared by set_task_session_id alone"
+        );
     }
 
     // ── Bug 2: SSE reconnection replay deduplication ─────────────────────
@@ -2982,6 +2936,7 @@ mod tests {
 
         // Phase 3: New session starts (auto-progression)
         state.set_task_session_id("task-0", Some(session_2.to_string()));
+        state.clear_session_data("task-0");
 
         let session = state.session_tracker.task_sessions.get("task-0").unwrap();
         assert!(session.streaming_text.is_none());
@@ -3299,5 +3254,157 @@ mod tests {
         assert_eq!(subs.len(), 2);
         assert!(!subs.iter().find(|s| s.session_id == sub1).unwrap().active);
         assert!(subs.iter().find(|s| s.session_id == sub2).unwrap().active);
+    }
+
+    // ── Pending Description & Detail Editor ────────────────────────────
+
+    #[test]
+    fn save_detail_description_applies_immediately_when_ready() {
+        let mut state = make_state_with_tasks();
+        // Set task to Ready status
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Ready;
+
+        // Open detail and edit description
+        state.open_task_detail("task-0");
+        if let Some(ed) = state.ui.detail_editor.as_mut() {
+            ed.set_description("New description");
+            ed.is_focused = true;
+        }
+
+        // Save
+        let result = state.save_detail_description();
+        assert!(result.is_ok());
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.description, "New description");
+        assert_eq!(task.title, "New description");
+        assert!(task.pending_description.is_none());
+    }
+
+    #[test]
+    fn save_detail_description_applies_immediately_when_complete() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Complete;
+
+        state.open_task_detail("task-0");
+        if let Some(ed) = state.ui.detail_editor.as_mut() {
+            ed.set_description("Updated when done");
+        }
+
+        state.save_detail_description().unwrap();
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.description, "Updated when done");
+        assert!(task.pending_description.is_none());
+    }
+
+    #[test]
+    fn save_detail_description_queues_when_running() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Running;
+
+        state.open_task_detail("task-0");
+        if let Some(ed) = state.ui.detail_editor.as_mut() {
+            ed.set_description("Queued description");
+        }
+
+        state.save_detail_description().unwrap();
+
+        let task = state.tasks.get("task-0").unwrap();
+        // Original description should remain unchanged
+        assert_eq!(task.description, "");
+        // Pending description should be set
+        assert_eq!(task.pending_description.as_deref(), Some("Queued description"));
+        // Title should still reflect the pending change
+        assert_eq!(task.title, "Queued description");
+    }
+
+    #[test]
+    fn save_detail_description_queues_when_pending() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Pending;
+
+        state.open_task_detail("task-0");
+        if let Some(ed) = state.ui.detail_editor.as_mut() {
+            ed.set_description("Queued for later");
+        }
+
+        state.save_detail_description().unwrap();
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.pending_description.as_deref(), Some("Queued for later"));
+    }
+
+    #[test]
+    fn save_detail_description_empty_fails() {
+        let mut state = make_state_with_tasks();
+        state.open_task_detail("task-0");
+        // Leave description empty
+        let result = state.save_detail_description();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn pending_description_applied_on_status_change_to_ready() {
+        let mut state = make_state_with_tasks();
+        // Set pending description on a running task
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Running;
+        state.tasks.get_mut("task-0").unwrap().pending_description = Some("Will be applied".to_string());
+
+        // Transition to Ready — pending description should be applied
+        state.update_task_agent_status("task-0", AgentStatus::Ready);
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.description, "Will be applied");
+        assert_eq!(task.title, "Will be applied");
+        assert!(task.pending_description.is_none());
+    }
+
+    #[test]
+    fn pending_description_applied_on_status_change_to_complete() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().agent_status = AgentStatus::Running;
+        state.tasks.get_mut("task-0").unwrap().pending_description = Some("Applied on complete".to_string());
+
+        state.update_task_agent_status("task-0", AgentStatus::Complete);
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.description, "Applied on complete");
+        assert!(task.pending_description.is_none());
+    }
+
+    #[test]
+    fn pending_description_not_applied_on_running() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().pending_description = Some("Should not apply".to_string());
+
+        state.update_task_agent_status("task-0", AgentStatus::Running);
+
+        let task = state.tasks.get("task-0").unwrap();
+        assert_eq!(task.description, "");
+        assert_eq!(task.pending_description.as_deref(), Some("Should not apply"));
+    }
+
+    #[test]
+    fn open_task_detail_initializes_editor_from_pending_description() {
+        let mut state = make_state_with_tasks();
+        state.tasks.get_mut("task-0").unwrap().description = "Original".to_string();
+        state.tasks.get_mut("task-0").unwrap().pending_description = Some("Pending version".to_string());
+
+        state.open_task_detail("task-0");
+
+        let editor = state.ui.detail_editor.as_ref().unwrap();
+        assert_eq!(editor.description(), "Pending version");
+    }
+
+    #[test]
+    fn close_task_detail_clears_editor() {
+        let mut state = make_state_with_tasks();
+        state.open_task_detail("task-0");
+        assert!(state.ui.detail_editor.is_some());
+
+        state.close_task_detail();
+        assert!(state.ui.detail_editor.is_none());
     }
 }

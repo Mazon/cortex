@@ -370,7 +370,20 @@ impl AppState {
             .get_task_id_by_session(session_id)
             .map(|s| s.to_string())
         {
-            self.set_task_error(&task_id, error.to_string());
+            // Skip setting error when the task is already Hung — the Hung
+            // status already communicates the inactivity issue, and we don't
+            // want to overwrite it with an Error status + error message.
+            let is_hung = self.tasks.get(&task_id)
+                .map(|t| t.agent_status == AgentStatus::Hung)
+                .unwrap_or(false);
+            if !is_hung {
+                self.set_task_error(&task_id, error.to_string());
+            } else {
+                tracing::debug!(
+                    task_id = %task_id,
+                    "Skipping session error on Hung task (status already indicates inactivity)"
+                );
+            }
         }
     }
 
@@ -411,7 +424,35 @@ impl AppState {
     /// Extract plan output from the session's streaming text or message history
     /// and store it in `task.plan_output`. Called when an agent completes,
     /// before auto-progression starts the next agent.
+    ///
+    /// **Robustness guarantees:**
+    /// - If no session data exists for the task, existing `plan_output` is preserved.
+    /// - If extraction yields an empty string, existing `plan_output` is preserved.
+    /// - Debug-level logging is emitted for skipped/empty extractions.
     pub fn extract_plan_output(&mut self, task_id: &str) {
+        // If no session data exists, check if the task exists and create a
+        // lazy session entry. This handles the edge case where the planning
+        // agent completes before any SSE deltas arrive.
+        if !self.session_tracker.task_sessions.contains_key(task_id) {
+            if self.tasks.contains_key(task_id) {
+                tracing::debug!(
+                    task_id = %task_id,
+                    "extract_plan_output: no session data — creating lazy entry for task"
+                );
+                self.session_tracker.task_sessions.entry(task_id.to_string())
+                    .or_insert_with(|| TaskDetailSession {
+                        task_id: task_id.to_string(),
+                        ..Default::default()
+                    });
+            } else {
+                tracing::debug!(
+                    task_id = %task_id,
+                    "extract_plan_output: no session data and task does not exist"
+                );
+                return;
+            }
+        }
+
         let plan = if let Some(session) = self.session_tracker.task_sessions.get(task_id) {
             // Prefer finalized messages (assistant text parts)
             let from_messages: String = session.messages.iter()
@@ -439,11 +480,27 @@ impl AppState {
             } else if let Some(ref text) = session.streaming_text {
                 text.trim().to_string()
             } else {
+                tracing::debug!(
+                    task_id = %task_id,
+                    "extract_plan_output: no assistant text in messages and no streaming_text, keeping existing plan_output if any"
+                );
                 return;
             }
         } else {
+            tracing::debug!(
+                task_id = %task_id,
+                "extract_plan_output: session data not found after lazy creation, keeping existing plan_output if any"
+            );
             return;
         };
+
+        if plan.is_empty() {
+            tracing::debug!(
+                task_id = %task_id,
+                "extract_plan_output: extracted empty plan, keeping existing plan_output if any"
+            );
+            return;
+        }
 
         // Enforce a 50KB cap — keep the tail (most recent content)
         const PLAN_OUTPUT_CAP_BYTES: usize = 50 * 1024;
@@ -459,6 +516,74 @@ impl AppState {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.plan_output = Some(plan);
             self.mark_task_dirty(task_id);
+        }
+    }
+
+    /// Extract file paths and key findings from a planning session's tool
+    /// calls (file reads, grep results, glob results). Stores the result
+    /// in `task.planning_context` for the do agent to use.
+    ///
+    /// This is called after `finalize_session_streaming` populates the
+    /// session messages, so the full tool call history is available.
+    pub fn extract_planning_context(&mut self, task_id: &str) {
+        let session = match self.session_tracker.task_sessions.get(task_id) {
+            Some(s) => s,
+            None => {
+                tracing::debug!(
+                    task_id = %task_id,
+                    "extract_planning_context: no session data, skipping"
+                );
+                return;
+            }
+        };
+
+        let mut files_examined = Vec::new();
+        let mut tools_used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for msg in &session.messages {
+            for part in &msg.parts {
+                if let TaskMessagePart::Tool { tool, state: tool_state, .. } = part {
+                    if *tool_state == ToolState::Completed {
+                        tools_used.insert(tool.clone());
+                        // Extract file paths from tool inputs for common tools
+                        if matches!(tool.as_str(), "read" | "glob" | "grep") {
+                            // Extract the file path from the cached_summary if available
+                            if let TaskMessagePart::Tool { cached_summary: Some(ref summary), .. } = part {
+                                files_examined.push(summary.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build context string
+        let mut context_parts = Vec::new();
+        if !files_examined.is_empty() {
+            // Deduplicate while preserving order
+            let mut seen = std::collections::HashSet::new();
+            let unique_files: Vec<&String> = files_examined.iter()
+                .filter(|f| seen.insert(f.as_str()))
+                .take(20) // Cap at 20 entries to avoid bloating the prompt
+                .collect();
+            context_parts.push(format!(
+                "Files examined during planning:\n{}",
+                unique_files.iter().map(|f| format!("  - {}", f)).collect::<Vec<_>>().join("\n")
+            ));
+        }
+
+        let context = context_parts.join("\n\n");
+        if !context.is_empty() {
+            if let Some(task) = self.tasks.get_mut(task_id) {
+                task.planning_context = Some(context);
+                self.mark_task_dirty(task_id);
+                tracing::debug!(
+                    task_id = %task_id,
+                    "extract_planning_context: stored planning context ({} tools, {} files)",
+                    tools_used.len(),
+                    files_examined.len()
+                );
+            }
         }
     }
 
@@ -495,6 +620,11 @@ impl AppState {
         // spawned on the same tokio runtime, the finalization lock-hold completes
         // before start_agent acquires the lock to build the prompt.
         self.extract_plan_output(task_id);
+
+        // Extract planning context (files examined, tools used) from the
+        // finalized messages. This gives the do agent a head start by
+        // surfacing what the planning agent already discovered.
+        self.extract_planning_context(task_id);
 
         self.update_streaming_text(task_id, None);
 

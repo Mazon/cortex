@@ -29,6 +29,8 @@ fn make_task(id: &str, title: &str) -> CortexTask {
         session_id: None,
         error_message: None,
         plan_output: None,
+        planning_context: None,
+        pending_description: None,
         pending_permission_count: 0,
         pending_question_count: 0,
         entered_column_at: 0,

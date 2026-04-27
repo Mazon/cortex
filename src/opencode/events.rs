@@ -194,6 +194,11 @@ pub async fn sse_event_loop(
                                                 .is_some_and(|ts| ts.streaming_text.is_some())
                                         };
                                         if !needs_finalize {
+                                            tracing::debug!(
+                                                task_id = %task_id,
+                                                session_id = %session_id,
+                                                "Skipping finalization — streaming_text already cleared (plan captured from streaming buffer)"
+                                            );
                                             return;
                                         }
 
@@ -289,6 +294,16 @@ fn process_event(
             // When the session completes, signal the caller to finalize
             // streaming text into persistent message history.
             let finalize = if matches!(status, "complete" | "completed") {
+                // Extract plan output early on SessionStatus "complete" to
+                // capture the plan before streaming truncation might discard
+                // early content. The SessionIdle handler will also extract
+                // (and the finalize task may overwrite with richer content),
+                // but this early capture protects against truncation.
+                if let Some(task_id) = state.get_task_id_by_session(&properties.session_id)
+                    .map(|s| s.to_string())
+                {
+                    state.extract_plan_output(&task_id);
+                }
                 Some(properties.session_id.clone())
             } else {
                 None
@@ -515,6 +530,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -1113,12 +1130,12 @@ mod tests {
     // ── Ready status from plan_output ────────────────────────────────────
 
     #[test]
-    fn terminal_column_with_plan_output_gets_complete() {
-        // A task in a terminal column (no auto_progress_to) should get Complete
-        // ("done") even if it has a non-empty plan_output. Only auto_progress_to
-        // determines Ready status.
+    fn terminal_column_with_plan_output_gets_ready() {
+        // A task in a terminal column (no auto_progress_to) should get Ready
+        // ("ready") when it has a non-empty plan_output — the plan signals
+        // there's more work to do.
         let (mut state, task_id, session_id) = make_test_state();
-        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let client = OpenCodeClient::new("http://127.0.0.1").unwrap();
 
         // Config without auto-progression for "planning"
         let mut columns_config = make_columns_config();
@@ -1136,11 +1153,10 @@ mod tests {
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
-        // Terminal column should get Complete ("done"), not Ready —
-        // plan_output alone does not trigger Ready.
+        // Should get Ready — plan_output triggers Ready even in terminal columns.
         assert_eq!(
             state.tasks.get(&task_id).unwrap().agent_status,
-            AgentStatus::Complete
+            AgentStatus::Ready
         );
     }
 
@@ -1513,5 +1529,228 @@ mod tests {
         // 3. A new session can be started (simulate by setting Running again)
         state.update_task_agent_status(&task_id, AgentStatus::Running);
         assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Running);
+    }
+
+    // ── Task 4.1: planning→do auto-progression preserves context ──────────
+
+    #[test]
+    fn planning_to_do_preserves_plan_output() {
+        // Simulate the full planning→do auto-progression flow:
+        // 1. Planning agent streams text
+        // 2. Session completes → extract_plan_output called
+        // 3. Session idle → auto-progression to "running" column
+        // 4. New session created → session data cleared but plan_output preserved
+        // 5. build_prompt_for_agent includes the plan
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1").unwrap();
+        let columns_config = make_columns_config();
+
+        // 1. Planning agent streams a plan
+        let plan_text = "Step 1: Analyze codebase\nStep 2: Refactor module X\nStep 3: Add tests";
+        for delta in plan_text.split_inclusive('\n') {
+            let delta_event = EventListResponse::MessagePartDelta {
+                properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                    session_id: session_id.clone(),
+                    message_id: "msg-1".to_string(),
+                    part_id: "part-1".to_string(),
+                    field: "text".to_string(),
+                    delta: delta.to_string(),
+                },
+            };
+            process_event(&delta_event, &mut state, &client, &columns_config);
+        }
+
+        // 2. Session completes → extract_plan_output called (via SessionStatus "completed")
+        let complete_event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        process_event(&complete_event, &mut state, &client, &columns_config);
+
+        // Verify plan_output was extracted on SessionStatus "completed"
+        assert!(
+            state.tasks.get(&task_id).unwrap().plan_output.is_some(),
+            "plan_output should be extracted on SessionStatus completed"
+        );
+
+        // 3. Session idle → auto-progression
+        let idle_event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (action, _finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
+
+        // Verify auto-progression happened
+        assert!(action.is_some(), "auto-progression should trigger");
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+
+        // 4. Simulate start_agent creating a new session (clearing session data)
+        state.set_task_session_id(&task_id, Some("session-do-agent".to_string()));
+        state.clear_session_data(&task_id);
+
+        // 5. Verify plan_output is STILL preserved after session data clearing
+        let task = state.tasks.get(&task_id).unwrap();
+        assert!(
+            task.plan_output.is_some(),
+            "plan_output must survive session data clearing"
+        );
+        let plan = task.plan_output.as_ref().unwrap();
+        assert!(plan.contains("Step 1: Analyze codebase"));
+        assert!(plan.contains("Step 2: Refactor module X"));
+
+        // 6. Verify build_prompt_for_agent includes the plan
+        let prompt = OpenCodeClient::build_prompt_for_agent(task, "do", None);
+        assert!(prompt.contains("## Plan (from planning phase)"));
+        assert!(prompt.contains("Step 1: Analyze codebase"));
+    }
+
+    // ── Task 4.2: manual planning→do move preserves context ───────────────
+
+    #[test]
+    fn manual_move_preserves_plan_output() {
+        // Simulate a manual move from planning to running column:
+        // plan_output should be preserved through the transition.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Planning agent streams a plan
+        let plan_text = "My plan: refactor the parser";
+        let delta_event = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: plan_text.to_string(),
+            },
+        };
+        process_event(&delta_event, &mut state, &client, &columns_config);
+
+        // Extract plan
+        state.extract_plan_output(&task_id);
+        assert!(state.tasks.get(&task_id).unwrap().plan_output.is_some());
+
+        // Manually move task to running column
+        state.move_task(&task_id, KanbanColumn("running".to_string()));
+
+        // Plan should still be there
+        assert!(
+            state.tasks.get(&task_id).unwrap().plan_output.is_some(),
+            "plan_output should survive manual column move"
+        );
+    }
+
+    // ── Task 4.4: extract_plan_output edge cases ──────────────────────────
+
+    #[test]
+    fn extract_plan_output_preserves_existing_when_empty() {
+        // If a task already has plan_output and extraction yields empty,
+        // the existing value should be preserved.
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // Pre-set a plan_output
+        state.tasks.get_mut(&task_id).unwrap().plan_output = Some(
+            "Existing plan from previous extraction".to_string()
+        );
+
+        // Create session with empty streaming_text
+        let session = state.session_tracker.task_sessions.entry(task_id.clone()).or_default();
+        session.streaming_text = Some("   ".to_string()); // whitespace only
+
+        state.extract_plan_output(&task_id);
+
+        // Should preserve the existing plan_output
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().plan_output.as_deref(),
+            Some("Existing plan from previous extraction"),
+            "existing plan_output should not be overwritten by empty extraction"
+        );
+    }
+
+    #[test]
+    fn extract_plan_output_creates_lazy_session_entry() {
+        // If no session data exists but the task does, a lazy entry should be created.
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        // No session data exists yet
+        assert!(!state.session_tracker.task_sessions.contains_key(&task_id));
+
+        // Extract should not panic and should create a lazy entry
+        state.extract_plan_output(&task_id);
+
+        // A lazy session entry should now exist
+        assert!(
+            state.session_tracker.task_sessions.contains_key(&task_id),
+            "lazy session entry should be created for existing task"
+        );
+        // plan_output should still be None (no data to extract)
+        assert!(state.tasks.get(&task_id).unwrap().plan_output.is_none());
+    }
+
+    #[test]
+    fn extract_plan_output_from_messages_over_streaming() {
+        // Messages should take priority over streaming_text.
+        let (mut state, task_id, _session_id) = make_test_state();
+
+        let session = state.session_tracker.task_sessions.entry(task_id.clone()).or_default();
+        session.streaming_text = Some("Streaming fallback text".to_string());
+        session.messages = vec![
+            TaskMessage {
+                id: "msg-1".to_string(),
+                role: MessageRole::Assistant,
+                parts: vec![TaskMessagePart::Text { text: "Rich plan from messages".to_string() }],
+                created_at: None,
+            },
+        ];
+
+        state.extract_plan_output(&task_id);
+
+        let plan = state.tasks.get(&task_id).unwrap().plan_output.as_ref().unwrap();
+        assert_eq!(plan, "Rich plan from messages");
+        assert!(!plan.contains("Streaming fallback"));
+    }
+
+    #[test]
+    fn session_status_complete_extracts_plan_early() {
+        // SessionStatus "complete" should trigger plan extraction
+        // even before SessionIdle arrives.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Stream some plan text
+        let delta_event = EventListResponse::MessagePartDelta {
+            properties: opencode_sdk_rs::resources::event::MessagePartDeltaProps {
+                session_id: session_id.clone(),
+                message_id: "msg-1".to_string(),
+                part_id: "part-1".to_string(),
+                field: "text".to_string(),
+                delta: "Early plan extraction test".to_string(),
+            },
+        };
+        process_event(&delta_event, &mut state, &client, &columns_config);
+
+        // Send SessionStatus "completed" (NOT SessionIdle)
+        let complete_event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        process_event(&complete_event, &mut state, &client, &columns_config);
+
+        // Plan should be extracted from streaming_text already
+        assert!(
+            state.tasks.get(&task_id).unwrap().plan_output.is_some(),
+            "plan_output should be extracted on SessionStatus completed (before SessionIdle)"
+        );
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().plan_output.as_deref(),
+            Some("Early plan extraction test")
+        );
     }
 }

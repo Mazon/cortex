@@ -406,6 +406,241 @@ crate::state::types::AppMode::Search => {
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // ── Detail editor inline editing ──────────────────────────────
+        // When the detail editor is focused, intercept editing keys.
+        // This must come before all other handlers to prevent key conflicts.
+        {
+            let is_detail_editor_focused = {
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                    && state.ui.detail_editor.as_ref().map_or(false, |e| e.is_focused)
+            };
+
+            if is_detail_editor_focused {
+                use crate::state::types::CursorDirection;
+                use crate::tui::keys::EditorKeyAction;
+
+                // Check configurable editor keybindings first (Ctrl+S, Esc, Tab, Enter)
+                let editor_action = {
+                    let _state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    self.editor_key_matcher.match_key(key)
+                };
+
+                if let Some(action) = editor_action {
+                    match action {
+                        EditorKeyAction::Save => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            match state.save_detail_description() {
+                                Ok(task_id) => {
+                                    // Unfocus the editor after saving
+                                    if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                        ed.is_focused = false;
+                                    }
+                                    state.set_notification(
+                                        format!("Description saved for task {}", task_id),
+                                        crate::state::types::NotificationVariant::Success,
+                                        3000,
+                                    );
+                                    state.mark_render_dirty();
+                                }
+                                Err(e) => {
+                                    state.set_notification(
+                                        e.to_string(),
+                                        crate::state::types::NotificationVariant::Error,
+                                        3000,
+                                    );
+                                    state.mark_render_dirty();
+                                }
+                            }
+                            return;
+                        }
+                        EditorKeyAction::Cancel => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            let should_revert = state.ui.detail_editor.as_ref().map_or(false, |ed| ed.discard_warning_shown);
+                            let has_unsaved = state.ui.detail_editor.as_ref().map_or(false, |ed| ed.has_unsaved_changes);
+
+                            if should_revert {
+                                // Second cancel: revert and unfocus
+                                // Extract description before mutating editor
+                                let revert_desc = state.ui.viewing_task_id.as_ref().and_then(|id| {
+                                    state.tasks.get(id).map(|t| {
+                                        t.pending_description.clone().unwrap_or_else(|| t.description.clone())
+                                    })
+                                });
+
+                                if let (Some(desc), Some(ed)) = (revert_desc, state.ui.detail_editor.as_mut()) {
+                                    let fresh = crate::state::types::DetailEditorState::new_from_description(&desc);
+                                    ed.desc_lines = fresh.desc_lines;
+                                    ed.cached_description = fresh.cached_description;
+                                    ed.cursor_row = 0;
+                                    ed.cursor_col = 0;
+                                    ed.scroll_offset = 0;
+                                    ed.has_unsaved_changes = false;
+                                    ed.discard_warning_shown = false;
+                                    ed.validation_error = None;
+                                    ed.is_focused = false;
+                                }
+                            } else if has_unsaved {
+                                // First cancel with unsaved changes: show warning
+                                if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                    ed.discard_warning_shown = true;
+                                }
+                            } else {
+                                // No unsaved changes: just unfocus
+                                if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                    ed.is_focused = false;
+                                }
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        EditorKeyAction::CycleField => {
+                            // Tab: toggle focus on/off
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                if ed.discard_warning_shown {
+                                    // Clear warning on Tab
+                                    ed.discard_warning_shown = false;
+                                }
+                                ed.is_focused = false;
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        EditorKeyAction::Newline => {
+                            // Enter: insert newline (only without ctrl/alt modifiers)
+                            if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+                                // Ctrl+Enter = save, don't insert newline
+                                return;
+                            }
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.insert_newline();
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                    }
+                } else {
+                    // Handle non-configurable editing keys
+                    match (key.code, key.modifiers) {
+                        // Arrow keys
+                        (KeyCode::Up, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::Up);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::Down, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::Down);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::Left, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::Left);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::Right, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::Right);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::Home, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::Home);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::End, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.move_cursor(CursorDirection::End);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::PageUp, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.scroll_offset = ed.scroll_offset.saturating_sub(5);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        (KeyCode::PageDown, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.scroll_offset = ed.scroll_offset + 5;
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        // Backspace
+                        (KeyCode::Backspace, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.delete_char_back();
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        // Delete
+                        (KeyCode::Delete, KeyModifiers::NONE) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.delete_char_forward();
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        // Printable characters
+                        (KeyCode::Char(ch), modifiers) if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.insert_char(ch);
+                            }
+                            state.mark_render_dirty();
+                            return;
+                        }
+                        _ => {
+                            // Unrecognized key while editor is focused — consume it
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // When in detail view but editor is NOT focused, handle Tab to focus
+            let is_detail_not_focused = {
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                    && !state.is_drilled_into_subagent()
+                    && state.ui.detail_editor.as_ref().map_or(false, |e| !e.is_focused)
+            };
+            if is_detail_not_focused && key.code == KeyCode::Tab && key.modifiers.is_empty() {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ed) = state.ui.detail_editor.as_mut() {
+                    ed.is_focused = true;
+                }
+                state.mark_render_dirty();
+                return;
+            }
+        }
+
         // Check if we're in task detail view — Escape pops subagent stack or closes detail
         {
             let is_detail_escape = {
@@ -656,18 +891,6 @@ crate::state::types::AppMode::Search => {
                 state.ui.input_cursor = 0;
                 return;
             }
-            // 'u' — undo last kanban move
-            (KeyCode::Char('u'), KeyModifiers::NONE) => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if state.undo_last_move() {
-                    state.set_notification(
-                        "Move undone".to_string(),
-                        crate::state::types::NotificationVariant::Info,
-                        2000,
-                    );
-                }
-                return;
-            }
             // 'V' — enter visual (multi-select) mode
             (KeyCode::Char('V'), KeyModifiers::SHIFT) => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -731,11 +954,10 @@ crate::state::types::AppMode::Search => {
             Some(Action::EditTask) => self.handle_edit_task(),
             Some(Action::MoveForward) => self.handle_move_task(1),
             Some(Action::MoveBackward) => self.handle_move_task(-1),
-            Some(Action::MoveTaskUp) => self.handle_reorder_task(-1),
-            Some(Action::MoveTaskDown) => self.handle_reorder_task(1),
             Some(Action::DeleteTask) => self.handle_delete_task(),
             Some(Action::ViewTask) => self.handle_view_task(),
             Some(Action::AbortSession) => self.handle_abort_session(),
+            Some(Action::RetryTask) => self.handle_retry_task(),
             Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
             Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
             Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
@@ -904,8 +1126,7 @@ crate::state::types::AppMode::Search => {
     fn handle_create_task(&mut self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let col_id = state.ui.focused_column.clone();
-        let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
-        state.open_task_editor_create(&col_id, available_columns);
+        state.open_task_editor_create(&col_id);
     }
 
     fn handle_edit_task(&mut self) {
@@ -916,8 +1137,8 @@ crate::state::types::AppMode::Search => {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(id) => {
-                let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
-                state.open_task_editor_edit(&id, available_columns);
+                // Open task detail view (now with inline editing) instead of fullscreen editor
+                state.open_task_detail(&id);
             }
             None => state.set_notification(
                 "No task selected to edit".to_string(),
@@ -1016,47 +1237,6 @@ crate::state::types::AppMode::Search => {
                 state.set_notification(
                     "No task selected to move".to_string(),
                     crate::state::types::NotificationVariant::Warning,
-                    2000,
-                );
-            }
-        }
-    }
-
-
-    /// Reorder the focused task within its column by swapping with a neighbor.
-    /// `direction` is -1 (move up) or +1 (move down).
-    fn handle_reorder_task(&mut self, direction: i32) {
-        let task_id = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.focused_task_id.clone()
-        };
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match task_id {
-            Some(tid) => {
-                let moved = if direction < 0 {
-                    state.reorder_task_up(&tid)
-                } else {
-                    state.reorder_task_down(&tid)
-                };
-                let (msg, variant) = if moved {
-                    if direction < 0 {
-                        ("Task moved up".to_string(), crate::state::types::NotificationVariant::Info)
-                    } else {
-                        ("Task moved down".to_string(), crate::state::types::NotificationVariant::Info)
-                    }
-                } else {
-                    if direction < 0 {
-                        ("Already at top".to_string(), crate::state::types::NotificationVariant::Warning)
-                    } else {
-                        ("Already at bottom".to_string(), crate::state::types::NotificationVariant::Warning)
-                    }
-                };
-                state.set_notification(msg, variant, 1500);
-            }
-            None => {
-                state.set_notification(
-                    "No task selected to reorder".to_string(),
-                    crate::state::types::NotificationVariant::Info,
                     2000,
                 );
             }
@@ -1185,6 +1365,132 @@ crate::state::types::AppMode::Search => {
                 2000,
             );
         }
+    }
+
+    /// Retry a hung or errored task — abort the old session, clear stale state,
+    /// and re-dispatch the agent for the task's current column.
+    fn handle_retry_task(&mut self) {
+        use crate::state::types::AgentStatus;
+
+        // Batch read: extract task info, client, and column config in one lock hold.
+        let (task_info, client) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let tid = state.ui.focused_task_id.clone();
+            let info = tid.as_ref().and_then(|id| {
+                let task = state.tasks.get(id)?;
+                Some((
+                    id.clone(),
+                    task.agent_status.clone(),
+                    task.session_id.clone(),
+                    task.column.0.clone(),
+                ))
+            });
+            let client = state
+                .project_registry.active_project_id
+                .as_ref()
+                .and_then(|pid| self.opencode_clients.get(pid))
+                .cloned();
+            (info, client)
+        };
+
+        let Some((task_id, agent_status, session_id, column_id)) = task_info else {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "No task selected to retry".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
+            return;
+        };
+
+        // Only allow retry for Hung or Error tasks
+        if !matches!(agent_status, AgentStatus::Hung | AgentStatus::Error) {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                format!(
+                    "Cannot retry — task status is {:?} (only Hung/Error can be retried)",
+                    agent_status
+                ),
+                crate::state::types::NotificationVariant::Info,
+                3000,
+            );
+            return;
+        }
+
+        // Require an OpenCode client for the active project
+        let Some(client) = client else {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "No OpenCode client for this project".to_string(),
+                crate::state::types::NotificationVariant::Warning,
+                3000,
+            );
+            return;
+        };
+
+        // Require the current column to have an agent configured
+        if self.config.columns.agent_for_column(&column_id).is_none() {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "No agent configured for this column — cannot retry".to_string(),
+                crate::state::types::NotificationVariant::Warning,
+                3000,
+            );
+            return;
+        }
+
+        let state = self.state.clone();
+        let columns_config = self.config.columns.clone();
+        let opencode_config = self.config.opencode.clone();
+
+        tokio::spawn(async move {
+            // 1. Abort the old session if one exists
+            if let Some(ref sid) = session_id {
+                match client.abort_session(sid).await {
+                    Ok(_) => {
+                        tracing::info!("Retry: aborted old session {}", sid);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Retry: failed to abort old session {}: {}", sid, e);
+                    }
+                }
+            }
+
+            // 2. Clear session data, reset error state, set status to Running
+            let previous_agent = {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                state.set_task_session_id(&task_id, None);
+                state.clear_session_data(&task_id);
+                if let Some(task) = state.tasks.get_mut(&task_id) {
+                    task.error_message = None;
+                }
+                state.update_task_agent_status(&task_id, AgentStatus::Running);
+                state.mark_render_dirty();
+
+                // Capture previous agent type for on_task_moved
+                state.tasks.get(&task_id).and_then(|t| t.agent_type.clone())
+            };
+
+            // 3. Re-dispatch the agent for the task's current column
+            crate::orchestration::engine::on_task_moved(
+                &task_id,
+                &crate::state::types::KanbanColumn(column_id.clone()),
+                &state,
+                &client,
+                &columns_config,
+                &opencode_config,
+                previous_agent,
+            );
+
+            // 4. Notify the user
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "Task retry — re-dispatching agent".to_string(),
+                crate::state::types::NotificationVariant::Success,
+                3000,
+            );
+            state.mark_render_dirty();
+        });
     }
 
     /// Handle drill-down into a subagent session (ctrl+x).

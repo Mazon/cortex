@@ -251,6 +251,7 @@ mod tests {
             hung_agent_timeout_secs: 300,
             circuit_breaker_threshold: 3,
             circuit_breaker_cooldown_secs: 60,
+            max_concurrent_agents: 3,
         }
     }
 

@@ -459,6 +459,8 @@ mod tests {
             last_activity_at: 0,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: perm_count,
             pending_question_count: question_count,
             created_at: 0,

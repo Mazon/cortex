@@ -31,6 +31,7 @@ pub enum Action {
     DeleteTask,
     ViewTask,
     AbortSession,
+    RetryTask,
     // Subagent drill-down
     DrillDownSubagent,
     // Project operations
@@ -76,6 +77,7 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
+        parse_and_add(&mut bindings, &config.retry_task, Action::RetryTask);
         parse_and_add(
             &mut bindings,
             &config.drill_down_subagent,
@@ -389,6 +391,15 @@ mod tests {
             matcher.match_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
             Some(Action::NewProject)
         );
+
+        // RetryTask: shift+r
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
+            Some(Action::RetryTask)
+        );
+
+        // AbortSession: ctrl+a a (multi-key leader — not matchable via single KeyEvent)
+        // This is handled by the leader key mechanism, not KeyMatcher directly.
     }
 
     #[test]

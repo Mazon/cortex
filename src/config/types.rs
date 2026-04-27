@@ -229,6 +229,11 @@ pub struct OpenCodeConfig {
     /// state, allowing a single probe attempt. Defaults to 60.
     #[serde(default = "default_circuit_breaker_cooldown_secs")]
     pub circuit_breaker_cooldown_secs: i64,
+    /// Maximum number of concurrent agent sessions per project.
+    /// When the limit is reached, new agent starts are queued until a slot opens.
+    /// Default: 3
+    #[serde(default = "default_max_concurrent_agents")]
+    pub max_concurrent_agents: usize,
 }
 
 fn default_sse_max_retries() -> u32 {
@@ -255,6 +260,11 @@ fn default_circuit_breaker_cooldown_secs() -> i64 {
     60
 }
 
+/// Default value for `OpenCodeConfig::max_concurrent_agents`.
+fn default_max_concurrent_agents() -> usize {
+    3
+}
+
 fn default_hostname() -> String {
     "127.0.0.1".to_string()
 }
@@ -277,6 +287,7 @@ impl Default for OpenCodeConfig {
             hung_agent_timeout_secs: default_hung_agent_timeout_secs(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),
             circuit_breaker_cooldown_secs: default_circuit_breaker_cooldown_secs(),
+            max_concurrent_agents: default_max_concurrent_agents(),
         }
     }
 }
@@ -403,10 +414,6 @@ pub struct KeybindingConfig {
     pub kanban_move_forward: String,
     #[serde(default = "default_kanban_move_backward")]
     pub kanban_move_backward: String,
-    #[serde(default = "default_task_move_up")]
-    pub task_move_up: String,
-    #[serde(default = "default_task_move_down")]
-    pub task_move_down: String,
     #[serde(default = "default_todo_new")]
     pub todo_new: String,
     #[serde(default = "default_todo_edit")]
@@ -429,6 +436,8 @@ pub struct KeybindingConfig {
     pub delete_project: String,
     #[serde(default = "default_abort_session")]
     pub abort_session: String,
+    #[serde(default = "default_retry_task")]
+    pub retry_task: String,
     #[serde(default = "default_drill_down_subagent")]
     pub drill_down_subagent: String,
     #[serde(default = "default_scroll_kanban_left")]
@@ -439,6 +448,12 @@ pub struct KeybindingConfig {
     pub help_toggle: String,
     #[serde(default = "default_quit")]
     pub quit: String,
+    #[serde(default = "default_review_changes")]
+    pub review_changes: String,
+    #[serde(default = "default_task_move_up")]
+    pub task_move_up: String,
+    #[serde(default = "default_task_move_down")]
+    pub task_move_down: String,
     /// Editor-specific keybindings (task editor mode).
     #[serde(default)]
     pub editor: EditorKeybindingConfig,
@@ -465,14 +480,6 @@ fn default_kanban_move_forward() -> String {
 }
 fn default_kanban_move_backward() -> String {
     "shift+m".to_string()
-}
-
-fn default_task_move_up() -> String {
-    "ctrl+up".to_string()
-}
-
-fn default_task_move_down() -> String {
-    "ctrl+down".to_string()
 }
 
 fn default_todo_new() -> String {
@@ -508,6 +515,9 @@ fn default_delete_project() -> String {
 fn default_abort_session() -> String {
     "ctrl+a a".to_string()
 }
+fn default_retry_task() -> String {
+    "shift+r".to_string()
+}
 fn default_drill_down_subagent() -> String {
     "ctrl+x".to_string()
 }
@@ -523,6 +533,15 @@ fn default_help_toggle() -> String {
 fn default_quit() -> String {
     "ctrl+q".to_string()
 }
+fn default_review_changes() -> String {
+    "shift+d".to_string()
+}
+fn default_task_move_up() -> String {
+    "ctrl+k".to_string()
+}
+fn default_task_move_down() -> String {
+    "ctrl+j".to_string()
+}
 
 impl Default for KeybindingConfig {
     fn default() -> Self {
@@ -534,8 +553,6 @@ impl Default for KeybindingConfig {
             kanban_down: default_kanban_down(),
             kanban_move_forward: default_kanban_move_forward(),
             kanban_move_backward: default_kanban_move_backward(),
-            task_move_up: default_task_move_up(),
-            task_move_down: default_task_move_down(),
             todo_new: default_todo_new(),
             todo_edit: default_todo_edit(),
             task_delete: default_task_delete(),
@@ -547,11 +564,15 @@ impl Default for KeybindingConfig {
             set_working_directory: default_set_working_directory(),
             delete_project: default_delete_project(),
             abort_session: default_abort_session(),
+            retry_task: default_retry_task(),
             drill_down_subagent: default_drill_down_subagent(),
             scroll_kanban_left: default_scroll_kanban_left(),
             scroll_kanban_right: default_scroll_kanban_right(),
             help_toggle: default_help_toggle(),
             quit: default_quit(),
+            review_changes: default_review_changes(),
+            task_move_up: default_task_move_up(),
+            task_move_down: default_task_move_down(),
             editor: EditorKeybindingConfig::default(),
         }
     }

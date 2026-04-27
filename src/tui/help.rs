@@ -107,11 +107,6 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
     );
     let _ = writeln!(
         s,
-        "   {:<16} Reorder task up / down",
-        format_combos_slash(&kb.task_move_up, &kb.task_move_down)
-    );
-    let _ = writeln!(
-        s,
         "   {:<16} Delete selected task",
         format_combo(&kb.task_delete)
     );
@@ -125,6 +120,11 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         s,
         "   {:<16} Abort running session",
         format_combo(&kb.abort_session)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Retry hung / failed task",
+        format_combo(&kb.retry_task)
     );
     let _ = writeln!(s);
     let _ = writeln!(s, " Search & Selection");

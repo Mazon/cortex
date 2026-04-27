@@ -137,11 +137,13 @@ mod tests {
     use crate::state::types::{EditorField, TaskEditorState};
 
     fn new_editor() -> TaskEditorState {
-        TaskEditorState::new_for_create("todo", Vec::new())
+        TaskEditorState::new_for_create("todo")
     }
 
     fn new_editor_with_columns() -> TaskEditorState {
-        TaskEditorState::new_for_create("todo", vec!["todo".to_string(), "doing".to_string(), "done".to_string()])
+        let mut editor = TaskEditorState::new_for_create("todo");
+        editor.available_columns = vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
+        editor
     }
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {

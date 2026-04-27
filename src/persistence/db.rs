@@ -16,7 +16,7 @@ pub struct Db {
 /// Current schema version. Increment this and add a new migration function
 /// in `run_migrations()` when modifying the database schema.
 #[allow(dead_code)]
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 impl Db {
     /// Open a database connection and run migrations.
@@ -37,8 +37,8 @@ impl Db {
 
     pub fn save_task(&self, task: &CortexTask) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 task.id,
                 task.number,
@@ -57,6 +57,7 @@ impl Db {
                 task.updated_at,
                 task.entered_column_at,
                 task.last_activity_at,
+                task.pending_description,
             ],
         )?;
         Ok(())
@@ -64,7 +65,7 @@ impl Db {
 
     pub fn load_tasks(&self, project_id: &str) -> Result<Vec<CortexTask>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at FROM tasks WHERE project_id = ?1 ORDER BY number",
+            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description FROM tasks WHERE project_id = ?1 ORDER BY number",
         )?;
 
         let tasks = stmt
@@ -80,6 +81,7 @@ impl Db {
                     agent_status: parse_agent_status(&row.get::<_, String>(7)?),
                     error_message: row.get(8)?,
                     plan_output: row.get(9)?,
+                    planning_context: None, // Not persisted yet — populated at runtime by extract_planning_context
                     pending_permission_count: row.get(10)?,
                     pending_question_count: row.get(11)?,
                     project_id: row.get(12)?,
@@ -87,6 +89,7 @@ impl Db {
                     updated_at: row.get(14)?,
                     entered_column_at: row.get(15)?,
                     last_activity_at: row.get(16)?,
+                    pending_description: row.get(17)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -240,8 +243,8 @@ impl Db {
 
     pub fn save_task_with_conn(&self, task: &CortexTask, tx: &Transaction) -> Result<()> {
         tx.execute(
-            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 task.id,
                 task.number,
@@ -260,6 +263,7 @@ impl Db {
                 task.updated_at,
                 task.entered_column_at,
                 task.last_activity_at,
+                task.pending_description,
             ],
         )?;
         Ok(())
@@ -428,16 +432,18 @@ fn set_schema_version(conn: &Connection, version: u32) -> Result<()> {
 /// before the version-based migration system was introduced.
 fn detect_schema_version(conn: &Connection) -> Result<u32> {
     // If `last_activity_at` exists on tasks, the DB is at least v1
-    let has_last_activity: bool = conn
-        .prepare("PRAGMA table_info(tasks)")
-        .and_then(|mut stmt| {
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            let columns: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-            Ok(columns.iter().any(|c| c == "last_activity_at"))
-        })
-        .unwrap_or(false);
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
 
-    if has_last_activity {
+    let has_last_activity = columns.iter().any(|c| c == "last_activity_at");
+    let has_pending_description = columns.iter().any(|c| c == "pending_description");
+
+    if has_pending_description {
+        Ok(2)
+    } else if has_last_activity {
         Ok(1)
     } else {
         Ok(0)
@@ -468,8 +474,11 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         set_schema_version(conn, current)?;
     }
 
-    // Future migrations go here:
-    // if current < 2 { migrate_v1_to_v2(conn)?; current = 2; set_schema_version(conn, current)?; }
+    if current < 2 {
+        migrate_v1_to_v2(conn)?;
+        current = 2;
+        set_schema_version(conn, current)?;
+    }
 
     Ok(())
 }
@@ -489,6 +498,24 @@ fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
     if !has_column {
         conn.execute(
             "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Migration v1 → v2: Add `pending_description` column to `tasks` table.
+/// Includes an idempotency guard.
+fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
+    let has_column: bool = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|c| c == "pending_description");
+
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN pending_description TEXT",
             [],
         )?;
     }

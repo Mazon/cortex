@@ -63,19 +63,91 @@ impl AppState {
     }
 
     /// Open the task detail panel for a given task.
+    /// Initializes the inline description editor from the task's current description
+    /// (or `pending_description` if set).
     pub fn open_task_detail(&mut self, task_id: &str) {
         self.ui.viewing_task_id = Some(task_id.to_string());
         self.ui.focused_panel = FocusedPanel::TaskDetail;
         self.ui.user_scroll_offset = None;
+
+        // Initialize the inline description editor from the task's description
+        if let Some(task) = self.tasks.get(task_id) {
+            let desc = task.pending_description.as_deref().unwrap_or(&task.description);
+            self.ui.detail_editor = Some(DetailEditorState::new_from_description(desc));
+        }
     }
 
     /// Close the task detail panel and return focus to the kanban board.
-    /// Clears the drill-down navigation stack.
+    /// Clears the drill-down navigation stack and the inline editor state.
     pub fn close_task_detail(&mut self) {
         self.ui.viewing_task_id = None;
         self.ui.focused_panel = FocusedPanel::Kanban;
         self.ui.user_scroll_offset = None;
         self.ui.session_nav_stack.clear();
+        self.ui.detail_editor = None;
+    }
+
+    /// Save the description from the inline detail editor.
+    ///
+    /// If the task is in `Ready` or `Complete` status, the description is applied
+    /// immediately (and `pending_description` is cleared). Otherwise, the new
+    /// description is stored in `pending_description` and will be applied when
+    /// the task reaches a terminal state.
+    ///
+    /// Returns the task ID on success, or an error if validation fails.
+    pub fn save_detail_description(&mut self) -> anyhow::Result<String> {
+        let task_id = match &self.ui.viewing_task_id {
+            Some(id) => id.clone(),
+            None => anyhow::bail!("No task being viewed"),
+        };
+
+        let description = match &self.ui.detail_editor {
+            Some(editor) => editor.description(),
+            None => anyhow::bail!("No detail editor open"),
+        };
+
+        let description = description.trim().to_string();
+        if description.is_empty() {
+            if let Some(ed) = self.ui.detail_editor.as_mut() {
+                ed.validation_error = Some("Description cannot be empty".to_string());
+            }
+            anyhow::bail!("Task description cannot be empty");
+        }
+
+        let title = derive_title_from_description(&description);
+        let now = chrono::Utc::now().timestamp();
+
+        if let Some(task) = self.tasks.get_mut(&task_id) {
+            let can_apply_immediately = matches!(
+                task.agent_status,
+                AgentStatus::Ready | AgentStatus::Complete
+            );
+
+            if can_apply_immediately {
+                // Apply immediately — task is in a terminal state
+                task.description = description;
+                task.title = title;
+                task.pending_description = None;
+            } else {
+                // Queue for later — store in pending_description
+                task.pending_description = Some(description.clone());
+                // Also update title to reflect the pending change
+                task.title = title;
+            }
+            task.updated_at = now;
+            self.mark_task_dirty(&task_id);
+
+            // Reset unsaved changes flags
+            if let Some(ed) = self.ui.detail_editor.as_mut() {
+                ed.has_unsaved_changes = false;
+                ed.discard_warning_shown = false;
+                ed.validation_error = None;
+            }
+        } else {
+            anyhow::bail!("Task not found: {}", task_id)
+        }
+
+        Ok(task_id)
     }
 
     // ─── Subagent Drill-Down Navigation ──────────────────────────────────
@@ -144,12 +216,8 @@ impl AppState {
     pub fn open_task_editor_create(
         &mut self,
         default_column: &str,
-        available_columns: Vec<String>,
     ) {
-        self.ui.task_editor = Some(TaskEditorState::new_for_create(
-            default_column,
-            available_columns,
-        ));
+        self.ui.task_editor = Some(TaskEditorState::new_for_create(default_column));
         self.ui.mode = AppMode::TaskEditor;
     }
 

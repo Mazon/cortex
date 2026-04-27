@@ -184,7 +184,7 @@ mod tests {
     use crate::state::types::{
         AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
     };
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
     /// Helper: create a temporary database path that is unique per test invocation.
     fn temp_db_path(suffix: &str) -> std::path::PathBuf {
@@ -208,6 +208,8 @@ use std::collections::{HashMap, VecDeque};
             last_activity_at: 1_710_001_000_000,
             error_message: Some("previous attempt timed out".to_string()),
             plan_output: Some("Step 1: save\nStep 2: load\nStep 3: verify".to_string()),
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 3,
             pending_question_count: 1,
             created_at: 1_710_000_000_000,
@@ -335,7 +337,6 @@ use std::collections::{HashMap, VecDeque};
                 subagent_session_data: HashMap::new(),
             },
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: VecDeque::new(),
         };
 
         // ── Save ──
@@ -476,7 +477,6 @@ use std::collections::{HashMap, VecDeque};
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: VecDeque::new(),
         };
 
         // ── Save both tasks to DB ──
@@ -558,7 +558,6 @@ use std::collections::{HashMap, VecDeque};
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
-            undo_stack: VecDeque::new(),
         };
 
         // ── Save project + tasks to DB ──

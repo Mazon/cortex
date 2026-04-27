@@ -1,7 +1,10 @@
 //! Orchestration engine — config-driven task progression rules.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use tokio::sync::Semaphore;
 
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::error::AppError;
@@ -10,6 +13,19 @@ use crate::state::types::{AppState, KanbanColumn};
 
 /// Maximum backoff delay cap (30 seconds).
 const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(30);
+
+/// Per-project semaphores for limiting concurrent agent sessions.
+/// Uses `LazyLock` for thread-safe lazy initialization.
+static AGENT_SEMAPHORES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Arc<Semaphore>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Get or create a semaphore for the given project.
+fn get_agent_semaphore(project_id: &str, max_concurrent: usize) -> Arc<Semaphore> {
+    let mut map = AGENT_SEMAPHORES.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(project_id.to_string())
+        .or_insert_with(|| Arc::new(Semaphore::new(max_concurrent)))
+        .clone()
+}
 
 /// Classify an [`anyhow::Error`] as retryable or not.
 ///
@@ -202,6 +218,8 @@ pub fn on_task_moved(
 }
 
 /// Start an agent for a task.
+/// Acquires a concurrency-limited permit before creating a session,
+/// preventing too many concurrent OpenCode sessions per project.
 fn start_agent(
     task_id: &str,
     agent: &str,
@@ -242,7 +260,39 @@ fn start_agent(
         }).flatten()
     };
 
+    // Determine concurrency limit from config
+    let max_concurrent = opencode_config.max_concurrent_agents;
+    let pid_for_semaphore = project_id.clone().unwrap_or_default();
+
+    // Get the semaphore BEFORE spawning so we can move it into the async block.
+    let agent_semaphore = get_agent_semaphore(&pid_for_semaphore, max_concurrent);
+
     tokio::spawn(async move {
+        // Acquire a concurrency-limited permit before starting the agent.
+        // This prevents overwhelming the OpenCode server with too many
+        // concurrent sessions. The permit is held for the lifetime of
+        // the agent session (until this future completes).
+        let _permit = match agent_semaphore.acquire().await {
+            Ok(permit) => {
+                tracing::debug!(
+                    task_id = %task_id,
+                    agent = %agent,
+                    "Acquired agent start permit (max_concurrent={})",
+                    max_concurrent
+                );
+                permit
+            }
+            Err(e) => {
+                tracing::error!(
+                    task_id = %task_id,
+                    agent = %agent,
+                    "Agent semaphore closed: {}",
+                    e
+                );
+                return;
+            }
+        };
+
         // Build prompt from task WHILE holding the lock to prevent stale data
         let (prompt, session_id, task_id_clone) = {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -292,6 +342,14 @@ fn start_agent(
                         let sid = session.id.clone();
                         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_session_id(&task_id_clone, Some(sid.clone()));
+                        // Clear stale streaming state from the old agent session.
+                        // This must happen AFTER set_task_session_id so the finalize
+                        // task (if still running) won't race with the clear.
+                        // The finalize task reads streaming_text; by the time we
+                        // reach here, the synchronous extract_plan_output in
+                        // process_event (SessionIdle handler) has already captured
+                        // plan_output from streaming_text, so clearing is safe.
+                        s.clear_session_data(&task_id_clone);
                         sid
                     }
                     Err(e) => {
@@ -326,10 +384,11 @@ fn start_agent(
             match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
                 Ok(session) => {
                     let sid = session.id.clone();
-                    // Store session ID
+                    // Store session ID and clear any stale streaming data
                     {
                         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_session_id(&task_id_clone, Some(sid.clone()));
+                        s.clear_session_data(&task_id_clone);
                     }
                     sid
                 }
@@ -492,6 +551,8 @@ mod tests {
             last_activity_at: 1000,
             error_message: None,
             plan_output: None,
+            planning_context: None,
+            pending_description: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
