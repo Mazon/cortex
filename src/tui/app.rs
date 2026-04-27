@@ -229,6 +229,9 @@ crate::state::types::AppMode::Search => {
                         crate::state::types::AppMode::Visual => {
                             crate::tui::render_normal(f, state, config);
                         }
+                        crate::state::types::AppMode::DiffReview => {
+                            crate::tui::diff_view::render_diff_review(f, f.area(), state, &config.theme);
+                        }
                     }
                 })?;
             }
@@ -395,6 +398,9 @@ crate::state::types::AppMode::Search => {
             }
             crate::state::types::AppMode::Visual => {
                 self.handle_visual_key(key);
+            }
+            crate::state::types::AppMode::DiffReview => {
+                self.handle_diff_review_key(key);
             }
         }
     }
@@ -961,6 +967,8 @@ crate::state::types::AppMode::Search => {
             Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
             Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
             Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
+            Some(Action::MoveTaskUp) => self.handle_move_task_vertical(-1),
+            Some(Action::MoveTaskDown) => self.handle_move_task_vertical(1),
             None => {} // Unmatched key, ignore
         }
     }
@@ -1682,6 +1690,66 @@ crate::state::types::AppMode::Search => {
     }
 
     // ── Shared helpers ──
+
+    /// Handle key events in DiffReview mode.
+    fn handle_diff_review_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.mode = crate::state::types::AppMode::Normal;
+                state.ui.diff_review = None;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    crate::tui::diff_view::scroll_diff(review, 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    crate::tui::diff_view::scroll_diff(review, -1);
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    crate::tui::diff_view::next_file(review);
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    crate::tui::diff_view::prev_file(review);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Reorder a task within its column by swapping position with its neighbor.
+    fn handle_move_task_vertical(&mut self, direction: i32) {
+        let (task_id, column_id) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let tid = state.ui.focused_task_id.clone();
+            let col = state.ui.focused_column.clone();
+            (tid, col)
+        };
+        let task_id = match task_id {
+            Some(id) => id,
+            None => return,
+        };
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tasks) = state.kanban.columns.get_mut(&column_id) {
+            if let Some(pos) = tasks.iter().position(|id| id == &task_id) {
+                let new_pos = pos as i32 + direction;
+                if new_pos >= 0 && (new_pos as usize) < tasks.len() {
+                    tasks.swap(pos, new_pos as usize);
+                }
+            }
+        }
+    }
 
     /// Switch to the previous/next project by an offset (-1 or +1).
     /// Wraps around at the boundaries.

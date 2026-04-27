@@ -420,7 +420,6 @@ pub fn convert_session_error(error: &SdkSessionError) -> String {
         }
         SdkSessionError::MessageOutputLengthError { .. } => "Message output too long".to_string(),
         SdkSessionError::StructuredOutputError { data } => format!("Structured output error: {} (retries: {})", data.message, data.retries),
-        _ => "Unknown error".to_string(),
     }
 }
 

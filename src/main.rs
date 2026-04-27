@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use config::types::CortexConfig;
 use persistence::db::Db;
 use state::types::AppState;
 use tui::app::App;
@@ -42,7 +41,7 @@ fn main() -> Result<()> {
         .map(|p| std::path::PathBuf::from(p))
         .unwrap_or_else(config::default_config_path);
 
-    let mut config = config::load_config(&config_path)?;
+    let config = config::load_config(&config_path)?;
 
     // Initialize tracing — writes to stderr by default
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()

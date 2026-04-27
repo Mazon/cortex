@@ -12,7 +12,7 @@
 //! - Animated progress indicator for running tasks
 
 use crate::state::types::{
-    AgentStatus, AppState, CortexTask, DetailEditorState, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
+    AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
 };
 use super::format_elapsed_time;
 use ratatui::prelude::*;

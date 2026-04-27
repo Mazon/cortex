@@ -12,6 +12,7 @@ pub mod status_bar;
 pub mod task_card;
 pub mod task_detail;
 pub mod task_editor;
+pub mod diff_view;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;

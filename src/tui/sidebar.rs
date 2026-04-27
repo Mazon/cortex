@@ -3,7 +3,7 @@
 use crate::config::types::{parse_hex_color_or, CortexConfig};
 use crate::state::types::AppState;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 /// Render the project sidebar in the given area.
 pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &CortexConfig) {

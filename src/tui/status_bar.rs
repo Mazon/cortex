@@ -301,6 +301,9 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
                 state.ui.selected_tasks.len()
             ));
         }
+        AppMode::DiffReview => {
+            groups.push("j/k: scroll  h/l: prev/next file  Esc: close".to_string());
+        }
         AppMode::Normal => {
             // Show visual mode indicator if active
             if state.ui.visual_mode {
