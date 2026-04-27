@@ -156,6 +156,27 @@ impl AppState {
         };
 
         let from_column = task.column.clone();
+        if from_column == to_column {
+            return false; // No-op if moving to the same column
+        }
+
+        // Record undo action before mutating
+        let from_position = self
+            .kanban
+            .columns
+            .get(&from_column.0)
+            .and_then(|tasks| tasks.iter().position(|id| id == task_id))
+            .unwrap_or(0);
+        let undo = crate::state::types::UndoAction {
+            task_id: task_id.to_string(),
+            from_column: from_column.0.clone(),
+            from_position,
+        };
+        if self.undo_stack.len() >= crate::state::types::MAX_UNDO_STACK_SIZE {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(undo);
+
         task.column = to_column.clone();
         let now = chrono::Utc::now().timestamp();
         task.entered_column_at = now;
@@ -178,6 +199,66 @@ impl AppState {
 
         self.mark_task_dirty(task_id);
         true
+    }
+
+    /// Undo the last kanban move operation.
+    /// Returns `true` if an action was undone, `false` if the stack was empty.
+    pub fn undo_last_move(&mut self) -> bool {
+        let undo = match self.undo_stack.pop() {
+            Some(u) => u,
+            None => return false,
+        };
+
+        let task = match self.tasks.get_mut(&undo.task_id) {
+            Some(t) => t,
+            None => return false,
+        };
+
+        let current_column = task.column.0.clone();
+
+        // Remove from current column
+        if let Some(tasks) = self.kanban.columns.get_mut(&current_column) {
+            tasks.retain(|id| id != &undo.task_id);
+        }
+
+        // Move task back to the original column
+        let from_col = undo.from_column.clone();
+        task.column = KanbanColumn(from_col.clone());
+        let now = chrono::Utc::now().timestamp();
+        task.entered_column_at = now;
+        task.last_activity_at = now;
+
+        // Insert at original position (clamp if needed)
+        if let Some(tasks) = self.kanban.columns.get_mut(&from_col) {
+            let pos = undo.from_position.min(tasks.len());
+            tasks.insert(pos, undo.task_id.clone());
+        } else {
+            self.kanban
+                .columns
+                .entry(from_col.clone())
+                .or_default()
+                .push(undo.task_id.clone());
+        }
+
+        self.clamp_focused_task_index(&current_column);
+        self.clamp_focused_task_index(&from_col);
+        self.mark_task_dirty(&undo.task_id);
+        true
+    }
+
+    /// Check if a task matches the current search filter.
+    /// Returns `true` if there is no active search, or if the task's title
+    /// or description contains the search query (case-insensitive).
+    pub fn task_matches_search(&self, task: &CortexTask) -> bool {
+        match &self.ui.search_query {
+            None => true,
+            Some(query) if query.is_empty() => true,
+            Some(query) => {
+                let query_lower = query.to_lowercase();
+                task.title.to_lowercase().contains(&query_lower)
+                    || task.description.to_lowercase().contains(&query_lower)
+            }
+        }
     }
 
     /// Delete a task by ID. Removes it from the kanban board and session index.
@@ -1246,7 +1327,7 @@ mod tests {
         let mut state = make_state_with_tasks();
         state.tasks.get_mut("task-0").unwrap().entered_column_at = 1000;
 
-        state.move_task("task-0", KanbanColumn("todo".to_string()));
+        state.move_task("task-0", KanbanColumn("running".to_string()));
         // Should be updated to current time (much larger than 1000)
         assert!(state.tasks.get("task-0").unwrap().entered_column_at > 1000);
     }

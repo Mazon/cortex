@@ -333,6 +333,7 @@ mod tests {
                 subagent_session_data: HashMap::new(),
             },
             dirty_flags: crate::state::types::DirtyFlags::default(),
+            undo_stack: Vec::new(),
         };
 
         // ── Save ──
@@ -471,6 +472,7 @@ mod tests {
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
+            undo_stack: Vec::new(),
         };
 
         // ── Save both tasks to DB ──
@@ -550,6 +552,7 @@ mod tests {
             ui: crate::state::types::UIState::default(),
             session_tracker: crate::state::types::SessionTracker::default(),
             dirty_flags: crate::state::types::DirtyFlags::default(),
+            undo_stack: Vec::new(),
         };
 
         // ── Save project + tasks to DB ──

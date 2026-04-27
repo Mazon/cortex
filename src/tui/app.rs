@@ -196,6 +196,13 @@ impl App {
                             crate::tui::render_normal(f, state, config);
                             crate::tui::prompt::render_confirm_dialog(f, state);
                         }
+                        crate::state::types::AppMode::Search => {
+                            crate::tui::render_normal(f, state, config);
+                            crate::tui::kanban::render_search_bar(f, state);
+                        }
+                        crate::state::types::AppMode::Visual => {
+                            crate::tui::render_normal(f, state, config);
+                        }
                     }
                 })?;
             }
@@ -235,6 +242,12 @@ impl App {
             crate::state::types::AppMode::ConfirmDialog => {
                 self.handle_confirm_dialog_key(key);
             }
+            crate::state::types::AppMode::Search => {
+                self.handle_search_key(key);
+            }
+            crate::state::types::AppMode::Visual => {
+                self.handle_visual_key(key);
+            }
         }
     }
 
@@ -243,7 +256,7 @@ impl App {
     /// Resolves the key to an [`Action`] via the configured keybindings and
     /// dispatches to the appropriate handler method.
     fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         // Check if we're in task detail view — Escape pops subagent stack or closes detail
         {
@@ -478,6 +491,49 @@ impl App {
             }
         }
         use crate::tui::keys::Action;
+
+        // Handle vim-style keys that bypass the configurable keybinding system
+        match (key.code, key.modifiers) {
+            // '/' — enter search mode
+            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.mode = crate::state::types::AppMode::Search;
+                state.ui.input_text.clear();
+                state.ui.input_cursor = 0;
+                return;
+            }
+            // 'u' — undo last kanban move
+            (KeyCode::Char('u'), KeyModifiers::NONE) => {
+                let mut state = self.state.lock().unwrap();
+                if state.undo_last_move() {
+                    state.set_notification(
+                        "Move undone".to_string(),
+                        crate::state::types::NotificationVariant::Info,
+                        2000,
+                    );
+                }
+                return;
+            }
+            // 'V' — enter visual (multi-select) mode
+            (KeyCode::Char('V'), KeyModifiers::SHIFT) => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.visual_mode = true;
+                state.ui.selected_tasks.clear();
+                // Set anchor to current focused task
+                let anchor = state.ui.focused_task_id.clone();
+                state.ui.visual_anchor_task_id = anchor.clone();
+                if let Some(ref tid) = anchor {
+                    state.ui.selected_tasks.insert(tid.clone());
+                }
+                state.set_notification(
+                    "Visual mode — use arrows to select, m to move, Esc to exit".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    4000,
+                );
+                return;
+            }
+            _ => {}
+        }
 
         let action = self.key_matcher.match_key(key);
 
@@ -1550,6 +1606,353 @@ impl App {
         )?;
         crossterm::terminal::disable_raw_mode()?;
         Ok(())
+    }
+
+    // ─── Search Mode ───────────────────────────────────────────────────
+
+    /// Handle key events in Search mode.
+    fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Esc => {
+                let mut state = self.state.lock().unwrap();
+                state.ui.mode = crate::state::types::AppMode::Normal;
+                state.ui.search_query = None;
+                state.ui.input_text.clear();
+            }
+            KeyCode::Enter => {
+                let mut state = self.state.lock().unwrap();
+                if state.ui.input_text.trim().is_empty() {
+                    state.ui.search_query = None;
+                } else {
+                    state.ui.search_query = Some(state.ui.input_text.trim().to_string());
+                }
+                state.ui.mode = crate::state::types::AppMode::Normal;
+            }
+            KeyCode::Backspace => {
+                let mut state = self.state.lock().unwrap();
+                if state.ui.input_cursor > 0 {
+                    state.ui.input_cursor -= 1;
+                    let pos = state.ui.input_cursor;
+                    state.ui.input_text.remove(pos);
+                }
+                // Live-filter while typing
+                state.ui.search_query = if state.ui.input_text.is_empty() {
+                    None
+                } else {
+                    Some(state.ui.input_text.clone())
+                };
+            }
+            KeyCode::Char(c) => {
+                let mut state = self.state.lock().unwrap();
+                let pos = state.ui.input_cursor;
+                state.ui.input_text.insert(pos, c);
+                state.ui.input_cursor += 1;
+                // Live-filter while typing
+                state.ui.search_query = Some(state.ui.input_text.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // ─── Visual (Multi-Select) Mode ────────────────────────────────────
+
+    /// Handle key events in Visual (multi-select) mode.
+    fn handle_visual_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crate::tui::keys::Action;
+        use crossterm::event::KeyCode;
+
+        // Escape exits visual mode
+        if key.code == KeyCode::Esc {
+            let mut state = self.state.lock().unwrap();
+            state.ui.visual_mode = false;
+            state.ui.selected_tasks.clear();
+            state.ui.visual_anchor_task_id = None;
+            return;
+        }
+
+        // 'm' moves all selected tasks forward
+        if key.code == KeyCode::Char('m') && key.modifiers.is_empty() {
+            self.move_selected_tasks_forward();
+            return;
+        }
+
+        // 'M' (shift+m) moves all selected tasks backward
+        if key.code == KeyCode::Char('M') && key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+            self.move_selected_tasks_backward();
+            return;
+        }
+
+        // Arrow keys and hjkl extend selection
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+                self.visual_move_selection(crate::tui::keys::Action::NavUp);
+            }
+            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+                self.visual_move_selection(crate::tui::keys::Action::NavDown);
+            }
+            KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
+                self.visual_move_selection(crate::tui::keys::Action::NavLeft);
+            }
+            KeyCode::Right | KeyCode::Char('l') if key.modifiers.is_empty() => {
+                self.visual_move_selection(crate::tui::keys::Action::NavRight);
+            }
+            _ => {
+                // Let configured keybindings handle other keys (quit, help, etc.)
+                let action = self.key_matcher.match_key(key);
+                match action {
+                    Some(Action::Quit) => self.handle_quit(),
+                    Some(Action::HelpToggle) => self.handle_help_toggle(),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Move the visual selection in a direction and extend the selection range.
+    fn visual_move_selection(&mut self, direction: crate::tui::keys::Action) {
+        let mut state = self.state.lock().unwrap();
+
+        // First, perform the navigation (same as normal mode)
+        match direction {
+            crate::tui::keys::Action::NavLeft => {
+                let visible = self.get_visible_column_ids(&state);
+                let current_idx = visible
+                    .iter()
+                    .position(|c| c == &state.ui.focused_column)
+                    .unwrap_or(0);
+                if current_idx > 0 {
+                    let new_col = visible[current_idx - 1].clone();
+                    state.set_focused_column(&new_col);
+                    update_focused_task_id(&mut state, &new_col);
+                    state.kanban.focused_column_index = current_idx - 1;
+                    Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
+                }
+            }
+            crate::tui::keys::Action::NavRight => {
+                let visible = self.get_visible_column_ids(&state);
+                let current_idx = visible
+                    .iter()
+                    .position(|c| c == &state.ui.focused_column)
+                    .unwrap_or(0);
+                if current_idx + 1 < visible.len() {
+                    let new_col = visible[current_idx + 1].clone();
+                    state.set_focused_column(&new_col);
+                    update_focused_task_id(&mut state, &new_col);
+                    state.kanban.focused_column_index = current_idx + 1;
+                    Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
+                }
+            }
+            crate::tui::keys::Action::NavUp => {
+                let col_id = state.ui.focused_column.clone();
+                let idx = state
+                    .kanban
+                    .focused_task_index
+                    .get(&col_id)
+                    .copied()
+                    .unwrap_or(0);
+                if idx > 0 {
+                    state.kanban.focused_task_index.insert(col_id.clone(), idx - 1);
+                    update_focused_task_id(&mut state, &col_id);
+                }
+            }
+            crate::tui::keys::Action::NavDown => {
+                let col_id = state.ui.focused_column.clone();
+                let max = state
+                    .kanban
+                    .columns
+                    .get(&col_id)
+                    .map(|t| t.len().saturating_sub(1))
+                    .unwrap_or(0);
+                let idx = state
+                    .kanban
+                    .focused_task_index
+                    .get(&col_id)
+                    .copied()
+                    .unwrap_or(0);
+                if idx < max {
+                    state.kanban.focused_task_index.insert(col_id.clone(), idx + 1);
+                    update_focused_task_id(&mut state, &col_id);
+                }
+            }
+            _ => {}
+        }
+
+        // Extend selection from anchor to current focused task
+        state.ui.selected_tasks.clear();
+        let anchor = state.ui.visual_anchor_task_id.clone();
+        let focused = state.ui.focused_task_id.clone();
+        if let (Some(ref anchor_id), Some(ref focused_id)) = (anchor.as_ref(), focused.as_ref()) {
+            state.ui.selected_tasks.insert((*anchor_id).clone());
+            if focused_id != anchor_id {
+                state.ui.selected_tasks.insert((*focused_id).clone());
+            }
+            // If anchor and focused are in the same column, select all tasks between them
+            let between: Vec<String> = match state.kanban.columns.get(&state.ui.focused_column) {
+                Some(col_tasks) => {
+                    if let (Some(anchor_pos), Some(focused_pos)) =
+                        (col_tasks.iter().position(|id| id == *anchor_id),
+                         col_tasks.iter().position(|id| id == *focused_id))
+                    {
+                        let (start, end) = if anchor_pos <= focused_pos {
+                            (anchor_pos, focused_pos)
+                        } else {
+                            (focused_pos, anchor_pos)
+                        };
+                        (start..=end)
+                            .filter_map(|i| col_tasks.get(i).cloned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                None => Vec::new(),
+            };
+            for id in between {
+                state.ui.selected_tasks.insert(id);
+            }
+        }
+    }
+
+    /// Move all selected tasks forward to the next column.
+    fn move_selected_tasks_forward(&mut self) {
+        let selected: Vec<String> = {
+            let state = self.state.lock().unwrap();
+            state.ui.selected_tasks.iter().cloned().collect()
+        };
+
+        if selected.is_empty() {
+            return;
+        }
+
+        // Get the next column for the currently focused column
+        let (target_col, project_id, client) = {
+            let state = self.state.lock().unwrap();
+            let visible = self.get_visible_column_ids(&state);
+            let current_idx = visible
+                .iter()
+                .position(|c| c == &state.ui.focused_column)
+                .unwrap_or(0);
+            if current_idx + 1 >= visible.len() {
+                // Already at the last column — can't move forward
+                drop(state);
+                let mut state = self.state.lock().unwrap();
+                state.set_notification(
+                    "Already at the last column".to_string(),
+                    crate::state::types::NotificationVariant::Warning,
+                    2000,
+                );
+                return;
+            }
+            let target = visible[current_idx + 1].clone();
+            let pid = state.project_registry.active_project_id.clone();
+            let cli = pid.as_ref().and_then(|p| self.opencode_clients.get(p).cloned());
+            (target, pid, cli)
+        };
+
+        // Move all selected tasks
+        for task_id in &selected {
+            let mut state = self.state.lock().unwrap();
+            state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
+        }
+
+        // Trigger orchestration for each moved task
+        if let Some(_pid) = project_id {
+            if let Some(client) = client {
+                for task_id in &selected {
+                    let previous_agent = {
+                        let state = self.state.lock().unwrap();
+                        state.tasks.get(task_id).and_then(|t| t.agent_type.clone())
+                    };
+                    let task_id = task_id.clone();
+                    let target_col = target_col.clone();
+                    crate::orchestration::engine::on_task_moved(
+                        &task_id,
+                        &crate::state::types::KanbanColumn(target_col),
+                        &self.state,
+                        &client,
+                        &self.config.columns,
+                        &self.config.opencode,
+                        previous_agent,
+                    );
+                }
+            }
+        }
+
+        let count = selected.len();
+        let mut state = self.state.lock().unwrap();
+        state.set_notification(
+            format!("Moved {} task(s) forward", count),
+            crate::state::types::NotificationVariant::Success,
+            2000,
+        );
+        // Exit visual mode after bulk move
+        state.ui.visual_mode = false;
+        state.ui.selected_tasks.clear();
+        state.ui.visual_anchor_task_id = None;
+    }
+
+    /// Move all selected tasks backward to the previous column.
+    fn move_selected_tasks_backward(&mut self) {
+        let selected: Vec<String> = {
+            let state = self.state.lock().unwrap();
+            state.ui.selected_tasks.iter().cloned().collect()
+        };
+
+        if selected.is_empty() {
+            return;
+        }
+
+        // Get the previous column
+        let target_col = {
+            let state = self.state.lock().unwrap();
+            let visible = self.get_visible_column_ids(&state);
+            let current_idx = visible
+                .iter()
+                .position(|c| c == &state.ui.focused_column)
+                .unwrap_or(0);
+            if current_idx == 0 {
+                drop(state);
+                let mut state = self.state.lock().unwrap();
+                state.set_notification(
+                    "Already at the first column".to_string(),
+                    crate::state::types::NotificationVariant::Warning,
+                    2000,
+                );
+                return;
+            }
+            visible[current_idx - 1].clone()
+        };
+
+        // Move all selected tasks
+        for task_id in &selected {
+            let mut state = self.state.lock().unwrap();
+            state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
+        }
+
+        let count = selected.len();
+        let mut state = self.state.lock().unwrap();
+        state.set_notification(
+            format!("Moved {} task(s) backward", count),
+            crate::state::types::NotificationVariant::Success,
+            2000,
+        );
+        state.ui.visual_mode = false;
+        state.ui.selected_tasks.clear();
+        state.ui.visual_anchor_task_id = None;
+    }
+
+    /// Get visible column IDs considering the scroll offset and max visible columns.
+    fn get_visible_column_ids(&self, state: &AppState) -> Vec<String> {
+        let all = self.config.columns.visible_column_ids();
+        let max_visible = Self::max_visible_columns(&self.config, &self.terminal);
+        let offset = state.kanban.kanban_scroll_offset;
+        all.iter()
+            .skip(offset)
+            .take(max_visible)
+            .cloned()
+            .collect()
     }
 }
 

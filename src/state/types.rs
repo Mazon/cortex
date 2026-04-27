@@ -117,6 +117,10 @@ pub enum AppMode {
     InputPrompt,
     /// Project rename prompt.
     ProjectRename,
+    /// Search/filter mode — filters kanban tasks by text.
+    Search,
+    /// Visual (multi-select) mode — select multiple tasks for bulk actions.
+    Visual,
     /// Confirmation dialog for destructive actions.
     ConfirmDialog,
 }
@@ -306,6 +310,18 @@ pub struct UIState {
     /// When empty, the task detail view shows the parent task's output.
     /// When non-empty, the task detail view shows the top-of-stack session's output.
     pub session_nav_stack: Vec<SessionRef>,
+    /// Active search/filter query. When `Some`, only tasks whose title or
+    /// description contains this text (case-insensitive) are shown in the kanban.
+    pub search_query: Option<String>,
+    /// Whether visual (multi-select) mode is active. In this mode, arrow keys
+    /// extend the selection range, and bulk actions can be performed.
+    pub visual_mode: bool,
+    /// Set of task IDs currently selected in visual mode.
+    pub selected_tasks: std::collections::HashSet<String>,
+    /// The anchor task ID for visual mode selection — the task where visual
+    /// mode was entered. Moving the cursor extends the selection from anchor
+    /// to focused task.
+    pub visual_anchor_task_id: Option<String>,
 }
 
 impl Default for UIState {
@@ -325,6 +341,10 @@ impl Default for UIState {
             confirm_action: None,
             user_scroll_offset: None,
             session_nav_stack: Vec::new(),
+            search_query: None,
+            visual_mode: false,
+            selected_tasks: std::collections::HashSet::new(),
+            visual_anchor_task_id: None,
         }
     }
 }
@@ -1050,6 +1070,22 @@ impl DirtyFlags {
     }
 }
 
+// ─── Undo ────────────────────────────────────────────────────────────────
+
+/// Maximum number of undo actions stored in the undo stack.
+pub const MAX_UNDO_STACK_SIZE: usize = 50;
+
+/// A reversible kanban move action for the undo stack.
+#[derive(Debug, Clone)]
+pub struct UndoAction {
+    /// ID of the task that was moved.
+    pub task_id: String,
+    /// Column the task was moved from.
+    pub from_column: String,
+    /// Position index within `from_column` the task was at before the move.
+    pub from_position: usize,
+}
+
 // ─── Top-Level State ──────────────────────────────────────────────────────
 
 /// The single source of truth for all application state.
@@ -1076,6 +1112,9 @@ pub struct AppState {
     pub session_tracker: SessionTracker,
     /// Dirty flags — persistence and render dirty state.
     pub dirty_flags: DirtyFlags,
+    /// Undo stack for reversible kanban move operations.
+    /// Stores previous column + position for the last N moves.
+    pub undo_stack: Vec<UndoAction>,
 }
 
 impl Default for AppState {
@@ -1087,6 +1126,7 @@ impl Default for AppState {
             ui: UIState::default(),
             session_tracker: SessionTracker::default(),
             dirty_flags: DirtyFlags::default(),
+            undo_stack: Vec::new(),
         }
     }
 }

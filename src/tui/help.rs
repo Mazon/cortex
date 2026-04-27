@@ -126,6 +126,14 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Abort running session",
         format_combo(&kb.abort_session)
     );
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Search & Selection");
+    let _ = writeln!(s, " ──────────────────────────────────────");
+    let _ = writeln!(s, "   /              Search / filter tasks");
+    let _ = writeln!(s, "   u              Undo last kanban move");
+    let _ = writeln!(s, "   Shift+V        Visual select (multi-select)");
+    let _ = writeln!(s, "   m / Shift+M    Move selected tasks fwd / back");
+    let _ = writeln!(s, "   Esc            Exit search / visual mode");
 
     let _ = writeln!(s);
     let _ = writeln!(s, " Task Editor Keys");
