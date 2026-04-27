@@ -133,6 +133,13 @@ impl AppState {
                 //    check still catches exact duplicates from concurrent loops).
                 // 3. The set will quickly repopulate with recent events.
                 if session.seen_delta_keys.len() > MAX_SEEN_DELTA_KEYS {
+                    // Full eviction at capacity limit. This trades dedup coverage
+                    // for bounded memory. In practice, the `last_delta_key` +
+                    // `last_delta_content` defense-in-depth checks still catch
+                    // replays for the active stream, so the risk window is limited
+                    // to interleaved subagent events. Proper LRU eviction would
+                    // require an `IndexSet` dependency; given this set repopulates
+                    // quickly with recent events, full clear is acceptable.
                     session.seen_delta_keys.clear();
                     tracing::debug!(
                         "Pruned seen_delta_keys for task session (exceeded {} entries)",
