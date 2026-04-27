@@ -897,6 +897,9 @@ pub struct ProjectRegistry {
     /// When this reaches the circuit breaker threshold, auto-progression
     /// is paused for that project.
     pub circuit_breaker_failures: HashMap<String, u32>,
+    /// Per-project timestamp (epoch seconds) of when the circuit breaker tripped.
+    /// Used for half-open auto-recovery cooldown.
+    pub circuit_breaker_tripped_at: HashMap<String, i64>,
 }
 
 impl ProjectRegistry {
@@ -974,6 +977,7 @@ impl ProjectRegistry {
     /// Record a successful agent start for a project (resets circuit breaker).
     pub fn record_agent_success(&mut self, project_id: &str) {
         self.circuit_breaker_failures.remove(project_id);
+        self.circuit_breaker_tripped_at.remove(project_id);
     }
 
     /// Record a failed agent start for a project.
@@ -981,6 +985,9 @@ impl ProjectRegistry {
     pub fn record_agent_failure(&mut self, project_id: &str, threshold: u32) -> bool {
         let count = self.circuit_breaker_failures.entry(project_id.to_string()).or_insert(0);
         *count += 1;
+        if *count >= threshold {
+            self.circuit_breaker_tripped_at.insert(project_id.to_string(), chrono::Utc::now().timestamp());
+        }
         *count >= threshold
     }
 
@@ -992,9 +999,22 @@ impl ProjectRegistry {
             .unwrap_or(false)
     }
 
+    /// Check if the circuit breaker has cooled down enough for a probe attempt.
+    /// Returns `true` if the breaker is tripped AND the cooldown period has elapsed.
+    pub fn is_circuit_breaker_half_open(&self, project_id: &str, cooldown_secs: i64) -> bool {
+        if !self.circuit_breaker_tripped_at.contains_key(project_id) {
+            return false;
+        }
+        self.circuit_breaker_tripped_at
+            .get(project_id)
+            .map(|&ts| chrono::Utc::now().timestamp() - ts >= cooldown_secs)
+            .unwrap_or(false)
+    }
+
     /// Reset the circuit breaker for a project (manual retry by user).
     pub fn reset_circuit_breaker(&mut self, project_id: &str) {
         self.circuit_breaker_failures.remove(project_id);
+        self.circuit_breaker_tripped_at.remove(project_id);
     }
 }
 

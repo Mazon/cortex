@@ -162,25 +162,38 @@ pub fn on_task_moved(
         if let Some(ref pid) = project_id {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
             if s.project_registry.is_circuit_breaker_tripped(pid, opencode_config.circuit_breaker_threshold) {
-                let failure_count = s.project_registry.circuit_breaker_failures.get(pid).copied().unwrap_or(0);
+                if !s.project_registry.is_circuit_breaker_half_open(pid, opencode_config.circuit_breaker_cooldown_secs) {
+                    // Still in cooldown — skip
+                    let failure_count = s.project_registry.circuit_breaker_failures.get(pid).copied().unwrap_or(0);
+                    drop(s);
+                    tracing::warn!(
+                        task_id = %task_id,
+                        project_id = %pid,
+                        consecutive_failures = failure_count,
+                        threshold = opencode_config.circuit_breaker_threshold,
+                        cooldown_secs = opencode_config.circuit_breaker_cooldown_secs,
+                        "Circuit breaker tripped — skipping agent start (cooldown active)"
+                    );
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!(
+                            "Circuit breaker tripped ({} consecutive failures) — auto-progression paused. Press Ctrl+R to retry.",
+                            failure_count
+                        ),
+                        crate::state::types::NotificationVariant::Error,
+                        8000,
+                    );
+                    return;
+                }
+                // Half-open: allow ONE probe attempt. If it fails,
+                // record_agent_failure will keep the breaker tripped.
+                // If it succeeds, record_agent_success will reset the breaker.
                 drop(s);
-                tracing::warn!(
+                tracing::info!(
                     task_id = %task_id,
                     project_id = %pid,
-                    consecutive_failures = failure_count,
-                    threshold = opencode_config.circuit_breaker_threshold,
-                    "Circuit breaker tripped — skipping agent start"
+                    "Circuit breaker half-open — allowing probe attempt"
                 );
-                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                s.set_notification(
-                    format!(
-                        "Circuit breaker tripped ({} consecutive failures) — auto-progression paused. Press Ctrl+R to retry.",
-                        failure_count
-                    ),
-                    crate::state::types::NotificationVariant::Error,
-                    8000,
-                );
-                return;
             }
         }
 

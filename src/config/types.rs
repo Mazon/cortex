@@ -225,6 +225,10 @@ pub struct OpenCodeConfig {
     /// paused until the user manually retries. Defaults to 3.
     #[serde(default = "default_circuit_breaker_threshold")]
     pub circuit_breaker_threshold: u32,
+    /// Cooldown in seconds before a tripped circuit breaker enters half-open
+    /// state, allowing a single probe attempt. Defaults to 60.
+    #[serde(default = "default_circuit_breaker_cooldown_secs")]
+    pub circuit_breaker_cooldown_secs: i64,
 }
 
 fn default_sse_max_retries() -> u32 {
@@ -244,6 +248,11 @@ fn default_hung_agent_timeout_secs() -> u64 {
 /// Default value for `OpenCodeConfig::circuit_breaker_threshold`.
 fn default_circuit_breaker_threshold() -> u32 {
     3
+}
+
+/// Default value for `OpenCodeConfig::circuit_breaker_cooldown_secs`.
+fn default_circuit_breaker_cooldown_secs() -> i64 {
+    60
 }
 
 fn default_hostname() -> String {
@@ -267,6 +276,7 @@ impl Default for OpenCodeConfig {
             sse_read_timeout_secs: default_sse_read_timeout_secs(),
             hung_agent_timeout_secs: default_hung_agent_timeout_secs(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),
+            circuit_breaker_cooldown_secs: default_circuit_breaker_cooldown_secs(),
         }
     }
 }
