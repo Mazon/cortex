@@ -250,6 +250,7 @@ mod tests {
             sse_read_timeout_secs: 60,
             hung_agent_timeout_secs: 300,
             circuit_breaker_threshold: 3,
+            circuit_breaker_cooldown_secs: 60,
         }
     }
 
