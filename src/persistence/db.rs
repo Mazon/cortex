@@ -133,6 +133,8 @@ impl Db {
                     working_directory: row.get(2)?,
                     status: parse_project_status(&row.get::<_, String>(3)?),
                     position: row.get(4)?,
+                    // Connection state is runtime-only — not persisted
+                    ..Default::default()
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

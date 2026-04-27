@@ -66,17 +66,17 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
     // Check if a persistence save is in progress
     let is_saving = state.saving_in_progress.load(Ordering::Relaxed);
 
-    // Connection status (left) — uses configurable theme colors
-    let (conn_text, conn_color) = if state.permanently_disconnected {
+    // Connection status (left) — uses per-project connection state from the active project
+    let (conn_text, conn_color) = if state.is_permanently_disconnected() {
         ("✕ disconnected (max retries exceeded — restart to retry)".to_string(), theme.error_color())
-    } else if state.reconnecting {
-        let attempt = state.reconnect_attempt;
+    } else if state.is_reconnecting() {
+        let attempt = state.reconnect_attempt();
         if attempt > 0 {
             (format!("◐ reconnecting ({})...", attempt), theme.reconnecting_color())
         } else {
             ("◐ reconnecting...".to_string(), theme.reconnecting_color())
         }
-    } else if state.connected {
+    } else if state.is_connected() {
         ("● connected".to_string(), theme.connected_color())
     } else {
         ("○ disconnected".to_string(), theme.disconnected_color())
@@ -393,7 +393,18 @@ mod tests {
         let mut state = AppState::default();
         state.ui = UIState::default();
         state.kanban = KanbanState::default();
-        state.connected = true;
+        // Add a connected project so status bar shows connected state
+        let project = crate::state::types::CortexProject {
+            id: "proj-1".to_string(),
+            name: "Test".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: crate::state::types::ProjectStatus::Idle,
+            position: 0,
+            connected: true,
+            ..Default::default()
+        };
+        state.projects.push(project);
+        state.active_project_id = Some("proj-1".to_string());
         state
     }
 

@@ -22,12 +22,16 @@ const DEFAULT_SSE_MAX_RETRIES: u32 = 50;
 /// The `shutdown` receiver is watched so the loop can exit cleanly when the
 /// app is shutting down, instead of relying solely on task cancellation via
 /// `abort()`.
+///
+/// `project_id` identifies which project this loop serves. Connection state
+/// is tracked per-project on `CortexProject` rather than globally on `AppState`.
 pub async fn sse_event_loop(
     client: OpenCodeClient,
     state: Arc<Mutex<AppState>>,
     columns_config: ColumnsConfig,
     opencode_config: OpenCodeConfig,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    project_id: String,
 ) {
     let mut backoff_ms: u64 = 2000;
     let mut reconnect_attempt: u32 = 0;
@@ -55,10 +59,7 @@ pub async fn sse_event_loop(
                 // Mark reconnection complete — we have a live stream.
                 {
                     let mut state = state.lock().unwrap();
-                    state.connected = true;
-                    state.reconnecting = false;
-                    state.reconnect_attempt = 0;
-                    state.permanently_disconnected = false;
+                    state.set_project_connected(&project_id, true);
                 }
 
                 loop {
@@ -68,7 +69,7 @@ pub async fn sse_event_loop(
                                 // Stream closed by the server.
                                 {
                                     let mut state = state.lock().unwrap();
-                                    state.reconnecting = true;
+                                    state.set_project_reconnecting(&project_id, true);
                                 }
                                 break;
                             };
@@ -92,7 +93,7 @@ pub async fn sse_event_loop(
                                             tracing::debug!("SSE stream error (reconnecting): {}", msg);
                                             {
                                                 let mut state = state.lock().unwrap();
-                                                state.reconnecting = true;
+                                                state.set_project_reconnecting(&project_id, true);
                                             }
                                             break;
                                         }
@@ -203,7 +204,7 @@ pub async fn sse_event_loop(
                 let _ = e;
                 {
                     let mut state = state.lock().unwrap();
-                    state.reconnecting = true;
+                    state.set_project_reconnecting(&project_id, true);
                 }
             }
         }
@@ -212,10 +213,7 @@ pub async fn sse_event_loop(
         if reconnect_attempt >= max_retries {
             {
                 let mut state = state.lock().unwrap();
-                state.reconnecting = false;
-                state.connected = false;
-                state.permanently_disconnected = true;
-                state.reconnect_attempt = 0;
+                state.set_project_permanently_disconnected(&project_id);
                 state.mark_render_dirty();
             }
             return;
@@ -225,8 +223,8 @@ pub async fn sse_event_loop(
         reconnect_attempt += 1;
         {
             let mut state = state.lock().unwrap();
-            state.reconnecting = true;
-            state.reconnect_attempt = reconnect_attempt;
+            state.set_project_reconnecting(&project_id, true);
+            state.set_project_reconnect_attempt(&project_id, reconnect_attempt);
             state.mark_render_dirty();
         }
         tokio::select! {
@@ -463,6 +461,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+            ..Default::default()
         };
         state.add_project(project);
         state.active_project_id = Some("proj-1".to_string());

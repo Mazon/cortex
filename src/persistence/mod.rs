@@ -224,6 +224,7 @@ mod tests {
             working_directory: "/home/user/cortex".to_string(),
             status: ProjectStatus::Working,
             position: 0,
+            ..Default::default()
         }
     }
 
@@ -313,7 +314,6 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            connected: true,
             active_project_id: Some("proj-1".to_string()),
             task_number_counters: counters.clone(),
             session_to_task: {
@@ -328,9 +328,6 @@ mod tests {
             subagent_sessions: HashMap::new(),
             subagent_to_parent: HashMap::new(),
             subagent_session_data: HashMap::new(),
-            reconnecting: false,
-            reconnect_attempt: 0,
-            permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dirty_tasks: std::collections::HashSet::new(),
@@ -469,7 +466,6 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            connected: false,
             active_project_id: Some("proj-1".to_string()),
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),
@@ -478,9 +474,6 @@ mod tests {
             subagent_sessions: HashMap::new(),
             subagent_to_parent: HashMap::new(),
             subagent_session_data: HashMap::new(),
-            reconnecting: false,
-            reconnect_attempt: 0,
-            permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dirty_tasks: std::collections::HashSet::new(),
@@ -560,7 +553,6 @@ mod tests {
                 kanban_scroll_offset: 0,
             },
             ui: crate::state::types::UIState::default(),
-            connected: false,
             active_project_id: Some("proj-1".to_string()),
             task_number_counters: counters.clone(),
             session_to_task: HashMap::new(),
@@ -569,9 +561,6 @@ mod tests {
             subagent_sessions: HashMap::new(),
             subagent_to_parent: HashMap::new(),
             subagent_session_data: HashMap::new(),
-            reconnecting: false,
-            reconnect_attempt: 0,
-            permanently_disconnected: false,
             dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             render_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dirty_tasks: std::collections::HashSet::new(),

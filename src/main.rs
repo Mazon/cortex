@@ -137,6 +137,7 @@ fn main() -> Result<()> {
                         .unwrap_or_else(|_| ".".to_string()),
                     status: state::types::ProjectStatus::Idle,
                     position: 0,
+                    ..Default::default()
                 };
                 state.add_project(project);
                 state.select_project(&id);
@@ -218,14 +219,24 @@ fn main() -> Result<()> {
             let opencode_config = config.opencode.clone();
             let shutdown_rx = sse_shutdown_rx.clone();
             let handle = tokio::spawn(async move {
-                opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx).await;
+                opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx, pid).await;
             });
             sse_handles.push(handle);
         }
 
-        // Mark as connected if we have at least one client
+        // Mark all projects as connected since we have at least one client
         if !opencode_clients.is_empty() {
-            state.lock().unwrap().connected = true;
+            let project_ids: Vec<String> = state
+                .lock()
+                .unwrap()
+                .projects
+                .iter()
+                .map(|p| p.id.clone())
+                .collect();
+            let mut state = state.lock().unwrap();
+            for pid in &project_ids {
+                state.set_project_connected(pid, true);
+            }
         }
 
         // Drop the loading terminal before creating the App, which

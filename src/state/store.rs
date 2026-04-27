@@ -686,6 +686,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+            ..Default::default()
         };
         state.add_project(project);
         state.active_project_id = Some("proj-1".to_string());
@@ -1376,6 +1377,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let p2 = CortexProject {
             id: "p2".to_string(),
@@ -1383,6 +1385,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 1,
+        ..Default::default()
         };
         state.add_project(p1);
         state.add_project(p2);
@@ -1763,6 +1766,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let task = CortexTask {
             id: "task-1".to_string(),
@@ -1817,6 +1821,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let project2 = CortexProject {
             id: "proj-2".to_string(),
@@ -1824,6 +1829,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 1,
+        ..Default::default()
         };
         let task1 = CortexTask {
             id: "task-1".to_string(),
@@ -1888,6 +1894,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let task = CortexTask {
             id: "task-1".to_string(),
@@ -1932,6 +1939,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let task1 = CortexTask {
             id: "task-1".to_string(),
@@ -1994,6 +2002,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+        ..Default::default()
         };
         let mut counters = HashMap::new();
         counters.insert("proj-1".to_string(), 42u32);
@@ -2023,6 +2032,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 1,
+        ..Default::default()
         };
         state.add_project(p2);
         let p2_task = CortexTask {
@@ -2107,6 +2117,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 1,
+        ..Default::default()
         };
         state.add_project(p2);
 
@@ -3004,6 +3015,7 @@ mod tests {
             working_directory: "/tmp/other".to_string(),
             status: ProjectStatus::Idle,
             position: 1,
+        ..Default::default()
         };
         state.add_project(project2);
 

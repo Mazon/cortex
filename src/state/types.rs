@@ -219,6 +219,39 @@ pub struct CortexProject {
     pub status: ProjectStatus,
     /// Display order position in the sidebar.
     pub position: usize,
+    /// Whether the OpenCode server for this project is connected.
+    /// Runtime-only — not persisted to the database.
+    #[serde(skip)]
+    pub connected: bool,
+    /// Whether an SSE reconnection is in progress for this project.
+    /// Runtime-only — not persisted to the database.
+    #[serde(skip)]
+    pub reconnecting: bool,
+    /// Current reconnection attempt number for this project (0 when not reconnecting).
+    /// Runtime-only — not persisted to the database.
+    #[serde(skip)]
+    pub reconnect_attempt: u32,
+    /// Whether max reconnection retries have been exceeded for this project.
+    /// This is a runtime-only flag (not persisted) — on app restart the
+    /// connection will be retried from scratch.
+    #[serde(skip)]
+    pub permanently_disconnected: bool,
+}
+
+impl Default for CortexProject {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            working_directory: String::new(),
+            status: ProjectStatus::Idle,
+            position: 0,
+            connected: false,
+            reconnecting: false,
+            reconnect_attempt: 0,
+            permanently_disconnected: false,
+        }
+    }
 }
 
 /// Kanban board state — column ordering and task placement.
@@ -835,16 +868,6 @@ pub struct AppState {
     pub kanban: KanbanState,
     /// UI state — current mode, focus, notifications.
     pub ui: UIState,
-    /// Whether at least one OpenCode client is connected.
-    pub connected: bool,
-    /// Whether an SSE reconnection is in progress (exponential backoff).
-    pub reconnecting: bool,
-    /// Current reconnect attempt number (0 when not reconnecting, 1-based during reconnect).
-    pub reconnect_attempt: u32,
-    /// Whether the SSE event loop has given up after exceeding max retries.
-    /// This is a runtime-only flag (not persisted) — on app restart the
-    /// connection will be retried from scratch.
-    pub permanently_disconnected: bool,
     /// ID of the currently active project.
     pub active_project_id: Option<String>,
     /// Per-project auto-incrementing task number counters.
@@ -900,10 +923,6 @@ impl Default for AppState {
             tasks: HashMap::new(),
             kanban: KanbanState::default(),
             ui: UIState::default(),
-            connected: false,
-            reconnecting: false,
-            reconnect_attempt: 0,
-            permanently_disconnected: false,
             active_project_id: None,
             task_number_counters: HashMap::new(),
             session_to_task: HashMap::new(),
@@ -918,6 +937,74 @@ impl Default for AppState {
             deleted_tasks: HashSet::new(),
             deleted_projects: HashSet::new(),
             saving_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
+impl AppState {
+    /// Get connection state for the active project.
+    /// Returns defaults (disconnected, not reconnecting) if no project is active.
+    pub fn connection_state(&self) -> (bool, bool, u32, bool) {
+        self.active_project_id
+            .as_ref()
+            .and_then(|pid| self.projects.iter().find(|p| &p.id == pid))
+            .map(|p| (p.connected, p.reconnecting, p.reconnect_attempt, p.permanently_disconnected))
+            .unwrap_or((false, false, 0, false))
+    }
+
+    /// Whether the active project's server is connected.
+    pub fn is_connected(&self) -> bool {
+        self.connection_state().0
+    }
+
+    /// Whether the active project's server is reconnecting.
+    pub fn is_reconnecting(&self) -> bool {
+        self.connection_state().1
+    }
+
+    /// Reconnection attempt number for the active project.
+    pub fn reconnect_attempt(&self) -> u32 {
+        self.connection_state().2
+    }
+
+    /// Whether the active project has permanently disconnected.
+    pub fn is_permanently_disconnected(&self) -> bool {
+        self.connection_state().3
+    }
+
+    /// Set a project's connection state. No-op if the project doesn't exist.
+    pub fn set_project_connected(&mut self, project_id: &str, connected: bool) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            p.connected = connected;
+            if connected {
+                p.reconnecting = false;
+                p.reconnect_attempt = 0;
+                p.permanently_disconnected = false;
+            }
+        }
+    }
+
+    /// Set a project's reconnecting state. No-op if the project doesn't exist.
+    pub fn set_project_reconnecting(&mut self, project_id: &str, reconnecting: bool) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            p.reconnecting = reconnecting;
+        }
+    }
+
+    /// Set a project's reconnect attempt. No-op if the project doesn't exist.
+    pub fn set_project_reconnect_attempt(&mut self, project_id: &str, attempt: u32) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            p.reconnect_attempt = attempt;
+        }
+    }
+
+    /// Mark a project as permanently disconnected. No-op if the project doesn't exist.
+    pub fn set_project_permanently_disconnected(&mut self, project_id: &str) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.id == project_id) {
+            p.reconnecting = false;
+            p.connected = false;
+            p.permanently_disconnected = true;
+            p.reconnect_attempt = 0;
         }
     }
 }

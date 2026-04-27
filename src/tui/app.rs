@@ -541,6 +541,7 @@ impl App {
                 .unwrap_or_else(|_| ".".to_string()),
             status: crate::state::types::ProjectStatus::Idle,
             position: pos,
+            ..Default::default()
         };
         state.add_project(project);
         state.select_project(&id);

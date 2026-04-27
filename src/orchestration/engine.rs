@@ -372,6 +372,7 @@ mod tests {
             working_directory: "/tmp".to_string(),
             status: ProjectStatus::Idle,
             position: 0,
+            ..Default::default()
         };
         state.add_project(project);
         state.active_project_id = Some("proj-1".to_string());
