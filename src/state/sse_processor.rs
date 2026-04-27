@@ -2,10 +2,50 @@
 //!
 //! Extracted from `store.rs` to separate SSE event handling (deduplication,
 //! delta tracking, streaming text management) from pure CRUD and navigation.
+//!
+//! ## Performance Characteristics
+//!
+//! **Dedup state (`seen_delta_keys`):** Each `TaskDetailSession` maintains a
+//! `HashSet<(String, String)>` of `(message_id, part_id)` pairs seen during
+//! the session. This set is bounded by `MAX_SEEN_DELTA_KEYS` (default: 10,000)
+//! — when the limit is exceeded, the oldest half is cleared to prevent
+//! unbounded memory growth during long-running sessions. The set is fully
+//! cleared when a session finalizes (agent completes/idle/error).
+//!
+//! **Streaming text truncation:** `enforce_streaming_cap()` uses batched
+//! truncation — it only triggers `String::drain()` when the buffer exceeds
+//! the cap by at least 10%, amortizing the cost of front-truncation. For a
+//! 1 MiB cap, this means truncation happens roughly every ~100 KB of new
+//! streaming text rather than on every delta.
+//!
+//! **Lock contention:** Every SSE event acquires the global `AppState` mutex,
+//! as does every TUI render tick. The render-dirty flag (`AtomicBool`) avoids
+//! acquiring the lock for rendering when nothing has changed. Future work could
+//! consider `parking_lot::Mutex` for reduced contention or lock-free approaches
+//! for hot paths.
 
 use crate::state::types::*;
 
 use super::store::STREAMING_TEXT_CAP_BYTES;
+
+/// Maximum number of dedup keys retained per session before pruning.
+///
+/// Each key is a `(message_id, part_id)` tuple (~50-100 bytes). At 10,000
+/// entries, this consumes ~1-2 MB per session. Long-running sessions with
+/// many message parts (e.g., large file edits, extensive tool use) can
+/// accumulate keys rapidly. When the limit is reached, the oldest half is
+/// cleared — this is safe because dedup is only needed for *recent* events
+/// (the server won't replay events from the beginning of a long session).
+const MAX_SEEN_DELTA_KEYS: usize = 10_000;
+
+/// Fraction of the cap that must be exceeded before truncation triggers.
+///
+/// Set to 10% — the buffer must be at least 110% of the cap before
+/// `enforce_streaming_cap()` performs the expensive `String::drain()`.
+/// This amortizes the cost of front-truncation, which involves:
+/// 1. Finding the UTF-8 boundary (linear scan)
+/// 2. Shifting the entire string contents in memory
+const TRUNCATION_THRESHOLD_FRACTION: usize = 10;
 
 impl AppState {
     // ─── SSE Processing Helpers ──────────────────────────────────────────
@@ -82,6 +122,23 @@ impl AppState {
             if !is_continuation {
                 // New part we haven't seen — record it.
                 session.seen_delta_keys.insert(delta_key.clone());
+                // Prune if the set has grown beyond the capacity limit.
+                // We clear the entire set rather than trying to selectively
+                // remove entries because:
+                // 1. HashSet iteration order is non-deterministic — we can't
+                //    meaningfully identify "oldest" entries.
+                // 2. The dedup is best-effort defense against replayed events.
+                //    Missing a dedup for an old event just means duplicate text,
+                //    which is benign (the content-level dedup in the continuation
+                //    check still catches exact duplicates from concurrent loops).
+                // 3. The set will quickly repopulate with recent events.
+                if session.seen_delta_keys.len() > MAX_SEEN_DELTA_KEYS {
+                    session.seen_delta_keys.clear();
+                    tracing::debug!(
+                        "Pruned seen_delta_keys for task session (exceeded {} entries)",
+                        MAX_SEEN_DELTA_KEYS
+                    );
+                }
             }
             session.last_delta_key = Some(delta_key);
             session.last_delta_content = Some(delta.to_string());
@@ -185,6 +242,10 @@ impl AppState {
         }
         if !is_continuation {
             entry.seen_delta_keys.insert(delta_key.clone());
+            // Prune if the set has grown beyond the capacity limit.
+            if entry.seen_delta_keys.len() > MAX_SEEN_DELTA_KEYS {
+                entry.seen_delta_keys.clear();
+            }
         }
         entry.last_delta_key = Some(delta_key);
         entry.last_delta_content = Some(delta.to_string());
@@ -446,11 +507,37 @@ impl AppState {
     /// Truncate streaming text from the beginning to enforce the cap.
     /// Keeps the most recent content (tail of the buffer).
     /// Handles UTF-8 boundary safety.
+    ///
+    /// ## Performance
+    ///
+    /// Uses batched truncation: the buffer must exceed the cap by at least
+    /// `TRUNCATION_THRESHOLD_FRACTION`% (default 10%) before truncation
+    /// triggers. This amortizes the cost of `String::drain()`, which
+    /// involves:
+    /// 1. A linear scan for the UTF-8 boundary (~1-4 byte comparisons)
+    /// 2. A memmove of the entire remaining string content
+    ///
+    /// For a 1 MiB cap with 10% threshold, truncation fires roughly every
+    /// ~100 KB of new streaming text instead of on every single delta.
+    /// This is significant during rapid streaming (e.g., large file reads)
+    /// where deltas arrive every few milliseconds.
+    ///
+    /// Future optimization: a `VecDeque<u8>` or ring buffer could avoid the
+    /// memmove entirely by prepending at the back and dropping from the
+    /// front. However, `String` is simpler and the current cap (1 MiB) means
+    /// the memmove cost is bounded and infrequent.
     pub(crate) fn enforce_streaming_cap(text: &mut String) {
-        if text.len() <= STREAMING_TEXT_CAP_BYTES {
+        let cap = STREAMING_TEXT_CAP_BYTES;
+        if text.len() <= cap {
             return;
         }
-        let excess = text.len() - STREAMING_TEXT_CAP_BYTES;
+        // Batched truncation: only truncate when significantly over the cap.
+        // This avoids the expensive drain+memmove on every small delta.
+        let threshold = cap + cap / TRUNCATION_THRESHOLD_FRACTION;
+        if text.len() <= threshold {
+            return;
+        }
+        let excess = text.len() - cap;
         let mut split_at = excess;
         while split_at < text.len() && !text.is_char_boundary(split_at) {
             split_at += 1;

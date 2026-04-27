@@ -1872,14 +1872,16 @@ mod tests {
         state.tasks.get_mut("task-0").unwrap().session_id = Some(session_id.to_string());
         state.session_tracker.session_to_task.insert(session_id.to_string(), "task-0".to_string());
 
-        // Fill buffer well past the 1MB cap (write 1.1MB of ASCII)
-        let chunk_size = STREAMING_TEXT_CAP_BYTES + 100_000;
+        // Fill buffer well past the truncation threshold (cap + 10% = ~1.15MB).
+        // Write 1.2MB of ASCII in a single delta.
+        let chunk_size = STREAMING_TEXT_CAP_BYTES + STREAMING_TEXT_CAP_BYTES / 5;
         let big_chunk = "x".repeat(chunk_size);
         state.process_message_part_delta(session_id, "msg-1", "part-1", "text", &big_chunk);
 
         let text = state.session_tracker.task_sessions.get("task-0").unwrap().streaming_text.as_ref().unwrap();
 
-        // Should be truncated to at most the cap size
+        // Should be truncated to at most the cap size (plus a small
+        // tolerance for UTF-8 boundary alignment)
         assert!(
             text.len() <= STREAMING_TEXT_CAP_BYTES + 10,
             "Expected <= {}, got {}",
