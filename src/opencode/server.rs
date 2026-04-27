@@ -13,6 +13,11 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_START_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
+/// Timeout for individual health-check HTTP requests.
+/// Short enough to fail fast on unresponsive servers, but generous
+/// enough to tolerate slow startup on resource-constrained machines.
+const HEALTH_CHECK_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Manages the single shared OpenCode server process for all projects.
 ///
 /// Instead of spawning one `opencode serve` per project, this manager
@@ -69,22 +74,19 @@ impl ServerManager {
 }
 
 /// Manages a single OpenCode server process.
+///
+/// Uses `hpx` for health checks (same HTTP client as SSE streaming),
+/// consolidating from 3 HTTP clients (SDK, hpx, reqwest) to 2 (SDK, hpx).
 struct OpenCodeServer {
     process: Option<Child>,
     url: String,
-    http_client: reqwest::Client,
 }
 
 impl OpenCodeServer {
     pub fn new() -> Result<Self> {
-        let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .context("Failed to build HTTP client")?;
         Ok(Self {
             process: None,
             url: String::new(),
-            http_client,
         })
     }
 
@@ -160,6 +162,16 @@ impl OpenCodeServer {
         let health_url = format!("{}/app", self.url);
         let start = tokio::time::Instant::now();
 
+        // Build an hpx client for health checks. We build it fresh each
+        // poll cycle because `hpx::Client` is cheap to construct and
+        // this only runs during server startup (not on the hot path).
+        // Using hpx consolidates the HTTP client footprint — no need
+        // for a separate reqwest dependency just for health checks.
+        let hpx_client = hpx::Client::builder()
+            .timeout(HEALTH_CHECK_REQUEST_TIMEOUT)
+            .build()
+            .context("Failed to build hpx client for health check")?;
+
         loop {
             if let Some(ref mut child) = self.process {
                 if let Ok(Some(status)) = child.try_wait() {
@@ -173,13 +185,15 @@ impl OpenCodeServer {
                 anyhow::bail!("Server did not become healthy within {}s", HEALTH_TIMEOUT.as_secs());
             }
 
-            match self.http_client.get(&health_url).send().await {
+            match hpx_client.get(&health_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     return Ok(());
                 }
                 Ok(_resp) => {
+                    // Server returned a non-success status — not ready yet.
                 }
                 Err(_e) => {
+                    // Connection refused, timeout, etc. — server not ready yet.
                 }
             }
 

@@ -36,13 +36,6 @@ opencode-sdk-rs = "0.2"
 # so we build SSE connections directly for correct long-lived stream handling.
 hpx = "1.4"
 
-# reqwest — used for lightweight HTTP health checks against the OpenCode server.
-# Kept separate from the SDK's hpx client because: (1) hpx is designed for SSE
-# streaming with per-chunk read timeouts and is tightly coupled to the SDK's
-# event pipeline, (2) health checks need only a simple GET with a short timeout,
-# and (3) reqwest's default-features = false keeps this dependency minimal.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
