@@ -36,6 +36,16 @@ pub async fn sse_event_loop(
     let mut backoff_ms: u64 = 2000;
     let mut reconnect_attempt: u32 = 0;
 
+    // Add per-project jitter to avoid thundering herd when a shared server goes
+    // down.  A simple deterministic hash of the project ID produces a stable
+    // 0–500 ms offset so different projects spread their reconnect attempts
+    // evenly without adding a random dependency.
+    let jitter: u64 = (project_id
+        .bytes()
+        .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64)))
+        % 501;
+    backoff_ms += jitter;
+
     // Effective max retries: use config value, but treat 0 as "use default"
     // to avoid accidentally retrying forever.
     let max_retries = if opencode_config.sse_max_retries == 0 {
@@ -52,7 +62,7 @@ pub async fn sse_event_loop(
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
-                backoff_ms = 2000; // Reset backoff on successful connection
+                backoff_ms = 2000 + jitter; // Reset backoff on successful connection
                 reconnect_attempt = 0; // Reset consecutive failure counter on success
                 let mut stream = stream;
 
