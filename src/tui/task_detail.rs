@@ -83,9 +83,18 @@ pub fn render_task_detail(
     // Metadata line: 1 row
     // Breadcrumb: 1 row (only when drilled into subagent)
     // Description block: min 3 rows (border + content)
+    // Subagent summary: 0 or variable rows (only when not drilled in and has subagents)
     // Streaming block: remaining space
     // Permissions/questions: up to 2 rows
     // Footer hints: 1 row
+
+    // Calculate subagent summary rows
+    let subagent_summary_rows: u16 = if !is_drilled {
+        let sub_count = state.get_subagent_sessions(task_id).len();
+        if sub_count > 0 { (sub_count as u16).min(5) } else { 0 }
+    } else {
+        0
+    };
 
     // Reserve footer row
     let footer_height: u16 = 1;
@@ -94,7 +103,7 @@ pub fn render_task_detail(
     // Reserve spacer
     let spacer_height: u16 = 1;
 
-    let used_fixed = metadata_height + breadcrumb_rows + spacer_height + permission_rows + footer_height;
+    let used_fixed = metadata_height + breadcrumb_rows + spacer_height + subagent_summary_rows + permission_rows + footer_height;
     let remaining = inner.height.saturating_sub(used_fixed);
 
     // Description block: min 3 rows (border), max 25% of remaining
@@ -107,6 +116,7 @@ pub fn render_task_detail(
         Constraint::Length(breadcrumb_rows), // Breadcrumb (when drilled)
         Constraint::Length(spacer_height),   // Spacer
         Constraint::Length(desc_height),     // Description block
+        Constraint::Length(subagent_summary_rows), // Subagent summary
         Constraint::Min(0),                  // Streaming block (fills remaining)
         Constraint::Length(permission_rows), // Permissions/questions
         Constraint::Length(footer_height),   // Key hints
@@ -128,43 +138,48 @@ pub fn render_task_detail(
     // ── 3. Description block ─────────────────────────────────────────
     render_description_block(f, v_layout[3], task);
 
-    // ── 4. Streaming output + messages ───────────────────────────────
-    if is_drilled {
-        // Render subagent's output
-        render_subagent_streaming_block(f, v_layout[4], state);
-    } else {
-        // Render parent task's output
-        render_streaming_block(f, v_layout[4], state, task_id);
+    // ── 4. Subagent summary (only when not drilled in and has subagents)
+    if subagent_summary_rows > 0 {
+        render_subagent_summary(f, v_layout[4], state, task_id, theme);
     }
 
-    // ── 5. Pending permissions / questions ───────────────────────────
+    // ── 5. Streaming output + messages ───────────────────────────────
+    if is_drilled {
+        // Render subagent's output
+        render_subagent_streaming_block(f, v_layout[5], state);
+    } else {
+        // Render parent task's output
+        render_streaming_block(f, v_layout[5], state, task_id);
+    }
+
+    // ── 6. Pending permissions / questions ───────────────────────────
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[5], session);
+                    render_permissions(f, v_layout[6], session);
                 }
             }
         } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[5], session);
+            render_permissions(f, v_layout[6], session);
         }
     }
 
-    // ── 6. Footer key hints ──────────────────────────────────────────
+    // ── 7. Footer key hints ──────────────────────────────────────────
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
             .and_then(|sid| state.session_tracker.cached_streaming_lines.get(sid))
-            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
             .unwrap_or(false)
     } else {
         state
             .session_tracker.cached_streaming_lines
             .get(task_id)
-            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
             .unwrap_or(false)
     };
-    render_footer(f, v_layout[6], has_scrollable_output, is_drilled);
+    render_footer(f, v_layout[7], has_scrollable_output, is_drilled);
 }
 
 /// Render the metadata line: status icon, status text, timer, agent name.
@@ -560,6 +575,65 @@ fn build_streaming_lines(session: &TaskDetailSession) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Render a compact summary of subagent sessions for a parent task.
+///
+/// Shows each subagent's agent name, status (active/error/done), and
+/// error message if applicable. Displayed between the description block
+/// and streaming output in the task detail view.
+fn render_subagent_summary(
+    f: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    task_id: &str,
+    theme: &crate::config::types::ThemeConfig,
+) {
+    let subagents = state.get_subagent_sessions(task_id);
+    if subagents.is_empty() {
+        return;
+    }
+
+    let block = Block::default()
+        .borders(Borders::NONE)
+        .title(Span::styled(
+            format!(" Subagents ({}) ", subagents.len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let max_rows = inner.height as usize;
+    let lines: Vec<Line> = subagents
+        .iter()
+        .take(max_rows)
+        .map(|sub| {
+            let (icon, color) = if let Some(ref _err) = sub.error_message {
+                ("✗", theme.error_color())
+            } else if sub.active {
+                ("◐", theme.working_color())
+            } else {
+                ("✓", theme.done_color())
+            };
+            let label = format!("{} {} agent (depth {})", icon, sub.agent_name, sub.depth);
+            let mut spans = vec![Span::styled(label, Style::default().fg(color))];
+            if let Some(ref err) = sub.error_message {
+                let truncated: String = err.chars().take(60).collect();
+                spans.push(Span::styled(
+                    format!(" — {}", truncated),
+                    Style::default().fg(theme.error_color()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, inner);
 }
 
 /// Render the breadcrumb navigation bar when drilled into a subagent.

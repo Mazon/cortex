@@ -508,6 +508,7 @@ impl AppState {
             parent_session_id,
             depth,
             active: true,
+            error_message: None,
         };
 
         // Store under parent task
@@ -528,6 +529,21 @@ impl AppState {
                 for sub in sessions.iter_mut() {
                     if sub.session_id == session_id {
                         sub.active = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Record an error on a subagent session and mark it inactive.
+    pub fn mark_subagent_error(&mut self, session_id: &str, error: &str) {
+        if let Some(parent_task_id) = self.session_tracker.subagent_to_parent.get(session_id).cloned() {
+            if let Some(sessions) = self.session_tracker.subagent_sessions.get_mut(&parent_task_id) {
+                for sub in sessions.iter_mut() {
+                    if sub.session_id == session_id {
+                        sub.active = false;
+                        sub.error_message = Some(error.to_string());
                         break;
                     }
                 }
@@ -3232,5 +3248,46 @@ mod tests {
             AgentStatus::Running,
             "'busy' status should map to AgentStatus::Running"
         );
+    }
+
+    // ── Subagent Error Tracking ───────────────────────────────────────
+
+    #[test]
+    fn mark_subagent_error_records_error_and_deactivates() {
+        let mut state = AppState::default();
+        let sub_session = "sub-session-1";
+
+        state.register_subagent_session("task-0", sub_session, "do");
+
+        // Initially active, no error
+        let subs = state.get_subagent_sessions("task-0");
+        assert_eq!(subs.len(), 1);
+        assert!(subs[0].active);
+        assert!(subs[0].error_message.is_none());
+
+        // Record error
+        state.mark_subagent_error(sub_session, "Provider auth failed");
+
+        let subs = state.get_subagent_sessions("task-0");
+        assert_eq!(subs.len(), 1);
+        assert!(!subs[0].active);
+        assert_eq!(subs[0].error_message.as_deref(), Some("Provider auth failed"));
+    }
+
+    #[test]
+    fn mark_subagent_error_does_not_affect_other_subagents() {
+        let mut state = AppState::default();
+        let sub1 = "sub-session-1";
+        let sub2 = "sub-session-2";
+
+        state.register_subagent_session("task-0", sub1, "do");
+        state.register_subagent_session("task-0", sub2, "explore");
+
+        state.mark_subagent_error(sub1, "Error");
+
+        let subs = state.get_subagent_sessions("task-0");
+        assert_eq!(subs.len(), 2);
+        assert!(!subs.iter().find(|s| s.session_id == sub1).unwrap().active);
+        assert!(subs.iter().find(|s| s.session_id == sub2).unwrap().active);
     }
 }

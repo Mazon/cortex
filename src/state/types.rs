@@ -856,6 +856,8 @@ pub struct SubagentSession {
     pub depth: u32,
     /// Whether the subagent session is still active.
     pub active: bool,
+    /// Error message if the subagent failed, `None` otherwise.
+    pub error_message: Option<String>,
 }
 
 /// A reference to a session in the drill-down navigation stack.

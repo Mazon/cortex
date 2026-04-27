@@ -284,7 +284,21 @@ impl AppState {
 
     /// Handle a `SessionError` SSE event — record the error on the task.
     pub fn process_session_error(&mut self, session_id: &str, error: &str) {
-        if let Some(task_id) = self
+        // Check if this is a subagent session first
+        if let Some(parent_task_id) = self.get_parent_task_for_subagent(session_id).map(|s| s.to_string()) {
+            self.mark_subagent_error(session_id, error);
+            // Also surface on the parent task as a notification
+            let agent_name = self.session_tracker.subagent_sessions
+                .get(&parent_task_id)
+                .and_then(|sessions| sessions.iter().find(|s| s.session_id == session_id))
+                .map(|s| s.agent_name.clone())
+                .unwrap_or_else(|| "subagent".to_string());
+            self.set_notification(
+                format!("{} agent error: {}", agent_name, error.chars().take(80).collect::<String>()),
+                crate::state::types::NotificationVariant::Error,
+                5000,
+            );
+        } else if let Some(task_id) = self
             .get_task_id_by_session(session_id)
             .map(|s| s.to_string())
         {
