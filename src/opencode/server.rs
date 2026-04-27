@@ -162,11 +162,10 @@ impl OpenCodeServer {
         let health_url = format!("{}/app", self.url);
         let start = tokio::time::Instant::now();
 
-        // Build an hpx client for health checks. We build it fresh each
-        // poll cycle because `hpx::Client` is cheap to construct and
-        // this only runs during server startup (not on the hot path).
-        // Using hpx consolidates the HTTP client footprint — no need
-        // for a separate reqwest dependency just for health checks.
+        // Build an hpx client for health checks. Built once and reused for all
+        // poll cycles in the loop below — hpx::Client is cheap to construct but
+        // reusing a single instance is still more efficient. Using hpx consolidates
+        // the HTTP client footprint — no need for a separate reqwest dependency.
         let hpx_client = hpx::Client::builder()
             .timeout(HEALTH_CHECK_REQUEST_TIMEOUT)
             .build()
