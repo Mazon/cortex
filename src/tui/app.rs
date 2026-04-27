@@ -186,6 +186,17 @@ impl App {
             // We hold the Mutex lock for the duration of `terminal.draw()`.
             // This is the standard ratatui pattern — the draw closure is fast
             // (it only builds a frame buffer), so the lock is held briefly.
+            //
+            // Alternative approaches considered:
+            // - Snapshot approach: clone AppState before draw, release lock, then
+            //   draw from snapshot. This reduces contention but adds clone overhead
+            //   (~μs for a typical state) and complexity. Given the draw cycle is
+            //   ~16 ms at 60 fps and the lock is held for <1 ms, the snapshot
+            //   approach is unnecessary.
+            // - Fine-grained locking: separate Mutex per subsystem. Adds
+            //   significant complexity with marginal benefit.
+            //
+            // The current approach is correct and performant for this application.
             let needs_render = self.state.lock().unwrap_or_else(|e| e.into_inner()).take_render_dirty();
             if needs_render {
                 let config = &self.config;
