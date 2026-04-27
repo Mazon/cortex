@@ -1,6 +1,6 @@
 //! Keybinding handler — parse config keybindings, match crossterm events to actions.
 
-use crate::config::types::KeybindingConfig;
+use crate::config::types::{EditorKeybindingConfig, KeybindingConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Actions that can be triggered by keybindings.
@@ -113,6 +113,64 @@ impl KeyMatcher {
             }
         }
         None
+    }
+}
+
+// ─── Editor Key Matcher ───
+
+/// Actions triggered by keybindings in the task editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorKeyAction {
+    /// Save the task and close the editor.
+    Save,
+    /// Cancel editing and discard changes.
+    Cancel,
+    /// Cycle focus between editor fields (e.g. description ↔ column).
+    CycleField,
+    /// Insert a newline in the description field.
+    Newline,
+}
+
+/// Matches crossterm KeyEvents to editor-specific actions based on config.
+pub struct EditorKeyMatcher {
+    bindings: Vec<(KeyEvent, EditorKeyAction)>,
+}
+
+impl EditorKeyMatcher {
+    /// Build an EditorKeyMatcher from the editor keybinding config.
+    pub fn from_config(config: &EditorKeybindingConfig) -> Self {
+        let mut bindings = Vec::new();
+
+        parse_editor_and_add(&mut bindings, &config.save, EditorKeyAction::Save);
+        parse_editor_and_add(&mut bindings, &config.cancel, EditorKeyAction::Cancel);
+        parse_editor_and_add(&mut bindings, &config.cycle_field, EditorKeyAction::CycleField);
+        parse_editor_and_add(&mut bindings, &config.newline, EditorKeyAction::Newline);
+
+        Self { bindings }
+    }
+
+    /// Match a KeyEvent to an EditorKeyAction. Returns None if no match.
+    pub fn match_key(&self, key: KeyEvent) -> Option<EditorKeyAction> {
+        for (binding_key, action) in &self.bindings {
+            if keys_match(binding_key, &key) {
+                return Some(action.clone());
+            }
+        }
+        None
+    }
+}
+
+/// Parse a comma-separated key combo string and add editor bindings.
+fn parse_editor_and_add(
+    bindings: &mut Vec<(KeyEvent, EditorKeyAction)>,
+    combo_str: &str,
+    action: EditorKeyAction,
+) {
+    for combo in combo_str.split(',') {
+        let combo = combo.trim();
+        if let Some(key) = parse_key_combo(combo) {
+            bindings.push((key, action.clone()));
+        }
     }
 }
 
@@ -441,5 +499,118 @@ mod tests {
         assert!(parse_key_combo("end").is_some());
         assert!(parse_key_combo("pageup").is_some());
         assert!(parse_key_combo("pagedown").is_some());
+    }
+
+    // ── Editor Key Matcher ───────────────────────────────────────────
+
+    #[test]
+    fn editor_key_matcher_default_save() {
+        let config = EditorKeybindingConfig::default();
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Save)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Save)
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_default_cancel() {
+        let config = EditorKeybindingConfig::default();
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(EditorKeyAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_default_cycle_field() {
+        let config = EditorKeybindingConfig::default();
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            Some(EditorKeyAction::CycleField)
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_default_newline() {
+        let config = EditorKeybindingConfig::default();
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(EditorKeyAction::Newline)
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_custom_config() {
+        let mut config = EditorKeybindingConfig::default();
+        config.save = "ctrl+w".to_string();
+        config.cancel = "ctrl+g".to_string();
+
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Save)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Cancel)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            None
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_unmatched_returns_none() {
+        let config = EditorKeybindingConfig::default();
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+            None
+        );
+    }
+
+    #[test]
+    fn editor_key_matcher_vim_style_config() {
+        let mut config = EditorKeybindingConfig::default();
+        config.save = "ctrl+s, :w".to_string();
+        config.cancel = "esc, ctrl+c".to_string();
+
+        let matcher = EditorKeyMatcher::from_config(&config);
+
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Save)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(EditorKeyAction::Cancel)
+        );
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            Some(EditorKeyAction::Cancel)
+        );
     }
 }

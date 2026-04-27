@@ -194,6 +194,33 @@ delete_project = "shift+x"            # Delete active project (confirmed)
 # quit = "ctrl+q"                      # Quit the application
 
 
+# ─── Editor Keybindings ────────────────────────────────────────────────────
+# Keybindings for the fullscreen task editor. Standard text-editing keys
+# (arrow keys, backspace, delete, home, end, page up/down) are not
+# configurable — they follow universal conventions.
+#
+# Each value accepts a comma-separated list of key combos; the first
+# matching combo triggers the action.
+
+[keybindings.editor]
+
+# Save the task and close the editor.
+# Default: "ctrl+s, ctrl+enter"
+# save = "ctrl+s, ctrl+enter"
+
+# Cancel editing and discard changes.
+# Default: "esc"
+# cancel = "esc"
+
+# Cycle focus between editor fields (e.g. description ↔ column selector).
+# Default: "tab"
+# cycle_field = "tab"
+
+# Insert a newline in the description field.
+# Default: "enter"
+# newline = "enter"
+
+
 # ─── Theme / Appearance ─────────────────────────────────────────────────────
 # Control the visual layout and colors of the TUI.
 

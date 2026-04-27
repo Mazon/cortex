@@ -5,6 +5,8 @@ use crate::state::types::{AppState, EditorField};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
+use super::help::format_combo;
+
 /// Render the fullscreen task editor.
 pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig) {
     let editor = match &state.ui.task_editor {
@@ -161,14 +163,24 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
 
     // Footer hint (only when no validation error — validation error replaces it)
     if editor.validation_error.is_none() {
+        let ek = &config.keybindings.editor;
         let (footer_text, footer_style) = if editor.discard_warning_shown {
             (
-                "Unsaved changes! Press Esc again to discard or Ctrl+S to save",
+                format!(
+                    "Unsaved changes! Press {} again to discard or {} to save",
+                    format_combo(&ek.cancel),
+                    format_combo(&ek.save),
+                ),
                 Style::default().fg(Color::Yellow),
             )
         } else {
             (
-                "Ctrl+S: save  Esc: cancel  Tab: next field",
+                format!(
+                    "{}: save  {}: cancel  {}: next field",
+                    format_combo(&ek.save),
+                    format_combo(&ek.cancel),
+                    format_combo(&ek.cycle_field),
+                ),
                 Style::default().fg(Color::DarkGray),
             )
         };

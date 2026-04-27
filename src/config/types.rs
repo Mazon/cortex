@@ -298,6 +298,61 @@ pub struct OpenCodeMcpServerConfig {
     pub env: Option<HashMap<String, String>>,
 }
 
+// ─── Editor Keybinding Configuration ───
+
+/// Keybinding definitions for the task editor.
+///
+/// These are the configurable keybindings for actions within the fullscreen
+/// task editor (e.g. save, cancel, cycle fields). Standard text-editing keys
+/// (arrow keys, backspace, delete, home, end, page up/down) are not
+/// configurable since they follow universal conventions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorKeybindingConfig {
+    /// Key combo to save the task and close the editor.
+    /// Default: "ctrl+s, ctrl+enter"
+    #[serde(default = "default_editor_save")]
+    pub save: String,
+    /// Key combo to cancel editing and discard changes.
+    /// Default: "esc"
+    #[serde(default = "default_editor_cancel")]
+    pub cancel: String,
+    /// Key combo to cycle focus between editor fields (e.g. description ↔ column).
+    /// Default: "tab"
+    #[serde(default = "default_editor_cycle_field")]
+    pub cycle_field: String,
+    /// Key combo to insert a newline in the description field.
+    /// Default: "enter"
+    #[serde(default = "default_editor_newline")]
+    pub newline: String,
+}
+
+fn default_editor_save() -> String {
+    "ctrl+s, ctrl+enter".to_string()
+}
+
+fn default_editor_cancel() -> String {
+    "esc".to_string()
+}
+
+fn default_editor_cycle_field() -> String {
+    "tab".to_string()
+}
+
+fn default_editor_newline() -> String {
+    "enter".to_string()
+}
+
+impl Default for EditorKeybindingConfig {
+    fn default() -> Self {
+        Self {
+            save: default_editor_save(),
+            cancel: default_editor_cancel(),
+            cycle_field: default_editor_cycle_field(),
+            newline: default_editor_newline(),
+        }
+    }
+}
+
 // ─── Keybinding Configuration ───
 
 /// Keybinding definitions. Each value is a comma-separated list of key combos.
@@ -353,6 +408,9 @@ pub struct KeybindingConfig {
     pub help_toggle: String,
     #[serde(default = "default_quit")]
     pub quit: String,
+    /// Editor-specific keybindings (task editor mode).
+    #[serde(default)]
+    pub editor: EditorKeybindingConfig,
 }
 
 // Default keybinding values
@@ -463,6 +521,7 @@ impl Default for KeybindingConfig {
             scroll_kanban_right: default_scroll_kanban_right(),
             help_toggle: default_help_toggle(),
             quit: default_quit(),
+            editor: EditorKeybindingConfig::default(),
         }
     }
 }

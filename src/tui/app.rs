@@ -29,6 +29,8 @@ pub struct App {
     pub opencode_clients: HashMap<String, OpenCodeClient>,
     /// Pre-computed key matcher — built once from config, avoids per-keypress allocation.
     key_matcher: crate::tui::keys::KeyMatcher,
+    /// Pre-computed editor key matcher — built once from config, avoids per-keypress allocation.
+    editor_key_matcher: crate::tui::keys::EditorKeyMatcher,
 }
 
 impl App {
@@ -56,6 +58,8 @@ impl App {
         let backend = CrosstermBackend::new(std::io::stdout());
         let terminal = ratatui::Terminal::new(backend)?;
         let key_matcher = crate::tui::keys::KeyMatcher::from_config(&config.keybindings);
+        let editor_key_matcher =
+            crate::tui::keys::EditorKeyMatcher::from_config(&config.keybindings.editor);
 
         Ok(Self {
             state,
@@ -64,6 +68,7 @@ impl App {
             should_quit: false,
             opencode_clients,
             key_matcher,
+            editor_key_matcher,
         })
     }
 
@@ -1355,7 +1360,7 @@ impl App {
         let action = {
             let mut state = self.state.lock().unwrap();
             if let Some(editor) = state.get_task_editor_mut() {
-                handle_editor_input(editor, key)
+                handle_editor_input(editor, key, &self.editor_key_matcher)
             } else {
                 EditorAction::None
             }
