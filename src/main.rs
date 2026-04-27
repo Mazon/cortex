@@ -119,7 +119,7 @@ fn main() -> Result<()> {
 
         // Restore persisted state
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             if let Err(e) = persistence::restore_state(&mut state, &db) {
                 tracing::error!("Failed to restore persisted state: {}", e);
             }
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
 
         // If no projects exist, create a default one
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             if state.project_registry.projects.is_empty() {
                 let id = uuid::Uuid::new_v4().to_string();
                 let project = state::types::CortexProject {
@@ -234,7 +234,7 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|p| p.id.clone())
                 .collect();
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             for pid in &project_ids {
                 state.set_project_connected(pid, true);
             }
@@ -277,7 +277,7 @@ fn main() -> Result<()> {
                     }
                 };
 
-                let mut state = state_for_save.lock().unwrap();
+                let mut state = state_for_save.lock().unwrap_or_else(|e| e.into_inner());
                 if state.take_dirty() {
                     state.dirty_flags.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);
                     if let Err(e) = persistence::save_state(&mut state, &db) {
@@ -318,7 +318,7 @@ fn main() -> Result<()> {
 
         // Force-save state before exit
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             let db_path = persistence::db::default_db_path();
             if let Ok(db) = Db::new(&db_path) {
                 state.dirty_flags.saving_in_progress.store(true, std::sync::atomic::Ordering::Relaxed);

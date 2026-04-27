@@ -149,12 +149,12 @@ pub fn on_task_moved(
     if let Some(agent) = agent {
         // Check circuit breaker before starting agent
         let project_id = {
-            let s = state.lock().unwrap();
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.tasks.get(task_id).map(|t| t.project_id.clone())
         };
 
         if let Some(ref pid) = project_id {
-            let s = state.lock().unwrap();
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             if s.project_registry.is_circuit_breaker_tripped(pid, opencode_config.circuit_breaker_threshold) {
                 let failure_count = s.project_registry.circuit_breaker_failures.get(pid).copied().unwrap_or(0);
                 drop(s);
@@ -165,7 +165,7 @@ pub fn on_task_moved(
                     threshold = opencode_config.circuit_breaker_threshold,
                     "Circuit breaker tripped — skipping agent start"
                 );
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.set_notification(
                     format!(
                         "Circuit breaker tripped ({} consecutive failures) — auto-progression paused. Press Ctrl+R to retry.",
@@ -194,7 +194,7 @@ fn start_agent(
 ) {
     // Log the full dispatch decision for diagnostics
     {
-        let s = state.lock().unwrap();
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
         let session_id = s.tasks.get(task_id).and_then(|t| t.session_id.clone());
         let agent_changed = previous_agent.as_deref() != Some(agent);
         tracing::debug!(
@@ -217,7 +217,7 @@ fn start_agent(
 
     // Check if the agent has a specific model configured
     let agent_model = {
-        let s = state.lock().unwrap();
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.tasks.get(&task_id).map(|_| {
             opencode_config.agents.get(&agent).and_then(|a| a.model.clone())
         }).flatten()
@@ -226,7 +226,7 @@ fn start_agent(
     tokio::spawn(async move {
         // Build prompt from task WHILE holding the lock to prevent stale data
         let (prompt, session_id, task_id_clone) = {
-            let s = state.lock().unwrap();
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             let task = match s.tasks.get(&task_id) {
                 Some(t) => t,
                 None => {
@@ -265,13 +265,13 @@ fn start_agent(
 
                 // Clear the old session mapping and create a new one
                 {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_task_session_id(&task_id_clone, None);
                 }
                 match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
                     Ok(session) => {
                         let sid = session.id.clone();
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_session_id(&task_id_clone, Some(sid.clone()));
                         sid
                     }
@@ -282,7 +282,7 @@ fn start_agent(
                             "Failed to create session after retries: {}",
                             e
                         );
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                         if let Some(ref pid) = project_id {
                             let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
@@ -309,7 +309,7 @@ fn start_agent(
                     let sid = session.id.clone();
                     // Store session ID
                     {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_session_id(&task_id_clone, Some(sid.clone()));
                     }
                     sid
@@ -321,7 +321,7 @@ fn start_agent(
                         "Failed to create session after retries: {}",
                         e
                     );
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                     // Record circuit breaker failure
                     if let Some(ref pid) = project_id {
@@ -366,7 +366,7 @@ fn start_agent(
             Ok(_) => {
                 // Record circuit breaker success (reset consecutive failures)
                 if let Some(ref pid) = project_id {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.project_registry.record_agent_success(pid);
                 }
             }
@@ -378,7 +378,7 @@ fn start_agent(
                     "Failed to send prompt after retries: {}",
                     e
                 );
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.set_task_error(
                     &task_id_clone,
                     format!("Failed to send prompt: {}", e),

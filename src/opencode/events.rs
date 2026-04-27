@@ -58,7 +58,7 @@ pub async fn sse_event_loop(
 
                 // Mark reconnection complete — we have a live stream.
                 {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                     state.set_project_connected(&project_id, true);
                 }
 
@@ -68,7 +68,7 @@ pub async fn sse_event_loop(
                             let Some(event_result) = event_result else {
                                 // Stream closed by the server.
                                 {
-                                    let mut state = state.lock().unwrap();
+                                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                                     state.set_project_reconnecting(&project_id, true);
                                 }
                                 break;
@@ -92,7 +92,7 @@ pub async fn sse_event_loop(
                                             // Connection error — stream is dead, break to reconnect.
                                             tracing::debug!("SSE stream error (reconnecting): {}", msg);
                                             {
-                                                let mut state = state.lock().unwrap();
+                                                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                                                 state.set_project_reconnecting(&project_id, true);
                                             }
                                             break;
@@ -103,7 +103,7 @@ pub async fn sse_event_loop(
                             };
 
                             let (action, finalize_session_id, finalize_task_id) = {
-                                let mut state = state.lock().unwrap();
+                                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                                 let (action, finalize_session_id) =
                                     process_event(&event, &mut state, &client, &columns_config);
                                 // Close the race window: set Running status + agent_type while
@@ -159,7 +159,7 @@ pub async fn sse_event_loop(
                                 // Use finalize_task_id if available (auto-progression may
                                 // have cleared the session→task mapping to prevent stale events).
                                 let task_id = finalize_task_id.or_else(|| {
-                                    let s = state.lock().unwrap();
+                                    let s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.get_task_id_by_session(&session_id)
                                         .map(|tid| tid.to_string())
                                 });
@@ -169,7 +169,7 @@ pub async fn sse_event_loop(
                                     tokio::spawn(async move {
                                         // Check if there's streaming text to finalize
                                         let needs_finalize = {
-                                            let s = state_clone.lock().unwrap();
+                                            let s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
                                             s.session_tracker.task_sessions.get(&task_id)
                                                 .is_some_and(|ts| ts.streaming_text.is_some())
                                         };
@@ -179,7 +179,7 @@ pub async fn sse_event_loop(
 
                                         match client_clone.fetch_session_messages(&session_id).await {
                                             Ok(messages) => {
-                                                let mut s = state_clone.lock().unwrap();
+                                                let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
                                                 s.finalize_session_streaming(&task_id, messages);
                                             }
                                             Err(e) => {
@@ -203,7 +203,7 @@ pub async fn sse_event_loop(
             Err(e) => {
                 let _ = e;
                 {
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                     state.set_project_reconnecting(&project_id, true);
                 }
             }
@@ -212,7 +212,7 @@ pub async fn sse_event_loop(
         // Check if we've exceeded the max retry limit.
         if reconnect_attempt >= max_retries {
             {
-                let mut state = state.lock().unwrap();
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_project_permanently_disconnected(&project_id);
                 state.mark_render_dirty();
             }
@@ -222,7 +222,7 @@ pub async fn sse_event_loop(
         // Exponential backoff with max 30s, but also break on shutdown.
         reconnect_attempt += 1;
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             state.set_project_reconnecting(&project_id, true);
             state.set_project_reconnect_attempt(&project_id, reconnect_attempt);
             state.mark_render_dirty();

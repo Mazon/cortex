@@ -158,7 +158,7 @@ impl App {
 
             // Clear expired notifications (may dirty the render state)
             {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.clear_expired_notifications() {
                     state.mark_render_dirty();
                 }
@@ -167,7 +167,7 @@ impl App {
             // Periodic hung-agent detection
             {
                 let timeout_secs = self.config.opencode.hung_agent_timeout_secs as i64;
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let newly_hung = state.check_hung_agents(timeout_secs);
                 if newly_hung > 0 {
                     state.set_notification(
@@ -186,10 +186,10 @@ impl App {
             // We hold the Mutex lock for the duration of `terminal.draw()`.
             // This is the standard ratatui pattern — the draw closure is fast
             // (it only builds a frame buffer), so the lock is held briefly.
-            let needs_render = self.state.lock().unwrap().take_render_dirty();
+            let needs_render = self.state.lock().unwrap_or_else(|e| e.into_inner()).take_render_dirty();
             if needs_render {
                 let config = &self.config;
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 self.terminal.draw(|f| {
                     let state = &mut *state;
                     match state.ui.mode {
@@ -282,12 +282,12 @@ impl App {
         let can_show_all = visible.len() <= max_visible;
 
         let has_left_indicator = !can_show_all && {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.kanban.kanban_scroll_offset > 0
         };
 
         let scroll_offset = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if can_show_all {
                 0
             } else {
@@ -314,7 +314,7 @@ impl App {
         // or on a task card (row >= 2)
         let is_header_click = mouse.row < 2;
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
         // Always focus the clicked column
         let col_idx = col_index + scroll_offset;
@@ -358,10 +358,10 @@ impl App {
     /// Handle a key event based on current mode.
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
         // Any key press potentially changes state — mark for re-render.
-        self.state.lock().unwrap().mark_render_dirty();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).mark_render_dirty();
 
         let mode = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.mode.clone()
         };
 
@@ -374,7 +374,7 @@ impl App {
             }
             crate::state::types::AppMode::Help => {
                 // Any key dismisses help
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.mode = crate::state::types::AppMode::Normal;
             }
             crate::state::types::AppMode::ProjectRename => {
@@ -405,12 +405,12 @@ impl App {
         // Check if we're in task detail view — Escape pops subagent stack or closes detail
         {
             let is_detail_escape = {
-                let state = self.state.lock().unwrap();
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail && key.code == KeyCode::Esc
             };
             // First lock dropped here
             if is_detail_escape {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 // If drilled into a subagent, pop back one level
                 if state.is_drilled_into_subagent() {
                     state.pop_subagent_drilldown();
@@ -428,11 +428,11 @@ impl App {
             ) && key.modifiers.is_empty()
             {
                 let in_detail = {
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
                 };
                 if in_detail {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     let total_lines = state
                         .ui
                         .viewing_task_id
@@ -492,7 +492,7 @@ impl App {
                     Option<String>,
                     Option<OpenCodeClient>,
                 ) = {
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
@@ -519,7 +519,7 @@ impl App {
                         tokio::spawn(async move {
                             match client.resolve_permission(&session_id, &perm_id, approve).await {
                                 Ok(()) => {
-                                    let mut s = state.lock().unwrap();
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.resolve_permission_request(&tid, &perm_id, approve);
                                     s.mark_render_dirty();
                                 }
@@ -529,7 +529,7 @@ impl App {
                                         perm_id, e
                                     );
                                     // Keep the permission in the pending list so the user can retry
-                                    let mut s = state.lock().unwrap();
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.set_notification(
                                         format!("Failed to resolve permission: {}", e),
                                         crate::state::types::NotificationVariant::Error,
@@ -543,7 +543,7 @@ impl App {
                 } else {
                     // In TaskDetail view with no pending permission — consume y/n
                     // to prevent fallthrough to keybinding dispatch (e.g. n → CreateTask)
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
                         return;
                     }
@@ -561,7 +561,7 @@ impl App {
                     Option<String>,
                     Option<OpenCodeClient>,
                 ) = {
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
@@ -591,7 +591,7 @@ impl App {
                         tokio::spawn(async move {
                             match client.resolve_question(&session_id, &question_id, &answer).await {
                                 Ok(()) => {
-                                    let mut s = state.lock().unwrap();
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.resolve_question_request(&tid, &question_id);
                                     s.set_notification(
                                         format!("Answered: {}", answer_preview),
@@ -605,7 +605,7 @@ impl App {
                                         "Failed to resolve question {}: {}",
                                         question_id, e
                                     );
-                                    let mut s = state.lock().unwrap();
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.set_notification(
                                         format!("Failed to answer question: {}", e),
                                         crate::state::types::NotificationVariant::Error,
@@ -618,7 +618,7 @@ impl App {
                     }
                     return;
                 } else {
-                    let state = self.state.lock().unwrap();
+                    let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
                         if let Some(ref tid) = state.ui.viewing_task_id {
                             if state
@@ -640,7 +640,7 @@ impl App {
         match (key.code, key.modifiers) {
             // '/' — enter search mode
             (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.mode = crate::state::types::AppMode::Search;
                 state.ui.input_text.clear();
                 state.ui.input_cursor = 0;
@@ -648,7 +648,7 @@ impl App {
             }
             // 'u' — undo last kanban move
             (KeyCode::Char('u'), KeyModifiers::NONE) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.undo_last_move() {
                     state.set_notification(
                         "Move undone".to_string(),
@@ -660,7 +660,7 @@ impl App {
             }
             // 'V' — enter visual (multi-select) mode
             (KeyCode::Char('V'), KeyModifiers::SHIFT) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.visual_mode = true;
                 state.ui.selected_tasks.clear();
                 // Set anchor to current focused task
@@ -678,7 +678,7 @@ impl App {
             }
             // Ctrl+R — reset circuit breaker for active project
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let pid = state.project_registry.active_project_id.clone();
                 if let Some(ref pid) = pid {
                     let was_tripped = state.project_registry.is_circuit_breaker_tripped(pid, self.config.opencode.circuit_breaker_threshold);
@@ -740,7 +740,7 @@ impl App {
     }
 
     fn handle_help_toggle(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.ui.mode = crate::state::types::AppMode::Help;
     }
 
@@ -753,7 +753,7 @@ impl App {
     }
 
     fn handle_new_project(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let id = uuid::Uuid::new_v4().to_string();
         let pos = state.project_registry.projects.len();
         let project = crate::state::types::CortexProject {
@@ -776,18 +776,18 @@ impl App {
     }
 
     fn handle_rename_project(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.open_project_rename();
     }
 
     fn handle_set_working_directory(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.open_set_working_directory();
     }
 
     fn handle_delete_project(&mut self) {
         let (project_id, _project_name) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             match state.project_registry.active_project_id.as_ref() {
                 Some(pid) => {
                     let name = state
@@ -802,7 +802,7 @@ impl App {
             }
         };
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match project_id {
             Some(pid) => {
                 state.ui.confirm_action =
@@ -823,7 +823,7 @@ impl App {
     /// Auto-scrolls the kanban view to keep the focused column visible.
     fn handle_nav_column(&mut self, direction: i32) {
         let visible = self.config.columns.visible_column_ids();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let new_idx = state.kanban.focused_column_index as i32 + direction;
         if new_idx >= 0 && (new_idx as usize) < visible.len() {
             state.kanban.focused_column_index = new_idx as usize;
@@ -837,7 +837,7 @@ impl App {
 
     /// Move the focused task up or down by `direction` (-1 or +1).
     fn handle_nav_task(&mut self, direction: i32) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let col_id = state.ui.focused_column.clone();
         let task_count = state
             .kanban
@@ -854,7 +854,7 @@ impl App {
     }
 
     fn handle_create_task(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let col_id = state.ui.focused_column.clone();
         let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
         state.open_task_editor_create(&col_id, available_columns);
@@ -862,10 +862,10 @@ impl App {
 
     fn handle_edit_task(&mut self) {
         let task_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.focused_task_id.clone()
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(id) => {
                 let available_columns: Vec<String> = self.config.columns.visible_column_ids().to_vec();
@@ -883,12 +883,12 @@ impl App {
     fn handle_move_task(&mut self, direction: i32) {
         let visible = self.config.columns.visible_column_ids();
         let (task_id, current_col_idx) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let tid = state.ui.focused_task_id.clone();
             let idx = state.kanban.focused_column_index;
             (tid, idx)
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(tid) => {
                 let target_idx = current_col_idx as i32 + direction;
@@ -979,10 +979,10 @@ impl App {
     /// `direction` is -1 (move up) or +1 (move down).
     fn handle_reorder_task(&mut self, direction: i32) {
         let task_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.focused_task_id.clone()
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(tid) => {
                 let moved = if direction < 0 {
@@ -1017,14 +1017,14 @@ impl App {
 
     fn handle_delete_task(&mut self) {
         let task_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.focused_task_id.clone()
         };
         let project_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.project_registry.active_project_id.clone()
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(tid) => {
                 let deleted_session_id = state.delete_task(&tid);
@@ -1068,10 +1068,10 @@ impl App {
 
     fn handle_view_task(&mut self) {
         let task_id = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.focused_task_id.clone()
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
             Some(tid) => state.open_task_detail(&tid),
             None => state.set_notification(
@@ -1085,7 +1085,7 @@ impl App {
     fn handle_abort_session(&mut self) {
         // Batch read: extract session_id and client in a single lock hold.
         let (session_id, client) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let session_id = state
                 .ui
                 .focused_task_id
@@ -1113,7 +1113,7 @@ impl App {
                         }
                     }
                     // Update notification after attempt
-                    let mut state = state.lock().unwrap();
+                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                     state.set_notification(
                         format!("Session abort requested: {}", sid),
                         crate::state::types::NotificationVariant::Warning,
@@ -1122,7 +1122,7 @@ impl App {
                     state.mark_render_dirty();
                 });
             } else {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_notification(
                     "No client available to abort session".to_string(),
                     crate::state::types::NotificationVariant::Error,
@@ -1130,7 +1130,7 @@ impl App {
                 );
             }
         } else {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.set_notification(
                 "No active session to abort".to_string(),
                 crate::state::types::NotificationVariant::Info,
@@ -1147,7 +1147,7 @@ impl App {
     fn handle_drill_down_subagent(&mut self) {
         // Must be in task detail view
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
                 return;
             }
@@ -1160,7 +1160,7 @@ impl App {
         let (session_id, agent, task_id, depth) = match found {
             Some(f) => f,
             None => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_notification(
                     "No subagent to drill into".to_string(),
                     crate::state::types::NotificationVariant::Info,
@@ -1177,7 +1177,7 @@ impl App {
         tokio::spawn(async move {
             // Check if we already have cached data
             let needs_fetch = {
-                let s = state.lock().unwrap();
+                let s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.session_tracker.subagent_session_data.get(&session_id)
                     .map(|d| d.messages.is_empty())
                     .unwrap_or(true)
@@ -1187,7 +1187,7 @@ impl App {
                 if let Some(client) = client {
                     match client.fetch_subagent_messages(&session_id).await {
                         Ok(messages) => {
-                            let mut s = state.lock().unwrap();
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                             let entry = s
                                 .session_tracker.subagent_session_data
                                 .entry(session_id.clone())
@@ -1199,7 +1199,7 @@ impl App {
                             entry.render_version += 1;
                         }
                         Err(e) => {
-                            let mut s = state.lock().unwrap();
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                             s.set_notification(
                                 format!("Failed to load subagent: {}", e),
                                 crate::state::types::NotificationVariant::Error,
@@ -1209,7 +1209,7 @@ impl App {
                         }
                     }
                 } else {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_notification(
                         "No OpenCode client available".to_string(),
                         crate::state::types::NotificationVariant::Warning,
@@ -1220,7 +1220,7 @@ impl App {
             }
 
             // Push onto navigation stack
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
             // Guard against duplicate push from rapid key presses
             let already_on_stack = s.ui.session_nav_stack
                 .iter()
@@ -1258,7 +1258,7 @@ impl App {
     fn find_drillable_subagent(
         state: &Arc<Mutex<AppState>>,
     ) -> Option<(String, String, String, u32)> {
-        let state = state.lock().unwrap();
+        let state = state.lock().unwrap_or_else(|e| e.into_inner());
 
         let session_id_to_scan = state.get_drilldown_session_id().map(|s| s.to_string());
 
@@ -1320,7 +1320,7 @@ impl App {
             return;
         }
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let current = state.kanban.kanban_scroll_offset as i32;
         let max_offset = (total_cols.saturating_sub(max_visible)) as i32;
         let new_offset = (current + direction).clamp(0, max_offset);
@@ -1338,7 +1338,7 @@ impl App {
             KeyCode::Char('y') => {
                 // Confirm the pending action
                 let action = {
-                    let mut state = self.state.lock().unwrap();
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     state.ui.confirm_action.take()
                 };
                 if let Some(action) = action {
@@ -1347,7 +1347,7 @@ impl App {
                             // Collect active session IDs and project name before removing anything.
                             // We must abort remote sessions BEFORE destroying the client.
                             let (sessions_to_abort, project_name) = {
-                                let state = self.state.lock().unwrap();
+                                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                                 let project_name = state
                                     .project_registry.projects
                                     .iter()
@@ -1377,7 +1377,7 @@ impl App {
                             // Now safe to remove the client
                             self.opencode_clients.remove(&project_id);
 
-                            let mut state = self.state.lock().unwrap();
+                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                             state.remove_project(&project_id);
 
                             // If there are remaining projects, select the first one.
@@ -1407,7 +1407,7 @@ impl App {
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 // Cancel — return to Normal mode
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.confirm_action = None;
                 state.ui.mode = crate::state::types::AppMode::Normal;
             }
@@ -1420,7 +1420,7 @@ impl App {
     /// Switch to the previous/next project by an offset (-1 or +1).
     /// Wraps around at the boundaries.
     fn switch_project_offset(&mut self, direction: i32) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let len = state.project_registry.projects.len();
         if len <= 1 {
             return;
@@ -1449,7 +1449,7 @@ impl App {
 
         match key.code {
             KeyCode::Enter => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 match prompt {
                     InputPrompt::RenameProject => {
                         match state.submit_project_rename() {
@@ -1498,14 +1498,14 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 match prompt {
                     InputPrompt::RenameProject => state.cancel_project_rename(),
                     InputPrompt::WorkingDirectory => state.cancel_working_directory(),
                 }
             }
             KeyCode::Char(c) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let char_count = state.ui.input_text.chars().count();
                 let cursor = state.ui.input_cursor.min(char_count);
                 // Convert char index to byte offset for insertion.
@@ -1519,7 +1519,7 @@ impl App {
                 state.ui.input_cursor = cursor + 1;
             }
             KeyCode::Backspace => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.ui.input_cursor > 0 {
                     let cursor = state.ui.input_cursor;
                     // Find the byte range of the char just before the cursor.
@@ -1533,7 +1533,7 @@ impl App {
                 }
             }
             KeyCode::Delete => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let char_count = state.ui.input_text.chars().count();
                 if state.ui.input_cursor < char_count {
                     let cursor = state.ui.input_cursor;
@@ -1546,21 +1546,21 @@ impl App {
                 }
             }
             KeyCode::Left => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.input_cursor = state.ui.input_cursor.saturating_sub(1);
             }
             KeyCode::Right => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let char_count = state.ui.input_text.chars().count();
                 let new_pos = state.ui.input_cursor + 1;
                 state.ui.input_cursor = new_pos.min(char_count);
             }
             KeyCode::Home => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.input_cursor = 0;
             }
             KeyCode::End => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.input_cursor = state.ui.input_text.chars().count();
             }
             _ => {} // Ignore other keys
@@ -1582,7 +1582,7 @@ impl App {
         use crate::tui::editor_handler::{handle_editor_input, EditorAction};
 
         let action = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(editor) = state.get_task_editor_mut() {
                 handle_editor_input(editor, key, &self.editor_key_matcher)
             } else {
@@ -1592,7 +1592,7 @@ impl App {
 
         match action {
             EditorAction::Save => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 match state.save_task_editor() {
                     Ok(task_id) => {
                         // Extract column ID before closing editor
@@ -1702,7 +1702,7 @@ impl App {
                 }
             }
             EditorAction::Cancel => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.cancel_task_editor();
             }
             EditorAction::None => {}
@@ -1757,7 +1757,7 @@ impl App {
 
     /// Get the OpenCode client for the active project, or `None` if unavailable.
     fn get_active_client(&self) -> Option<OpenCodeClient> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .project_registry.active_project_id
             .as_ref()
@@ -1784,13 +1784,13 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.mode = crate::state::types::AppMode::Normal;
                 state.ui.search_query = None;
                 state.ui.input_text.clear();
             }
             KeyCode::Enter => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.ui.input_text.trim().is_empty() {
                     state.ui.search_query = None;
                 } else {
@@ -1799,7 +1799,7 @@ impl App {
                 state.ui.mode = crate::state::types::AppMode::Normal;
             }
             KeyCode::Backspace => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.ui.input_cursor > 0 {
                     state.ui.input_cursor -= 1;
                     let pos = state.ui.input_cursor;
@@ -1813,7 +1813,7 @@ impl App {
                 };
             }
             KeyCode::Char(c) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let pos = state.ui.input_cursor;
                 state.ui.input_text.insert(pos, c);
                 state.ui.input_cursor += 1;
@@ -1833,7 +1833,7 @@ impl App {
 
         // Escape exits visual mode
         if key.code == KeyCode::Esc {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.visual_mode = false;
             state.ui.selected_tasks.clear();
             state.ui.visual_anchor_task_id = None;
@@ -1880,7 +1880,7 @@ impl App {
 
     /// Move the visual selection in a direction and extend the selection range.
     fn visual_move_selection(&mut self, direction: crate::tui::keys::Action) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
         // First, perform the navigation (same as normal mode)
         match direction {
@@ -1986,7 +1986,7 @@ impl App {
     /// Move all selected tasks forward to the next column.
     fn move_selected_tasks_forward(&mut self) {
         let selected: Vec<String> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.selected_tasks.iter().cloned().collect()
         };
 
@@ -1996,7 +1996,7 @@ impl App {
 
         // Get the next column for the currently focused column
         let (target_col, project_id, client) = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let visible = self.get_visible_column_ids(&state);
             let current_idx = visible
                 .iter()
@@ -2005,7 +2005,7 @@ impl App {
             if current_idx + 1 >= visible.len() {
                 // Already at the last column — can't move forward
                 drop(state);
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_notification(
                     "Already at the last column".to_string(),
                     crate::state::types::NotificationVariant::Warning,
@@ -2021,7 +2021,7 @@ impl App {
 
         // Move all selected tasks
         for task_id in &selected {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
         }
 
@@ -2030,7 +2030,7 @@ impl App {
             if let Some(client) = client {
                 for task_id in &selected {
                     let previous_agent = {
-                        let state = self.state.lock().unwrap();
+                        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                         state.tasks.get(task_id).and_then(|t| t.agent_type.clone())
                     };
                     let task_id = task_id.clone();
@@ -2049,7 +2049,7 @@ impl App {
         }
 
         let count = selected.len();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.set_notification(
             format!("Moved {} task(s) forward", count),
             crate::state::types::NotificationVariant::Success,
@@ -2064,7 +2064,7 @@ impl App {
     /// Move all selected tasks backward to the previous column.
     fn move_selected_tasks_backward(&mut self) {
         let selected: Vec<String> = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.selected_tasks.iter().cloned().collect()
         };
 
@@ -2074,7 +2074,7 @@ impl App {
 
         // Get the previous column
         let target_col = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let visible = self.get_visible_column_ids(&state);
             let current_idx = visible
                 .iter()
@@ -2082,7 +2082,7 @@ impl App {
                 .unwrap_or(0);
             if current_idx == 0 {
                 drop(state);
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_notification(
                     "Already at the first column".to_string(),
                     crate::state::types::NotificationVariant::Warning,
@@ -2095,12 +2095,12 @@ impl App {
 
         // Move all selected tasks
         for task_id in &selected {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
         }
 
         let count = selected.len();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.set_notification(
             format!("Moved {} task(s) backward", count),
             crate::state::types::NotificationVariant::Success,
