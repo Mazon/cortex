@@ -45,6 +45,12 @@ fn is_retryable(error: &anyhow::Error) -> bool {
     for token in msg.split_whitespace() {
         if let Some(code_str) = token.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
             if let Ok(code) = code_str.parse::<u16>() {
+                // Only interpret valid HTTP status codes (100–599).
+                // Skip arbitrary numbers like (42), (999), (0) that may appear
+                // in error messages but are not HTTP status codes.
+                if !(100..=599).contains(&code) {
+                    continue;
+                }
                 // Non-retryable: 4xx client errors (except 429 Too Many Requests)
                 if (400..429).contains(&code) || (430..500).contains(&code) {
                     tracing::debug!(
@@ -647,5 +653,31 @@ mod tests {
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
         assert!(action.is_none());
+    }
+
+    // ── Retry heuristic ───────────────────────────────────────────────────
+
+    #[test]
+    fn retry_heuristic_skips_non_http_codes() {
+        // Error messages containing numbers that are not valid HTTP status codes
+        // should be treated as retryable (fallback to true), not misclassified.
+        let err = anyhow::anyhow!("connection refused on port (42)");
+        assert!(is_retryable(&err), "Non-HTTP code (42) should be retryable");
+
+        let err = anyhow::anyhow!("timeout after (999) attempts");
+        assert!(is_retryable(&err), "Non-HTTP code (999) should be retryable");
+
+        let err = anyhow::anyhow!("error code (0)");
+        assert!(is_retryable(&err), "Non-HTTP code (0) should be retryable");
+
+        // Valid HTTP codes should still work
+        let err = anyhow::anyhow!("request failed (500)");
+        assert!(is_retryable(&err), "HTTP 500 should be retryable");
+
+        let err = anyhow::anyhow!("bad request (400)");
+        assert!(!is_retryable(&err), "HTTP 400 should NOT be retryable");
+
+        let err = anyhow::anyhow!("rate limited (429)");
+        assert!(is_retryable(&err), "HTTP 429 should be retryable");
     }
 }
