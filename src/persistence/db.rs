@@ -13,6 +13,11 @@ pub struct Db {
     pub conn: Connection,
 }
 
+/// Current schema version. Increment this and add a new migration function
+/// in `run_migrations()` when modifying the database schema.
+#[allow(dead_code)]
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 impl Db {
     /// Open a database connection and run migrations.
     pub fn new(path: &Path) -> Result<Self> {
@@ -22,22 +27,8 @@ impl Db {
 
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(MIGRATIONS)?;
-
-        // Migration: add entered_column_at and last_activity_at to existing databases.
-        // These columns exist in the CREATE TABLE above for new databases, but
-        // existing databases need ALTER TABLE. SQLite has no ADD COLUMN IF NOT EXISTS,
-        // so we ignore "duplicate column" errors.
-        for sql in &[
-            "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
-        ] {
-            if let Err(e) = conn.execute(sql, []) {
-                // Ignore "duplicate column name" error (SQLite error code 1, "duplicate column name: ...")
-                if !e.to_string().contains("duplicate column") {
-                    return Err(e.into());
-                }
-            }
-        }
+        conn.execute_batch(BASE_SCHEMA)?;
+        run_migrations(&conn)?;
 
         Ok(Self { conn })
     }
@@ -339,9 +330,20 @@ impl Db {
     }
 }
 
-// ─── Migration SQL ────────────────────────────────────────────────────────
+// ─── Schema & Migrations ──────────────────────────────────────────────────
 
-const MIGRATIONS: &str = r#"
+/// Base schema (version 0). This is the initial set of tables created for
+/// brand-new databases. All subsequent schema changes go through the
+/// version-based migration system in `run_migrations()`.
+///
+/// NOTE: Do NOT add new columns here. Instead, bump `CURRENT_SCHEMA_VERSION`
+/// and add a migration function.
+const BASE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS _meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -366,8 +368,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_id TEXT NOT NULL REFERENCES projects(id),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    entered_column_at INTEGER NOT NULL DEFAULT 0,
-    last_activity_at INTEGER NOT NULL DEFAULT 0
+    entered_column_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS kanban_order (
@@ -382,6 +383,103 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT
 );
 "#;
+
+/// Read the current schema version from the `_meta` table.
+///
+/// Returns 0 if the `_meta` table exists but has no version entry,
+/// or if the database was created before the version-based migration system.
+fn get_schema_version(conn: &Connection) -> Result<u32> {
+    // Check if _meta table exists at all
+    let has_meta: bool = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='_meta'")
+        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)).map(|_| true))
+        .unwrap_or(false);
+
+    if !has_meta {
+        return Ok(0);
+    }
+
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT value FROM _meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+
+    Ok(version.and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+
+/// Write the schema version to the `_meta` table.
+fn set_schema_version(conn: &Connection, version: u32) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?1)",
+        params![version.to_string()],
+    )?;
+    Ok(())
+}
+
+/// Detect the effective version of a pre-migration-system database by
+/// inspecting which columns exist on the `tasks` table.
+///
+/// This provides backward compatibility for databases that were created
+/// before the version-based migration system was introduced.
+fn detect_schema_version(conn: &Connection) -> Result<u32> {
+    // If `last_activity_at` exists on tasks, the DB is at least v1
+    let has_last_activity: bool = conn
+        .prepare("PRAGMA table_info(tasks)")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let columns: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+            Ok(columns.iter().any(|c| c == "last_activity_at"))
+        })
+        .unwrap_or(false);
+
+    if has_last_activity {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Run all pending schema migrations.
+///
+/// Migrations are applied sequentially. Each migration function is
+/// responsible for upgrading the schema from version N to N+1.
+fn run_migrations(conn: &Connection) -> Result<()> {
+    let version = get_schema_version(conn)?;
+
+    // If the DB has no version recorded, it might be a pre-existing database.
+    // Detect its current state and set the version accordingly.
+    if version == 0 {
+        let detected = detect_schema_version(conn)?;
+        if detected > 0 {
+            set_schema_version(conn, detected)?;
+        }
+    }
+
+    let mut current = get_schema_version(conn)?;
+
+    if current < 1 {
+        migrate_v0_to_v1(conn)?;
+        current = 1;
+        set_schema_version(conn, current)?;
+    }
+
+    // Future migrations go here:
+    // if current < 2 { migrate_v1_to_v2(conn)?; current = 2; set_schema_version(conn, current)?; }
+
+    Ok(())
+}
+
+/// Migration v0 → v1: Add `last_activity_at` column to `tasks` table.
+fn migrate_v0_to_v1(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "ALTER TABLE tasks ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0",
+        [],
+    )?;
+    Ok(())
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 

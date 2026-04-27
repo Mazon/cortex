@@ -1,6 +1,6 @@
 //! Help overlay — keybinding reference overlay.
 
-use crate::config::types::KeybindingConfig;
+use crate::config::types::{EditorKeybindingConfig, KeybindingConfig};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
@@ -28,14 +28,14 @@ pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_text = build_help_text(kb);
+    let help_text = build_help_text(kb, &kb.editor);
 
     let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
     f.render_widget(help_para, inner);
 }
 
 /// Build the help text dynamically from the configured keybindings.
-fn build_help_text(kb: &KeybindingConfig) -> String {
+fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String {
     use std::fmt::Write;
 
     let mut s = String::with_capacity(1024);
@@ -128,18 +128,28 @@ fn build_help_text(kb: &KeybindingConfig) -> String {
     );
 
     let _ = writeln!(s);
-    let _ = writeln!(s, " Task Editor Keys (fixed, not configurable)");
+    let _ = writeln!(s, " Task Editor Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
     let _ = writeln!(
         s,
-        "   Tab           Cycle field focus (Title ↔ Description)"
+        "   {:<16} Save task",
+        format_combo(&ek.save)
     );
     let _ = writeln!(
         s,
-        "   Enter         Next field (title) / Newline (description)"
+        "   {:<16} Cancel and discard",
+        format_combo(&ek.cancel)
     );
-    let _ = writeln!(s, "   Ctrl+S        Save task");
-    let _ = writeln!(s, "   Escape        Cancel and discard");
+    let _ = writeln!(
+        s,
+        "   {:<16} Cycle field focus",
+        format_combo(&ek.cycle_field)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Newline (description)",
+        format_combo(&ek.newline)
+    );
     let _ = writeln!(s, "   Arrow keys    Move cursor");
     let _ = writeln!(s, "   Home / End    Line start / end");
     let _ = writeln!(s, "   Page Up/Down  Scroll description");
@@ -155,7 +165,7 @@ fn build_help_text(kb: &KeybindingConfig) -> String {
 
 /// Format a combo string (comma-separated alternatives) for display.
 /// Example: "ctrl+q" → "Ctrl+Q", "h, left" → "H / ←"
-fn format_combo(combo: &str) -> String {
+pub(crate) fn format_combo(combo: &str) -> String {
     let parts: Vec<&str> = combo.split(',').collect();
     let formatted: Vec<String> = parts
         .iter()
@@ -260,7 +270,7 @@ mod tests {
     #[test]
     fn test_build_help_text_default_config() {
         let kb = KeybindingConfig::default();
-        let text = build_help_text(&kb);
+        let text = build_help_text(&kb, &kb.editor);
         assert!(text.contains("Global Keys"));
         assert!(text.contains("Kanban Keys"));
         assert!(text.contains("Task Editor Keys"));
@@ -274,10 +284,14 @@ mod tests {
         let mut kb = KeybindingConfig::default();
         kb.quit = "ctrl+x".to_string();
         kb.kanban_left = "a".to_string();
-        let text = build_help_text(&kb);
+        kb.editor.save = "ctrl+w".to_string();
+        kb.editor.cancel = "ctrl+g".to_string();
+        let text = build_help_text(&kb, &kb.editor);
         assert!(text.contains("Ctrl+X"));
         assert!(text.contains("A"));
         assert!(!text.contains("Ctrl+Q"));
         assert!(!text.contains("H / ←"));
+        assert!(text.contains("Ctrl+W"));
+        assert!(text.contains("Ctrl+G"));
     }
 }
