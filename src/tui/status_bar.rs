@@ -91,7 +91,10 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
                 let task_count = state
                     .tasks
                     .values()
-                    .filter(|t| t.project_id == *pid)
+                    .filter(|t| {
+                        t.project_id == *pid
+                            && matches!(t.agent_status, AgentStatus::Running)
+                    })
                     .count();
                 let label = if task_count == 1 {
                     "1 task".to_string()
@@ -285,9 +288,6 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
         }
         AppMode::Help => {
             groups.push("Esc: close help".to_string());
-        }
-        AppMode::ConfirmDialog => {
-            groups.push("y: confirm  n/Esc: cancel".to_string());
         }
         AppMode::InputPrompt | AppMode::ProjectRename => {
             groups.push("Enter: submit  Esc: cancel".to_string());
@@ -578,15 +578,6 @@ mod tests {
 
         let hints = build_contextual_hints(&state);
         assert_eq!(hints, vec!["Esc: close help"]);
-    }
-
-    #[test]
-    fn confirm_dialog_shows_confirm_cancel() {
-        let mut state = base_state();
-        state.ui.mode = AppMode::ConfirmDialog;
-
-        let hints = build_contextual_hints(&state);
-        assert_eq!(hints, vec!["y: confirm  n/Esc: cancel"]);
     }
 
     #[test]

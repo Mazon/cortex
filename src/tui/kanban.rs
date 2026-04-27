@@ -84,8 +84,6 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             .get(col_id.as_str())
             .map(|v| v.len())
             .unwrap_or(0);
-        let agent_name = config.columns.agent_for_column(col_id);
-
         let header_style = if is_focused {
             Style::default()
                 .fg(Color::Cyan)
@@ -94,22 +92,10 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             Style::default().fg(Color::DarkGray)
         };
 
-        let header_title: Line = if let Some(agent) = &agent_name {
-            let agent_label = if agent.len() > 10 {
-                format!(" {}...", &agent[..9])
-            } else {
-                format!(" {}", agent)
-            };
-            let name_span =
-                Span::styled(format!(" {} ({})", display_name, task_count), header_style);
-            let agent_span = Span::styled(agent_label, Style::default().fg(Color::Yellow));
-            Line::from(vec![name_span, agent_span])
-        } else {
-            Line::from(Span::styled(
-                format!(" {} ({}) ", display_name, task_count),
-                header_style,
-            ))
-        };
+        let header_title: Line = Line::from(Span::styled(
+            format!(" {} ({}) ", display_name, task_count),
+            header_style,
+        ));
 
         let border_style = if is_focused {
             Style::default().fg(Color::Cyan)

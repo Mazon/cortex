@@ -207,9 +207,16 @@ pub fn render_task_card(
             );
         }
 
-        // Line 3 (timer) — show elapsed time since entering current column
+        // Line 3 (timer) — show elapsed time since entering current column.
+        // For terminal states (done, ready, hung, error), freeze the timer at
+        // the point the task finished (last_activity_at) instead of ticking.
         if inner.height >= 3 {
-            let elapsed = format_elapsed_time(task.entered_column_at, now);
+            let timer_end = if task.agent_status.is_terminal() {
+                task.last_activity_at
+            } else {
+                now
+            };
+            let elapsed = format_elapsed_time(task.entered_column_at, timer_end);
             if !elapsed.is_empty() {
                 let timer_spans = vec![
                     Span::styled("⏱ ", Style::default().fg(Color::DarkGray)),

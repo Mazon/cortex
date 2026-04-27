@@ -304,13 +304,19 @@ fn process_event(
                 state.extract_plan_output(&task_id);
 
                 // process_session_idle sets Complete by default — override to Ready
-                // only when the column has auto_progress_to configured, meaning
-                // the agent completed but the task has a next step.
-                // Terminal columns (no auto_progress_to) always stay Complete ("done"),
-                // even if plan_output was set by a previous agent run.
+                // when the column has auto_progress_to configured, meaning the agent
+                // completed but the task has a next step, OR when the task has a
+                // non-empty plan_output (meaning the agent produced a plan but hasn't
+                // acted on it yet). Terminal columns without a plan stay Complete ("done").
                 if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
                     let has_auto_progress = columns_config.auto_progress_for(&col.0).is_some();
-                    if has_auto_progress {
+                    let has_plan = state
+                        .tasks
+                        .get(&task_id)
+                        .and_then(|t| t.plan_output.as_ref())
+                        .map(|p| !p.trim().is_empty())
+                        .unwrap_or(false);
+                    if has_auto_progress || has_plan {
                         state.update_task_agent_status(&task_id, AgentStatus::Ready);
                     }
                 }

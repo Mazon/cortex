@@ -222,11 +222,7 @@ impl App {
                             crate::tui::render_normal(f, state, config);
                             crate::tui::prompt::render_input_prompt(f, state);
                         }
-                        crate::state::types::AppMode::ConfirmDialog => {
-                            crate::tui::render_normal(f, state, config);
-                            crate::tui::prompt::render_confirm_dialog(f, state);
-                        }
-                        crate::state::types::AppMode::Search => {
+crate::state::types::AppMode::Search => {
                             crate::tui::render_normal(f, state, config);
                             crate::tui::kanban::render_search_bar(f, state);
                         }
@@ -394,9 +390,6 @@ impl App {
             crate::state::types::AppMode::InputPrompt => {
                 self.handle_input_prompt_key(key);
             }
-            crate::state::types::AppMode::ConfirmDialog => {
-                self.handle_confirm_dialog_key(key);
-            }
             crate::state::types::AppMode::Search => {
                 self.handle_search_key(key);
             }
@@ -432,11 +425,17 @@ impl App {
                 return;
             }
 
-            // Handle Up/Down arrows and G/g for scrolling output in task detail view
-            if matches!(
+            // Handle Up/Down arrows, j/k, and G/g for scrolling output in task detail view
+            let is_scroll_key = matches!(
                 key.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::Char('G') | KeyCode::Char('g')
-            ) && key.modifiers.is_empty()
+                KeyCode::Up | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('G') | KeyCode::Char('g')
+            );
+            let modifiers_ok = if matches!(key.code, KeyCode::Char('G')) {
+                key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT
+            } else {
+                key.modifiers.is_empty()
+            };
+            if is_scroll_key && modifiers_ok
             {
                 let in_detail = {
                     let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -455,7 +454,7 @@ impl App {
                     let max_offset = total_lines.saturating_sub(1);
 
                     match key.code {
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('k') => {
                             if total_lines > 0 {
                                 let current = state.ui.user_scroll_offset.unwrap_or(0);
                                 let new_offset = current.saturating_sub(1);
@@ -464,7 +463,7 @@ impl App {
                             }
                             return;
                         }
-                        KeyCode::Down => {
+                        KeyCode::Down | KeyCode::Char('j') => {
                             if total_lines > 0 {
                                 let current = state.ui.user_scroll_offset.unwrap_or(max_offset);
                                 let new_offset = (current + 1).min(max_offset);
@@ -797,7 +796,8 @@ impl App {
     }
 
     fn handle_delete_project(&mut self) {
-        let (project_id, _project_name) = {
+        // Collect project ID, name, and session IDs while holding the lock.
+        let (project_id, project_name, sessions_to_abort) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             match state.project_registry.active_project_id.as_ref() {
                 Some(pid) => {
@@ -806,27 +806,64 @@ impl App {
                         .iter()
                         .find(|p| &p.id == pid)
                         .map(|p| p.name.clone())
-                        .unwrap_or_default();
-                    (Some(pid.clone()), name)
+                        .unwrap_or_else(|| pid.clone());
+                    // Gather all session IDs for this project's tasks
+                    let session_ids: Vec<String> = state
+                        .tasks
+                        .values()
+                        .filter(|t| t.project_id == *pid)
+                        .filter_map(|t| t.session_id.clone())
+                        .collect();
+                    (Some(pid.clone()), name, session_ids)
                 }
-                None => (None, String::new()),
+                None => (None, String::new(), Vec::new()),
             }
         };
 
+        let Some(project_id) = project_id else {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "No active project to delete".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                2000,
+            );
+            return;
+        };
+
+        // Abort all active sessions asynchronously using the client
+        // (which we still have at this point).
+        if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+            tokio::spawn(async move {
+                for sid in &sessions_to_abort {
+                    if let Err(_e) = client.abort_session(sid).await {}
+                }
+            });
+        }
+
+        // Now safe to remove the client
+        self.opencode_clients.remove(&project_id);
+
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match project_id {
-            Some(pid) => {
-                state.ui.confirm_action =
-                    Some(crate::state::types::ConfirmableAction::DeleteProject(pid));
-                state.ui.mode = crate::state::types::AppMode::ConfirmDialog;
-            }
-            None => {
-                state.set_notification(
-                    "No active project to delete".to_string(),
-                    crate::state::types::NotificationVariant::Info,
-                    2000,
-                );
-            }
+        state.remove_project(&project_id);
+
+        // If there are remaining projects, select the first one.
+        if let Some(id) = state.project_registry.projects.first().map(|p| p.id.clone()) {
+            state.select_project(&id);
+        }
+
+        state.set_notification(
+            format!("Project \"{}\" deleted", project_name),
+            crate::state::types::NotificationVariant::Info,
+            3000,
+        );
+
+        // If the user just deleted the last project, show a prominent notification.
+        if state.project_registry.projects.is_empty() {
+            state.set_notification(
+                "All projects deleted. Press Ctrl+N to create a new one.".to_string(),
+                crate::state::types::NotificationVariant::Info,
+                10000,
+            );
         }
     }
 
@@ -1336,94 +1373,6 @@ impl App {
         let max_offset = (total_cols.saturating_sub(max_visible)) as i32;
         let new_offset = (current + direction).clamp(0, max_offset);
         state.kanban.kanban_scroll_offset = new_offset as usize;
-    }
-
-    /// Handle key events in ConfirmDialog mode.
-    ///
-    /// `y` confirms the pending action, `n` or `Esc` cancels.
-    fn handle_confirm_dialog_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-        use crate::state::types::ConfirmableAction;
-
-        match key.code {
-            KeyCode::Char('y') => {
-                // Confirm the pending action
-                let action = {
-                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.ui.confirm_action.take()
-                };
-                if let Some(action) = action {
-                    match action {
-                        ConfirmableAction::DeleteProject(project_id) => {
-                            // Collect active session IDs and project name before removing anything.
-                            // We must abort remote sessions BEFORE destroying the client.
-                            let (sessions_to_abort, project_name) = {
-                                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                                let project_name = state
-                                    .project_registry.projects
-                                    .iter()
-                                    .find(|p| p.id == project_id)
-                                    .map(|p| p.name.clone())
-                                    .unwrap_or_else(|| project_id.clone());
-                                // Gather all session IDs for this project's tasks
-                                let session_ids: Vec<String> = state.tasks.values()
-                                    .filter(|t| t.project_id == project_id)
-                                    .filter_map(|t| t.session_id.clone())
-                                    .collect();
-                                (session_ids, project_name)
-                            };
-
-                            // Abort all active sessions asynchronously using the client
-                            // (which we still have at this point).
-                            if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
-                                let sessions = sessions_to_abort;
-                                tokio::spawn(async move {
-                                    for sid in &sessions {
-                                        if let Err(_e) = client.abort_session(sid).await {
-                                        }
-                                    }
-                                });
-                            }
-
-                            // Now safe to remove the client
-                            self.opencode_clients.remove(&project_id);
-
-                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                            state.remove_project(&project_id);
-
-                            // If there are remaining projects, select the first one.
-                            let first_id = state.project_registry.projects.first().map(|p| p.id.clone());
-                            if let Some(id) = first_id {
-                                state.select_project(&id);
-                            }
-
-                            state.set_notification(
-                                format!("Project \"{}\" deleted", project_name),
-                                crate::state::types::NotificationVariant::Info,
-                                3000,
-                            );
-
-                            // If the user just deleted the last project, show a
-                            // prominent notification prompting them to create one.
-                            if state.project_registry.projects.is_empty() {
-                                state.set_notification(
-                                    "All projects deleted. Press Ctrl+N to create a new one.".to_string(),
-                                    crate::state::types::NotificationVariant::Info,
-                                    10000,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            KeyCode::Char('n') | KeyCode::Esc => {
-                // Cancel — return to Normal mode
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.confirm_action = None;
-                state.ui.mode = crate::state::types::AppMode::Normal;
-            }
-            _ => {} // Ignore other keys
-        }
     }
 
     // ── Shared helpers ──

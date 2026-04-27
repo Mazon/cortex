@@ -201,7 +201,7 @@ fn render_metadata_line(
         AgentStatus::Pending => Color::DarkGray,
     };
 
-    let elapsed = format_elapsed_time(task.entered_column_at, now);
+    let elapsed = format_elapsed_time(task.entered_column_at, if task.agent_status.is_terminal() { task.last_activity_at } else { now });
     let agent_name = task.agent_type.as_deref().unwrap_or("none");
 
     // Task number badge
@@ -858,12 +858,12 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
 fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool, is_drilled: bool) {
     let hints = if is_drilled {
         if has_scrollable_output {
-            "Esc: back  Up/Down: scroll  G: bottom  g: top  ctrl+x: drill deeper  y: approve  n: reject"
+            "Esc: back  ↑↓/j/k: scroll  G: bottom  g: top  ctrl+x: drill deeper  y: approve  n: reject"
         } else {
             "Esc: back  ctrl+x: drill deeper  y: approve  n: reject  1-9: answer question"
         }
     } else if has_scrollable_output {
-        "Esc: back  Up/Down: scroll  G: bottom  g: top  ctrl+x: drill into subagent  y: approve  n: reject"
+        "Esc: back  ↑↓/j/k: scroll  G: bottom  g: top  ctrl+x: drill into subagent  y: approve  n: reject"
     } else {
         "Esc: back  ctrl+x: drill into subagent  y: approve  n: reject  1-9: answer question"
     };

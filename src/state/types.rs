@@ -49,6 +49,16 @@ impl AgentStatus {
             AgentStatus::Error => "✗",
         }
     }
+
+    /// Returns `true` if the agent has reached a terminal state and is no
+    /// longer actively working. Tasks in terminal states should have their
+    /// timer frozen rather than continuing to tick.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            AgentStatus::Complete | AgentStatus::Ready | AgentStatus::Hung | AgentStatus::Error
+        )
+    }
 }
 
 impl std::fmt::Display for AgentStatus {
@@ -100,13 +110,6 @@ pub enum ToolState {
     Error,
 }
 
-/// A destructive action awaiting user confirmation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfirmableAction {
-    /// Delete the project with the given ID.
-    DeleteProject(String),
-}
-
 /// Application mode — determines rendering and key routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
@@ -121,8 +124,6 @@ pub enum AppMode {
     Search,
     /// Visual (multi-select) mode — select multiple tasks for bulk actions.
     Visual,
-    /// Confirmation dialog for destructive actions.
-    ConfirmDialog,
 }
 
 /// Which field is focused in the task editor.
@@ -299,8 +300,6 @@ pub struct UIState {
     pub prompt_context: Option<String>,
     /// Task editor state when in `AppMode::TaskEditor`.
     pub task_editor: Option<TaskEditorState>,
-    /// Pending destructive action awaiting confirmation in `AppMode::ConfirmDialog`.
-    pub confirm_action: Option<ConfirmableAction>,
     /// User-controlled scroll offset for the streaming output in task detail view.
     /// `None` means auto-scroll (always show the bottom). `Some(n)` means the
     /// user has manually scrolled and the view is pinned to offset `n`.
@@ -342,7 +341,6 @@ impl Default for UIState {
             prompt_label: String::new(),
             prompt_context: None,
             task_editor: None,
-            confirm_action: None,
             user_scroll_offset: None,
             session_nav_stack: Vec::new(),
             search_query: None,
