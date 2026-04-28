@@ -384,17 +384,6 @@ fn render_metadata_header(
         ));
     }
 
-    // Error indicator
-    if task.agent_status == AgentStatus::Error {
-        row2_spans.push(Span::raw("  "));
-        row2_spans.push(Span::styled(
-            "✗ error",
-            Style::default()
-                .fg(theme.error_color())
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
     let row2_area = Rect::new(area.x, area.y + 1, area.width, 1);
     let para = Paragraph::new(Line::from(row2_spans));
     f.render_widget(para, row2_area);
