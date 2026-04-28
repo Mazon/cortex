@@ -93,9 +93,30 @@ where
             } else {
                 visitor.message
             };
+
+            // Filter out SSE infrastructure warnings — these are handled by
+            // the status bar's connection indicator, not the notification bar.
+            if is_sse_infrastructure_warning(&message) {
+                return;
+            }
+
             self.push_notification(message, NotificationVariant::Warning);
         }
     }
+}
+
+/// Returns true if the message is an SSE infrastructure warning that
+/// should be suppressed from the TUI notification bar. These are
+/// connection lifecycle events shown by the status bar's connection
+/// indicator (● connected / ◐ reconnecting / ✕ disconnected).
+fn is_sse_infrastructure_warning(message: &str) -> bool {
+    message.contains("SSE connection error")
+        || message.contains("SSE connection failed")
+        || message.contains("SSE max retries reached")
+        || message.contains("SSE reconnecting")
+        || message.contains("Skipping malformed SSE event")
+        || message.contains("Failed to fetch session messages for finalization")
+        || message.contains("SSE buffer exceeded")
 }
 
 /// Helper visitor that extracts the "message" field from a tracing event.
