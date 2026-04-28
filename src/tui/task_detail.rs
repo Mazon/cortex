@@ -3,7 +3,6 @@
 //! Features:
 //! - Two-row metadata header with status pill, agent type, column, and timer
 //! - Description block with character count and styled borders
-//! - Plan output section (when available)
 //! - Error display section with red-tinted border
 //! - Subagent summary with bordered block and done count
 //! - Streaming output with message count, tool indicators, and subtle background
@@ -21,7 +20,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 /// Render the task detail panel in the given area.
 ///
 /// Shows task metadata (title, status, timer, agent), description,
-/// plan output, error display, streaming agent output, messages, subagent
+/// error display, streaming agent output, messages, subagent
 /// summary, and pending permissions.
 /// When drilled into a subagent (via ctrl+x), shows the subagent's
 /// output with a breadcrumb navigation bar.
@@ -103,14 +102,7 @@ pub fn render_task_detail(
             .map_or(false, |e| !e.trim().is_empty());
     let error_rows: u16 = if has_error { 4 } else { 0 };
 
-    // Plan section
-    let has_plan = task
-        .plan_output
-        .as_ref()
-        .map_or(false, |p| !p.trim().is_empty());
-
     // Clone data needed after mutable borrow of state (for description editor)
-    let plan_output = task.plan_output.clone();
     let error_message = task.error_message.clone();
 
     // Subagent summary
@@ -136,7 +128,7 @@ pub fn render_task_detail(
     // Permissions: bordered block needs 3 rows
     let permission_rows: u16 = if has_permissions { 3 } else { 0 };
 
-    // Calculate available space for desc + plan + streaming
+    // Calculate available space for desc + streaming
     let fixed_total = metadata_height
         + separator_height
         + breadcrumb_rows
@@ -149,22 +141,6 @@ pub fn render_task_detail(
     // Description: 3-4 rows
     let desc_rows = if available >= 12 { 4u16 } else { 3u16 };
 
-    // Plan: 3-6 rows, but only if there's enough space and plan exists
-    let plan_rows = if has_plan {
-        let after_desc = available.saturating_sub(desc_rows);
-        if after_desc >= 10 {
-            6u16
-        } else if after_desc >= 7 {
-            5u16
-        } else if after_desc >= 5 {
-            4u16
-        } else {
-            3u16
-        }
-    } else {
-        0
-    };
-
     // ── Build layout constraint vector ─────────────────────────────────
     //
     // Fixed indices:
@@ -172,24 +148,22 @@ pub fn render_task_detail(
     //   [1] separator (1 row)
     //   [2] breadcrumb (0 or 1)
     //   [3] description (variable)
-    //   [4] plan (0 or variable)
-    //   [5] error (0 or 4)
-    //   [6] subagent summary (0 or variable)
-    //   [7] streaming (Min(0) — fills remaining)
-    //   [8] permissions (0 or 3)
-    //   [9] footer (1 row)
+    //   [4] error (0 or 4)
+    //   [5] subagent summary (0 or variable)
+    //   [6] streaming (Min(0) — fills remaining)
+    //   [7] permissions (0 or 3)
+    //   [8] footer (1 row)
 
     let v_constraints: Vec<Constraint> = vec![
         Constraint::Length(metadata_height),    // [0] Metadata header
         Constraint::Length(separator_height),   // [1] Separator
         Constraint::Length(breadcrumb_rows),    // [2] Breadcrumb
         Constraint::Length(desc_rows),          // [3] Description
-        Constraint::Length(plan_rows),          // [4] Plan
-        Constraint::Length(error_rows),         // [5] Error
-        Constraint::Length(subagent_block_rows), // [6] Subagent summary
-        Constraint::Min(0),                     // [7] Streaming block
-        Constraint::Length(permission_rows),    // [8] Permissions
-        Constraint::Length(footer_height),      // [9] Footer
+        Constraint::Length(error_rows),         // [4] Error
+        Constraint::Length(subagent_block_rows), // [5] Subagent summary
+        Constraint::Min(0),                     // [6] Streaming block
+        Constraint::Length(permission_rows),    // [7] Permissions
+        Constraint::Length(footer_height),      // [8] Footer
     ];
 
     let v_layout = Layout::default()
@@ -213,60 +187,53 @@ pub fn render_task_detail(
     // 4. Description block (takes task_id to avoid borrow conflict with &mut state)
     render_description_block(f, v_layout[3], task_id, state);
 
-    // 5. Plan section (conditional)
-    if has_plan {
-        if let Some(ref plan) = plan_output {
-            render_plan_section(f, v_layout[4], plan);
-        }
-    }
-
-    // 6. Error section (conditional)
+    // 5. Error section (conditional)
     if has_error {
         if let Some(ref err) = error_message {
-            render_error_section(f, v_layout[5], err);
+            render_error_section(f, v_layout[4], err);
         }
     }
 
-    // 7. Subagent summary (only when not drilled in and has subagents)
+    // 6. Subagent summary (only when not drilled in and has subagents)
     if subagent_count > 0 {
-        render_subagent_summary(f, v_layout[6], state, task_id, theme);
+        render_subagent_summary(f, v_layout[5], state, task_id, theme);
     }
 
-    // 8. Streaming output + messages
+    // 7. Streaming output + messages
     if is_drilled {
-        render_subagent_streaming_block(f, v_layout[7], state, now);
+        render_subagent_streaming_block(f, v_layout[6], state, now);
     } else {
-        render_streaming_block(f, v_layout[7], state, task_id, now);
+        render_streaming_block(f, v_layout[6], state, task_id, now);
     }
 
-    // 9. Pending permissions / questions
+    // 8. Pending permissions / questions
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[8], session);
+                    render_permissions(f, v_layout[7], session);
                 }
             }
         } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[8], session);
+            render_permissions(f, v_layout[7], session);
         }
     }
 
-    // 10. Footer key hints
+    // 9. Footer key hints
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
             .and_then(|sid| state.session_tracker.cached_streaming_lines.get(sid))
-            .map(|(_, lines)| lines.len() > v_layout[7].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[6].height as usize)
             .unwrap_or(false)
     } else {
         state
             .session_tracker.cached_streaming_lines
             .get(task_id)
-            .map(|(_, lines)| lines.len() > v_layout[7].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[6].height as usize)
             .unwrap_or(false)
     };
-    render_footer(f, v_layout[9], has_scrollable_output, is_drilled, editor_is_focused, editor_discard_warning);
+    render_footer(f, v_layout[8], has_scrollable_output, is_drilled, editor_is_focused, editor_discard_warning);
 }
 
 // ─── Section Renderers ────────────────────────────────────────────────────
@@ -308,6 +275,7 @@ fn render_metadata_header(
         AgentStatus::Complete => theme.done_color(),
         AgentStatus::Error => theme.error_color(),
         AgentStatus::Hung => theme.question_color(),
+        AgentStatus::Question => theme.question_color(),
         AgentStatus::Pending => Color::DarkGray,
     };
 
@@ -632,47 +600,6 @@ fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mu
             }
         }
     }
-}
-
-/// Render the plan output section.
-///
-/// Displays the task's plan_output in a bordered block with a styled header.
-fn render_plan_section(f: &mut Frame, area: Rect, plan: &str) {
-    let line_count = plan.lines().count();
-    let header = format!(" Plan ({} lines) ", line_count);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(80, 100, 140)))
-        .title(Span::styled(
-            header,
-            Style::default()
-                .fg(Color::Rgb(120, 160, 220))
-                .add_modifier(Modifier::BOLD),
-        ));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height == 0 {
-        return;
-    }
-
-    // Build plan lines with line numbers
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    for (i, line) in plan.lines().enumerate() {
-        let line_num = format!("{:>2} ", i + 1);
-        lines.push(Line::from(vec![
-            Span::styled(line_num, Style::default().fg(Color::Rgb(70, 74, 90))),
-            Span::styled(line.to_string(), Style::default().fg(Color::Rgb(180, 190, 210))),
-        ]));
-        if lines.len() >= inner.height as usize {
-            break;
-        }
-    }
-
-    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
-    f.render_widget(para, inner);
 }
 
 /// Render the error section with red-tinted border and background.

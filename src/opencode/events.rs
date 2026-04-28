@@ -125,6 +125,12 @@ pub async fn sse_event_loop(
                             // that return 200 but close before delivering data.
                             if !first_event_received {
                                 first_event_received = true;
+                                if was_reconnecting {
+                                    tracing::debug!(
+                                        "SSE reconnected successfully after prior failures; \
+                                         events missed during disconnection may cause stale state"
+                                    );
+                                }
                                 {
                                     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                                     for pid in &project_ids {

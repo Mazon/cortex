@@ -222,13 +222,6 @@ impl App {
                             crate::tui::render_normal(f, state, config);
                             crate::tui::prompt::render_input_prompt(f, state);
                         }
-crate::state::types::AppMode::Search => {
-                            crate::tui::render_normal(f, state, config);
-                            crate::tui::kanban::render_search_bar(f, state);
-                        }
-                        crate::state::types::AppMode::Visual => {
-                            crate::tui::render_normal(f, state, config);
-                        }
                         crate::state::types::AppMode::DiffReview => {
                             crate::tui::diff_view::render_diff_review(f, f.area(), state, &config.theme);
                         }
@@ -392,12 +385,6 @@ crate::state::types::AppMode::Search => {
             }
             crate::state::types::AppMode::InputPrompt => {
                 self.handle_input_prompt_key(key);
-            }
-            crate::state::types::AppMode::Search => {
-                self.handle_search_key(key);
-            }
-            crate::state::types::AppMode::Visual => {
-                self.handle_visual_key(key);
             }
             crate::state::types::AppMode::DiffReview => {
                 self.handle_diff_review_key(key);
@@ -836,6 +823,8 @@ crate::state::types::AppMode::Search => {
                     let answer = question.answers[answer_index].clone();
                     if let Some(client) = client {
                         let state = self.state.clone();
+                        let columns_config = self.config.columns.clone();
+                        let opencode_config = self.config.opencode.clone();
                         let question_id = question.id.clone();
                         let session_id = question.session_id.clone();
                         let answer_preview = answer.chars().take(30).collect::<String>();
@@ -844,6 +833,46 @@ crate::state::types::AppMode::Search => {
                                 Ok(()) => {
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.resolve_question_request(&tid, &question_id);
+
+                                    // Check if the task should transition out of Question status
+                                    let needs_reassess = s.should_reassess_after_question(&tid);
+                                    if needs_reassess {
+                                        // Set back to Complete, then re-apply Ready/Complete logic
+                                        // and auto-progression (same as SessionIdle handler).
+                                        s.update_task_agent_status(&tid, crate::state::types::AgentStatus::Complete);
+                                        if let Some(ref col) = s.tasks.get(&tid).map(|t| t.column.clone()) {
+                                            let has_auto_progress =
+                                                columns_config.auto_progress_for(&col.0).is_some();
+                                            let has_plan = s
+                                                .tasks
+                                                .get(&tid)
+                                                .and_then(|t| t.plan_output.as_ref())
+                                                .map(|p| !p.trim().is_empty())
+                                                .unwrap_or(false);
+                                            if has_auto_progress || has_plan {
+                                                s.update_task_agent_status(&tid, crate::state::types::AgentStatus::Ready);
+                                            }
+                                        }
+                                        let action = crate::orchestration::engine::on_agent_completed(
+                                            &tid, &mut s, &columns_config,
+                                        );
+                                        if let Some(a) = action {
+                                            let col = a.target_column.clone();
+                                            let tid_clone = tid.clone();
+                                            drop(s);
+                                            crate::orchestration::engine::on_task_moved(
+                                                &tid_clone,
+                                                &col,
+                                                &state,
+                                                &client,
+                                                &columns_config,
+                                                &opencode_config,
+                                                None,
+                                            );
+                                        }
+                                    }
+
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.set_notification(
                                         format!("Answered: {}", answer_preview),
                                         crate::state::types::NotificationVariant::Success,
@@ -889,32 +918,6 @@ crate::state::types::AppMode::Search => {
 
         // Handle vim-style keys that bypass the configurable keybinding system
         match (key.code, key.modifiers) {
-            // '/' — enter search mode
-            (KeyCode::Char('/'), KeyModifiers::NONE) => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.mode = crate::state::types::AppMode::Search;
-                state.ui.input_text.clear();
-                state.ui.input_cursor = 0;
-                return;
-            }
-            // 'V' — enter visual (multi-select) mode
-            (KeyCode::Char('V'), KeyModifiers::SHIFT) => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.visual_mode = true;
-                state.ui.selected_tasks.clear();
-                // Set anchor to current focused task
-                let anchor = state.ui.focused_task_id.clone();
-                state.ui.visual_anchor_task_id = anchor.clone();
-                if let Some(ref tid) = anchor {
-                    state.ui.selected_tasks.insert(tid.clone());
-                }
-                state.set_notification(
-                    "Visual mode — use arrows to select, m to move, Esc to exit".to_string(),
-                    crate::state::types::NotificationVariant::Info,
-                    4000,
-                );
-                return;
-            }
             // Ctrl+R — reset circuit breaker for active project
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -957,14 +960,14 @@ crate::state::types::AppMode::Search => {
             Some(Action::NavUp) => self.handle_nav_task(-1),
             Some(Action::NavDown) => self.handle_nav_task(1),
             Some(Action::CreateTask) => self.handle_create_task(),
-            Some(Action::EditTask) => self.handle_edit_task(),
+            Some(Action::OpenTaskDetail) => self.handle_open_task_detail(),
             Some(Action::MoveForward) => self.handle_move_task(1),
             Some(Action::MoveBackward) => self.handle_move_task(-1),
             Some(Action::DeleteTask) => self.handle_delete_task(),
-            Some(Action::ViewTask) => self.handle_view_task(),
             Some(Action::AbortSession) => self.handle_abort_session(),
             Some(Action::RetryTask) => self.handle_retry_task(),
             Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
+            Some(Action::ReviewChanges) => self.handle_review_changes(),
             Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
             Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
             Some(Action::MoveTaskUp) => self.handle_move_task_vertical(-1),
@@ -1137,19 +1140,16 @@ crate::state::types::AppMode::Search => {
         state.open_task_editor_create(&col_id);
     }
 
-    fn handle_edit_task(&mut self) {
+    fn handle_open_task_detail(&mut self) {
         let task_id = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.ui.focused_task_id.clone()
         };
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match task_id {
-            Some(id) => {
-                // Open task detail view (now with inline editing) instead of fullscreen editor
-                state.open_task_detail(&id);
-            }
+            Some(id) => state.open_task_detail(&id),
             None => state.set_notification(
-                "No task selected to edit".to_string(),
+                "No task selected".to_string(),
                 crate::state::types::NotificationVariant::Info,
                 2000,
             ),
@@ -1299,22 +1299,6 @@ crate::state::types::AppMode::Search => {
                     2000,
                 );
             }
-        }
-    }
-
-    fn handle_view_task(&mut self) {
-        let task_id = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.focused_task_id.clone()
-        };
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match task_id {
-            Some(tid) => state.open_task_detail(&tid),
-            None => state.set_notification(
-                "No task selected to view".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                2000,
-            ),
         }
     }
 
@@ -1610,6 +1594,138 @@ crate::state::types::AppMode::Search => {
                 depth,
             };
             s.push_subagent_drilldown(session_ref);
+        });
+    }
+
+    /// Open the diff review view for the focused task.
+    ///
+    /// Runs `git diff HEAD` in the project's working directory, parses the
+    /// output, and switches to `AppMode::DiffReview`.  The git command runs
+    /// on a background thread so the UI stays responsive.
+    fn handle_review_changes(&mut self) {
+        use crate::state::types::{AgentStatus, AppMode, DiffReviewState};
+
+        // Batch-read everything we need while holding the lock once.
+        let (working_dir, task_number) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+
+            let tid = match state.ui.focused_task_id.as_ref() {
+                Some(id) => id.clone(),
+                None => {
+                    drop(state);
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_notification(
+                        "No task selected".to_string(),
+                        crate::state::types::NotificationVariant::Info,
+                        2000,
+                    );
+                    return;
+                }
+            };
+
+            let task = match state.tasks.get(&tid) {
+                Some(t) => t,
+                None => return,
+            };
+
+            // Only allow review for tasks that are done / ready / complete.
+            let is_reviewable = matches!(
+                task.agent_status,
+                AgentStatus::Complete | AgentStatus::Ready
+            );
+            let agent_status_display = task.agent_status.clone();
+            let project_id = task.project_id.clone();
+            let task_number = task.number;
+
+            if !is_reviewable {
+                drop(state);
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.set_notification(
+                    format!(
+                        "Cannot review — task is {:?} (only Ready/Complete tasks can be reviewed)",
+                        agent_status_display
+                    ),
+                    crate::state::types::NotificationVariant::Info,
+                    3000,
+                );
+                return;
+            }
+
+            let project = state
+                .project_registry
+                .projects
+                .iter()
+                .find(|p| p.id == project_id);
+
+            let wd = match project {
+                Some(p) if !p.working_directory.is_empty() => p.working_directory.clone(),
+                _ => {
+                    drop(state);
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_notification(
+                        "No working directory configured for this project".to_string(),
+                        crate::state::types::NotificationVariant::Warning,
+                        3000,
+                    );
+                    return;
+                }
+            };
+
+            (wd, task_number)
+        };
+
+        // Spawn git diff on a blocking thread so we don't freeze the UI.
+        let state = self.state.clone();
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new("git")
+                .args(["diff", "HEAD"])
+                .current_dir(&working_dir)
+                .output();
+
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+
+            match output {
+                Ok(out) if out.status.success() => {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    let files = crate::tui::diff_view::parse_git_diff(&raw);
+
+                    if files.is_empty() && raw.trim().is_empty() {
+                        state.set_notification(
+                            "No uncommitted changes to review".to_string(),
+                            crate::state::types::NotificationVariant::Info,
+                            3000,
+                        );
+                        return;
+                    }
+
+                    state.ui.diff_review = Some(DiffReviewState {
+                        files,
+                        selected_file_index: 0,
+                        scroll_offset: 0,
+                        error: None,
+                        task_number,
+                    });
+                    state.ui.mode = AppMode::DiffReview;
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    state.ui.diff_review = Some(DiffReviewState {
+                        files: Vec::new(),
+                        selected_file_index: 0,
+                        scroll_offset: 0,
+                        error: Some(stderr.to_string()),
+                        task_number,
+                    });
+                    state.ui.mode = AppMode::DiffReview;
+                }
+                Err(e) => {
+                    state.set_notification(
+                        format!("Failed to run git diff: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        3000,
+                    );
+                }
+            }
         });
     }
 
@@ -2108,356 +2224,6 @@ crate::state::types::AppMode::Search => {
         )?;
         crossterm::terminal::disable_raw_mode()?;
         Ok(())
-    }
-
-    // ─── Search Mode ───────────────────────────────────────────────────
-
-    /// Handle key events in Search mode.
-    fn handle_search_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::KeyCode;
-
-        match key.code {
-            KeyCode::Esc => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.mode = crate::state::types::AppMode::Normal;
-                state.set_search_query(None);
-                state.ui.input_text.clear();
-            }
-            KeyCode::Enter => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                let query = if state.ui.input_text.trim().is_empty() {
-                    None
-                } else {
-                    Some(state.ui.input_text.trim().to_string())
-                };
-                state.set_search_query(query);
-                state.ui.mode = crate::state::types::AppMode::Normal;
-            }
-            KeyCode::Backspace => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if state.ui.input_cursor > 0 {
-                    state.ui.input_cursor -= 1;
-                    let pos = state.ui.input_cursor;
-                    state.ui.input_text.remove(pos);
-                }
-                // Live-filter while typing
-                let query = if state.ui.input_text.is_empty() {
-                    None
-                } else {
-                    Some(state.ui.input_text.clone())
-                };
-                state.set_search_query(query);
-            }
-            KeyCode::Char(c) => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                let pos = state.ui.input_cursor;
-                state.ui.input_text.insert(pos, c);
-                state.ui.input_cursor += 1;
-                // Live-filter while typing
-                let query = Some(state.ui.input_text.clone());
-                state.set_search_query(query);
-            }
-            _ => {}
-        }
-    }
-
-    // ─── Visual (Multi-Select) Mode ────────────────────────────────────
-
-    /// Handle key events in Visual (multi-select) mode.
-    fn handle_visual_key(&mut self, key: crossterm::event::KeyEvent) {
-        use crate::tui::keys::Action;
-        use crossterm::event::KeyCode;
-
-        // Escape exits visual mode
-        if key.code == KeyCode::Esc {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.visual_mode = false;
-            state.ui.selected_tasks.clear();
-            state.ui.visual_anchor_task_id = None;
-            return;
-        }
-
-        // 'm' moves all selected tasks forward
-        if key.code == KeyCode::Char('m') && key.modifiers.is_empty() {
-            self.move_selected_tasks_forward();
-            return;
-        }
-
-        // 'M' (shift+m) moves all selected tasks backward
-        if key.code == KeyCode::Char('M') && key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
-            self.move_selected_tasks_backward();
-            return;
-        }
-
-        // Arrow keys and hjkl extend selection
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
-                self.visual_move_selection(crate::tui::keys::Action::NavUp);
-            }
-            KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
-                self.visual_move_selection(crate::tui::keys::Action::NavDown);
-            }
-            KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
-                self.visual_move_selection(crate::tui::keys::Action::NavLeft);
-            }
-            KeyCode::Right | KeyCode::Char('l') if key.modifiers.is_empty() => {
-                self.visual_move_selection(crate::tui::keys::Action::NavRight);
-            }
-            _ => {
-                // Let configured keybindings handle other keys (quit, help, etc.)
-                let action = self.key_matcher.match_key(key);
-                match action {
-                    Some(Action::Quit) => self.handle_quit(),
-                    Some(Action::HelpToggle) => self.handle_help_toggle(),
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    /// Move the visual selection in a direction and extend the selection range.
-    fn visual_move_selection(&mut self, direction: crate::tui::keys::Action) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-
-        // First, perform the navigation (same as normal mode)
-        match direction {
-            crate::tui::keys::Action::NavLeft => {
-                let visible = self.get_visible_column_ids(&state);
-                let current_idx = visible
-                    .iter()
-                    .position(|c| c == &state.ui.focused_column)
-                    .unwrap_or(0);
-                if current_idx > 0 {
-                    let new_col = visible[current_idx - 1].clone();
-                    state.set_focused_column(&new_col);
-                    update_focused_task_id(&mut state, &new_col);
-                    state.kanban.focused_column_index = current_idx - 1;
-                    Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
-                }
-            }
-            crate::tui::keys::Action::NavRight => {
-                let visible = self.get_visible_column_ids(&state);
-                let current_idx = visible
-                    .iter()
-                    .position(|c| c == &state.ui.focused_column)
-                    .unwrap_or(0);
-                if current_idx + 1 < visible.len() {
-                    let new_col = visible[current_idx + 1].clone();
-                    state.set_focused_column(&new_col);
-                    update_focused_task_id(&mut state, &new_col);
-                    state.kanban.focused_column_index = current_idx + 1;
-                    Self::ensure_column_visible(&mut state, &self.config, &self.terminal);
-                }
-            }
-            crate::tui::keys::Action::NavUp => {
-                let col_id = state.ui.focused_column.clone();
-                let idx = state
-                    .kanban
-                    .focused_task_index
-                    .get(&col_id)
-                    .copied()
-                    .unwrap_or(0);
-                if idx > 0 {
-                    state.kanban.focused_task_index.insert(col_id.clone(), idx - 1);
-                    update_focused_task_id(&mut state, &col_id);
-                }
-            }
-            crate::tui::keys::Action::NavDown => {
-                let col_id = state.ui.focused_column.clone();
-                let max = state
-                    .kanban
-                    .columns
-                    .get(&col_id)
-                    .map(|t| t.len().saturating_sub(1))
-                    .unwrap_or(0);
-                let idx = state
-                    .kanban
-                    .focused_task_index
-                    .get(&col_id)
-                    .copied()
-                    .unwrap_or(0);
-                if idx < max {
-                    state.kanban.focused_task_index.insert(col_id.clone(), idx + 1);
-                    update_focused_task_id(&mut state, &col_id);
-                }
-            }
-            _ => {}
-        }
-
-        // Extend selection from anchor to current focused task
-        state.ui.selected_tasks.clear();
-        let anchor = state.ui.visual_anchor_task_id.clone();
-        let focused = state.ui.focused_task_id.clone();
-        if let (Some(ref anchor_id), Some(ref focused_id)) = (anchor.as_ref(), focused.as_ref()) {
-            state.ui.selected_tasks.insert((*anchor_id).clone());
-            if focused_id != anchor_id {
-                state.ui.selected_tasks.insert((*focused_id).clone());
-            }
-            // If anchor and focused are in the same column, select all tasks between them
-            let between: Vec<String> = match state.kanban.columns.get(&state.ui.focused_column) {
-                Some(col_tasks) => {
-                    if let (Some(anchor_pos), Some(focused_pos)) =
-                        (col_tasks.iter().position(|id| id == *anchor_id),
-                         col_tasks.iter().position(|id| id == *focused_id))
-                    {
-                        let (start, end) = if anchor_pos <= focused_pos {
-                            (anchor_pos, focused_pos)
-                        } else {
-                            (focused_pos, anchor_pos)
-                        };
-                        (start..=end)
-                            .filter_map(|i| col_tasks.get(i).cloned())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                }
-                None => Vec::new(),
-            };
-            for id in between {
-                state.ui.selected_tasks.insert(id);
-            }
-        }
-    }
-
-    /// Move all selected tasks forward to the next column.
-    fn move_selected_tasks_forward(&mut self) {
-        let selected: Vec<String> = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.selected_tasks.iter().cloned().collect()
-        };
-
-        if selected.is_empty() {
-            return;
-        }
-
-        // Get the next column for the currently focused column
-        let (target_col, project_id, client) = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let visible = self.get_visible_column_ids(&state);
-            let current_idx = visible
-                .iter()
-                .position(|c| c == &state.ui.focused_column)
-                .unwrap_or(0);
-            if current_idx + 1 >= visible.len() {
-                // Already at the last column — can't move forward
-                drop(state);
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.set_notification(
-                    "Already at the last column".to_string(),
-                    crate::state::types::NotificationVariant::Warning,
-                    2000,
-                );
-                return;
-            }
-            let target = visible[current_idx + 1].clone();
-            let pid = state.project_registry.active_project_id.clone();
-            let cli = pid.as_ref().and_then(|p| self.opencode_clients.get(p).cloned());
-            (target, pid, cli)
-        };
-
-        // Move all selected tasks
-        for task_id in &selected {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
-        }
-
-        // Trigger orchestration for each moved task
-        if let Some(_pid) = project_id {
-            if let Some(client) = client {
-                for task_id in &selected {
-                    let previous_agent = {
-                        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.tasks.get(task_id).and_then(|t| t.agent_type.clone())
-                    };
-                    let task_id = task_id.clone();
-                    let target_col = target_col.clone();
-                    crate::orchestration::engine::on_task_moved(
-                        &task_id,
-                        &crate::state::types::KanbanColumn(target_col),
-                        &self.state,
-                        &client,
-                        &self.config.columns,
-                        &self.config.opencode,
-                        previous_agent,
-                    );
-                }
-            }
-        }
-
-        let count = selected.len();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.set_notification(
-            format!("Moved {} task(s) forward", count),
-            crate::state::types::NotificationVariant::Success,
-            2000,
-        );
-        // Exit visual mode after bulk move
-        state.ui.visual_mode = false;
-        state.ui.selected_tasks.clear();
-        state.ui.visual_anchor_task_id = None;
-    }
-
-    /// Move all selected tasks backward to the previous column.
-    fn move_selected_tasks_backward(&mut self) {
-        let selected: Vec<String> = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.selected_tasks.iter().cloned().collect()
-        };
-
-        if selected.is_empty() {
-            return;
-        }
-
-        // Get the previous column
-        let target_col = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let visible = self.get_visible_column_ids(&state);
-            let current_idx = visible
-                .iter()
-                .position(|c| c == &state.ui.focused_column)
-                .unwrap_or(0);
-            if current_idx == 0 {
-                drop(state);
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.set_notification(
-                    "Already at the first column".to_string(),
-                    crate::state::types::NotificationVariant::Warning,
-                    2000,
-                );
-                return;
-            }
-            visible[current_idx - 1].clone()
-        };
-
-        // Move all selected tasks
-        for task_id in &selected {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.move_task(task_id, crate::state::types::KanbanColumn(target_col.clone()));
-        }
-
-        let count = selected.len();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.set_notification(
-            format!("Moved {} task(s) backward", count),
-            crate::state::types::NotificationVariant::Success,
-            2000,
-        );
-        state.ui.visual_mode = false;
-        state.ui.selected_tasks.clear();
-        state.ui.visual_anchor_task_id = None;
-    }
-
-    /// Get visible column IDs considering the scroll offset and max visible columns.
-    fn get_visible_column_ids(&self, state: &AppState) -> Vec<String> {
-        let all = self.config.columns.visible_column_ids();
-        let max_visible = Self::max_visible_columns(&self.config, &self.terminal);
-        let offset = state.kanban.kanban_scroll_offset;
-        all.iter()
-            .skip(offset)
-            .take(max_visible)
-            .cloned()
-            .collect()
     }
 }
 

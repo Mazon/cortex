@@ -302,7 +302,27 @@ impl AppState {
         {
             let agent_status = match status {
                 "running" | "busy" => AgentStatus::Running,
-                "complete" | "completed" => AgentStatus::Complete,
+                "complete" | "completed" => {
+                    // Guard: if the task's current session_id no longer matches
+                    // the incoming session_id, auto-progression has already
+                    // reassigned this task to a new agent session.  Ignore the
+                    // stale "complete" so we don't overwrite Running → Complete.
+                    let session_mismatch = self
+                        .tasks
+                        .get(&task_id)
+                        .and_then(|t| t.session_id.as_ref())
+                        .map(|sid| sid != session_id)
+                        .unwrap_or(false);
+                    if session_mismatch {
+                        tracing::debug!(
+                            task_id = %task_id,
+                            session_id = %session_id,
+                            "Ignoring stale SessionStatus 'complete' — task has a different session (auto-progressed)"
+                        );
+                        return;
+                    }
+                    AgentStatus::Complete
+                }
                 "idle" => {
                     // Don't update status — SessionIdle event handles this
                     // with proper Ready/Complete logic. A SessionStatus "idle"

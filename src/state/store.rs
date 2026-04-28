@@ -186,28 +186,6 @@ impl AppState {
         true
     }
 
-    /// Set the search query and its pre-lowercased cache atomically.
-    /// Use this instead of assigning `search_query` directly to ensure
-    /// `search_query_lower` stays in sync.
-    pub fn set_search_query(&mut self, query: Option<String>) {
-        self.ui.search_query_lower = query.as_ref().map(|q| q.to_lowercase());
-        self.ui.search_query = query;
-    }
-
-    /// Check if a task matches the current search filter.
-    /// Returns `true` if there is no active search, or if the task's title
-    /// or description contains the search query (case-insensitive).
-    pub fn task_matches_search(&self, task: &CortexTask) -> bool {
-        match &self.ui.search_query_lower {
-            None => true,
-            Some(query) if query.is_empty() => true,
-            Some(query_lower) => {
-                task.title.to_lowercase().contains(query_lower)
-                    || task.description.to_lowercase().contains(query_lower)
-            }
-        }
-    }
-
     /// Delete a task by ID. Removes it from the kanban board and session index.
     /// Returns `Some(session_id)` if the deleted task had an active session
     /// (caller should abort it asynchronously), `None` if no session or task not found.
@@ -3212,6 +3190,77 @@ mod tests {
             state.tasks.get("task-0").unwrap().agent_status,
             AgentStatus::Running,
             "'busy' status should map to AgentStatus::Running"
+        );
+    }
+
+    #[test]
+    fn process_session_status_complete_does_not_overwrite_after_session_reassigned() {
+        // Simulates the race where auto-progression has already moved the task
+        // to a new column, reassigned it a NEW session, and started the review
+        // agent. Then a stale SessionStatus "complete" arrives for the OLD
+        // session. The guard checks session_id mismatch.
+        let mut state = make_state_with_tasks();
+        let old_session_id = "session-old";
+        let new_session_id = "session-new-review";
+
+        // Set up task as if auto-progression already happened:
+        // task has a NEW session_id (the old mapping was cleared and re-created
+        // for the new session), but the OLD session mapping still exists in
+        // session_to_task (simulating a race where the old mapping wasn't
+        // cleared before the stale event arrived).
+        state.tasks.get_mut("task-0").unwrap().session_id =
+            Some(new_session_id.to_string());
+        state.tasks.get_mut("task-0").unwrap().agent_status =
+            AgentStatus::Running;
+        state.tasks.get_mut("task-0").unwrap().column =
+            KanbanColumn("review".to_string());
+        // The stale old session still maps to this task (race condition)
+        state
+            .session_tracker
+            .session_to_task
+            .insert(old_session_id.to_string(), "task-0".to_string());
+        state
+            .kanban
+            .columns
+            .entry("review".to_string())
+            .or_default()
+            .push("task-0".to_string());
+
+        // Stale SessionStatus "complete" arrives for the OLD session
+        state.process_session_status(old_session_id, "complete");
+
+        // Status should remain Running, not be overwritten to Complete
+        assert_eq!(
+            state.tasks.get("task-0").unwrap().agent_status,
+            AgentStatus::Running,
+            "stale SessionStatus 'complete' should not overwrite Running when session was reassigned"
+        );
+    }
+
+    #[test]
+    fn process_session_status_complete_still_sets_complete_when_session_matches() {
+        // Normal case: the task's session_id matches the incoming event,
+        // so "complete" should still apply (the agent actually finished).
+        let mut state = make_state_with_tasks();
+        let session_id = "session-complete-normal";
+        state
+            .tasks
+            .get_mut("task-0")
+            .unwrap()
+            .session_id = Some(session_id.to_string());
+        state.tasks.get_mut("task-0").unwrap().agent_status =
+            AgentStatus::Running;
+        state
+            .session_tracker
+            .session_to_task
+            .insert(session_id.to_string(), "task-0".to_string());
+
+        state.process_session_status(session_id, "complete");
+
+        assert_eq!(
+            state.tasks.get("task-0").unwrap().agent_status,
+            AgentStatus::Complete,
+            "'complete' should apply when the task's session matches the incoming event"
         );
     }
 

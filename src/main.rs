@@ -6,7 +6,7 @@ pub mod persistence;
 pub mod state;
 pub mod tui;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -203,23 +203,25 @@ fn main() -> Result<()> {
         let (sse_shutdown_tx, sse_shutdown_rx) = tokio::sync::watch::channel(false);
 
         let mut sse_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-        // Group by unique server URL to avoid duplicate SSE subscriptions.
-        // All projects sharing the same server use a single event loop,
-        // preventing text duplication from multiple loops processing identical events.
-        let mut seen_urls: HashSet<String> = HashSet::new();
+        // Group projects by server URL. All projects sharing the same URL use
+        // a single event loop, preventing text duplication from multiple loops
+        // processing identical events. Connection state changes (connected,
+        // reconnecting, permanently_disconnected) are propagated to every
+        // project in the group so the status bar stays consistent.
+        let mut url_to_projects: HashMap<String, Vec<String>> = HashMap::new();
         for (project_id, client) in &opencode_clients {
             let url = client.base_url().to_string();
-            if !seen_urls.insert(url) {
-                continue;
-            }
-            let client = client.clone();
+            url_to_projects.entry(url).or_default().push(project_id.clone());
+        }
+        for (_url, project_ids) in &url_to_projects {
+            let client = opencode_clients.get(project_ids.first().unwrap()).unwrap().clone();
             let state = state.clone();
-            let pid = project_id.clone();
+            let pids = project_ids.clone();
             let columns_config = config.columns.clone();
             let opencode_config = config.opencode.clone();
             let shutdown_rx = sse_shutdown_rx.clone();
             let handle = tokio::spawn(async move {
-                opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx, pid).await;
+                opencode::events::sse_event_loop(client, state, columns_config, opencode_config, shutdown_rx, pids).await;
             });
             sse_handles.push(handle);
         }

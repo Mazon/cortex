@@ -65,6 +65,7 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Delete active project",
         format_combo(&kb.delete_project)
     );
+    let _ = writeln!(s, "   {:<16} Reset circuit breaker", "Ctrl+r");
 
     let _ = writeln!(s);
     let _ = writeln!(s, " Kanban Keys");
@@ -92,8 +93,8 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
     let _ = writeln!(s, "   {:<16} Create new task", format_combo(&kb.todo_new));
     let _ = writeln!(
         s,
-        "   {:<16} Edit selected task",
-        format_combo(&kb.todo_edit)
+        "   {:<16} Open task detail",
+        format_combo(&kb.task_open)
     );
     let _ = writeln!(
         s,
@@ -110,7 +111,6 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Delete selected task",
         format_combo(&kb.task_delete)
     );
-    let _ = writeln!(s, "   {:<16} View task detail", format_combo(&kb.task_view));
     let _ = writeln!(
         s,
         "   {:<16} Set working directory",
@@ -126,15 +126,36 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Retry hung / failed task",
         format_combo(&kb.retry_task)
     );
-    let _ = writeln!(s);
-    let _ = writeln!(s, " Search & Selection");
-    let _ = writeln!(s, " ──────────────────────────────────────");
-    let _ = writeln!(s, "   /              Search / filter tasks");
-    let _ = writeln!(s, "   u              Undo last kanban move");
-    let _ = writeln!(s, "   Shift+V        Visual select (multi-select)");
-    let _ = writeln!(s, "   m / Shift+M    Move selected tasks fwd / back");
-    let _ = writeln!(s, "   Esc            Exit search / visual mode");
-
+    let _ = writeln!(
+        s,
+        "   {:<16} Review changes (diff)",
+        format_combo(&kb.review_changes)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Drill down into subagent",
+        format_combo(&kb.drill_down_subagent)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Move task up",
+        format_combo(&kb.task_move_up)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Move task down",
+        format_combo(&kb.task_move_down)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Scroll columns left",
+        format_combo(&kb.scroll_kanban_left)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Scroll columns right",
+        format_combo(&kb.scroll_kanban_right)
+    );
     let _ = writeln!(s);
     let _ = writeln!(s, " Task Editor Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
@@ -172,7 +193,7 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
 }
 
 /// Format a combo string (comma-separated alternatives) for display.
-/// Example: "ctrl+q" → "Ctrl+Q", "h, left" → "H / ←"
+/// Example: "ctrl+q" → "Ctrl+q", "h, left" → "h / ←"
 pub(crate) fn format_combo(combo: &str) -> String {
     let parts: Vec<&str> = combo.split(',').collect();
     let formatted: Vec<String> = parts
@@ -188,9 +209,10 @@ fn format_combos_slash(a: &str, b: &str) -> String {
 }
 
 /// Format a single key combo into a display string.
-/// Examples: "ctrl+q" → "Ctrl+Q", "left" → "←", "h" → "H"
+/// Examples: "ctrl+q" → "Ctrl+q", "shift+m" → "Shift+M", "left" → "←", "h" → "h"
 fn format_single_combo(combo: &str) -> String {
     let parts: Vec<&str> = combo.split('+').collect();
+    let has_shift = parts.iter().any(|p| p.eq_ignore_ascii_case("shift"));
     let mut result: Vec<String> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         let is_last = i == parts.len() - 1;
@@ -202,7 +224,7 @@ fn format_single_combo(combo: &str) -> String {
                 "down" => result.push("↓".to_string()),
                 k if k.len() == 1 => {
                     let ch = k.chars().next().unwrap();
-                    if ch.is_ascii_alphabetic() {
+                    if ch.is_ascii_alphabetic() && has_shift {
                         result.push(ch.to_ascii_uppercase().to_string());
                     } else {
                         result.push((*part).to_string());
@@ -241,9 +263,9 @@ mod tests {
 
     #[test]
     fn test_format_single_combo_basic() {
-        assert_eq!(format_single_combo("ctrl+q"), "Ctrl+Q");
+        assert_eq!(format_single_combo("ctrl+q"), "Ctrl+q");
         assert_eq!(format_single_combo("shift+m"), "Shift+M");
-        assert_eq!(format_single_combo("h"), "H");
+        assert_eq!(format_single_combo("h"), "h");
         assert_eq!(format_single_combo("?"), "?");
     }
 
@@ -257,15 +279,15 @@ mod tests {
 
     #[test]
     fn test_format_combo_multi() {
-        assert_eq!(format_combo("h, left"), "H / ←");
-        assert_eq!(format_combo("l, right"), "L / →");
-        assert_eq!(format_combo("k, up"), "K / ↑");
-        assert_eq!(format_combo("j, down"), "J / ↓");
+        assert_eq!(format_combo("h, left"), "h / ←");
+        assert_eq!(format_combo("l, right"), "l / →");
+        assert_eq!(format_combo("k, up"), "k / ↑");
+        assert_eq!(format_combo("j, down"), "j / ↓");
     }
 
     #[test]
     fn test_format_combos_slash() {
-        assert_eq!(format_combos_slash("ctrl+j", "ctrl+k"), "Ctrl+J / Ctrl+K");
+        assert_eq!(format_combos_slash("ctrl+j", "ctrl+k"), "Ctrl+j / Ctrl+k");
     }
 
     #[test]
@@ -282,8 +304,8 @@ mod tests {
         assert!(text.contains("Global Keys"));
         assert!(text.contains("Kanban Keys"));
         assert!(text.contains("Task Editor Keys"));
-        assert!(text.contains("Ctrl+Q"));
-        assert!(text.contains("H / ←"));
+        assert!(text.contains("Ctrl+q"));
+        assert!(text.contains("h / ←"));
         assert!(text.contains("Shift+M"));
     }
 
@@ -295,11 +317,11 @@ mod tests {
         kb.editor.save = "ctrl+w".to_string();
         kb.editor.cancel = "ctrl+g".to_string();
         let text = build_help_text(&kb, &kb.editor);
-        assert!(text.contains("Ctrl+X"));
-        assert!(text.contains("A"));
-        assert!(!text.contains("Ctrl+Q"));
-        assert!(!text.contains("H / ←"));
-        assert!(text.contains("Ctrl+W"));
-        assert!(text.contains("Ctrl+G"));
+        assert!(text.contains("Ctrl+x"));
+        assert!(text.contains("a"));
+        assert!(!text.contains("Ctrl+q"));
+        assert!(!text.contains("h / ←"));
+        assert!(text.contains("Ctrl+w"));
+        assert!(text.contains("Ctrl+g"));
     }
 }

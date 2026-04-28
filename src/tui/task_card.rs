@@ -55,6 +55,7 @@ pub fn render_task_card(
         AgentStatus::Complete => theme.done_color(),
         AgentStatus::Error => theme.error_color(),
         AgentStatus::Hung => theme.question_color(),
+        AgentStatus::Question => theme.question_color(),
         AgentStatus::Pending => Color::DarkGray,
     };
 

@@ -107,7 +107,7 @@ impl Default for ColumnsConfig {
                     display_name: Some("Run".to_string()),
                     visible: true,
                     agent: Some("do".to_string()),
-                    auto_progress_to: None,
+                    auto_progress_to: Some("review".to_string()),
                 },
                 ColumnConfig {
                     id: "review".to_string(),
@@ -213,7 +213,7 @@ pub struct OpenCodeConfig {
     pub sse_max_retries: u32,
     /// Read timeout (per-chunk) for SSE event streams, in seconds.
     /// The timer resets after every successful chunk, so the stream
-    /// only dies when no data arrives for this duration. Defaults to 60s.
+    /// only dies when no data arrives for this duration. Defaults to 120s.
     #[serde(default = "default_sse_read_timeout_secs")]
     pub sse_read_timeout_secs: u64,
     /// Timeout in seconds after which a Running task with no SSE activity
@@ -241,8 +241,15 @@ fn default_sse_max_retries() -> u32 {
 }
 
 /// Default value for `OpenCodeConfig::sse_read_timeout_secs`.
+///
+/// Set to 120s (2 minutes) to avoid false reconnection triggers during idle
+/// periods. The timer resets after every successful chunk read, so the stream
+/// only dies when no data (events, heartbeats, or keep-alive comments) arrives
+/// for this duration. A value that's too low (e.g. 60s) causes the SSE client
+/// to disconnect and reconnect every ~62 seconds during idle, producing a
+/// noticeable yellow "reconnecting" flash in the status bar.
 fn default_sse_read_timeout_secs() -> u64 {
-    60
+    120
 }
 
 /// Default value for `OpenCodeConfig::hung_agent_timeout_secs`.
@@ -416,12 +423,10 @@ pub struct KeybindingConfig {
     pub kanban_move_backward: String,
     #[serde(default = "default_todo_new")]
     pub todo_new: String,
-    #[serde(default = "default_todo_edit")]
-    pub todo_edit: String,
+    #[serde(default = "default_task_open")]
+    pub task_open: String,
     #[serde(default = "default_task_delete")]
     pub task_delete: String,
-    #[serde(default = "default_task_view")]
-    pub task_view: String,
     #[serde(default = "default_prev_project")]
     pub prev_project: String,
     #[serde(default = "default_next_project")]
@@ -485,14 +490,11 @@ fn default_kanban_move_backward() -> String {
 fn default_todo_new() -> String {
     "n".to_string()
 }
-fn default_todo_edit() -> String {
-    "e".to_string()
+fn default_task_open() -> String {
+    "enter".to_string()
 }
 fn default_task_delete() -> String {
     "x".to_string()
-}
-fn default_task_view() -> String {
-    "v".to_string()
 }
 fn default_prev_project() -> String {
     "ctrl+k".to_string()
@@ -554,9 +556,8 @@ impl Default for KeybindingConfig {
             kanban_move_forward: default_kanban_move_forward(),
             kanban_move_backward: default_kanban_move_backward(),
             todo_new: default_todo_new(),
-            todo_edit: default_todo_edit(),
+            task_open: default_task_open(),
             task_delete: default_task_delete(),
-            task_view: default_task_view(),
             prev_project: default_prev_project(),
             next_project: default_next_project(),
             new_project: default_new_project(),

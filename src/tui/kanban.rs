@@ -139,18 +139,9 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             let mut rendered_count = 0usize;
             for (task_idx, task_id) in task_ids.iter().enumerate() {
                 if let Some(task) = state.tasks.get(task_id) {
-                    // Skip tasks that don't match the search filter
-                    if !state.task_matches_search(task) {
-                        continue;
-                    }
-
                     let is_task_focused = is_focused
                         && task_idx == focused_idx
                         && state.ui.focused_task_id.as_deref() == Some(task_id.as_str());
-
-                    // In visual mode, highlight all selected tasks
-                    let is_visually_selected =
-                        state.ui.visual_mode && state.ui.selected_tasks.contains(task_id);
 
                     let card_height = 5u16;
                     if card_y + card_height > inner.y + inner.height {
@@ -165,7 +156,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                     };
 
                     crate::tui::task_card::render_task_card(
-                        f, card_area, task, is_task_focused || is_visually_selected, &config.theme, now,
+                        f, card_area, task, is_task_focused, &config.theme, now,
                     );
                     card_y += card_height + 1;
                     rendered_count += 1;
@@ -213,65 +204,4 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
             f.render_widget(indicator, layout[chunk_idx]);
         }
     }
-}
-
-/// Render a search bar overlay at the bottom of the screen.
-/// Shows the current search query with a cursor indicator.
-pub fn render_search_bar(f: &mut Frame, state: &AppState) {
-    let bar_height: u16 = 3;
-    let bar_area = Rect {
-        x: 0,
-        y: f.area().height.saturating_sub(bar_height),
-        width: f.area().width,
-        height: bar_height,
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(Span::styled(
-            " Search ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(Color::Rgb(36, 40, 56)));
-
-    let inner = block.inner(bar_area);
-    f.render_widget(block, bar_area);
-
-    // Build the search text with cursor
-    let query = &state.ui.input_text;
-    let cursor_pos = state.ui.input_cursor;
-
-    let before: String = query.chars().take(cursor_pos).collect();
-    let cursor_char = query.chars().nth(cursor_pos);
-    let after: String = query.chars().skip(cursor_pos + 1).collect();
-
-    let cursor_span = if cursor_char.is_some() {
-        Span::styled(
-            cursor_char.unwrap().to_string(),
-            Style::default().fg(Color::Black).bg(Color::Yellow),
-        )
-    } else {
-        Span::styled(
-            " ",
-            Style::default().fg(Color::Black).bg(Color::Yellow),
-        )
-    };
-
-    let search_line = Line::from(vec![
-        Span::styled(" /", Style::default().fg(Color::Gray)),
-        Span::raw(before),
-        cursor_span,
-        Span::raw(after),
-    ]);
-
-    let help_line = Line::from(Span::styled(
-        " Enter: filter  Esc: cancel",
-        Style::default().fg(Color::DarkGray),
-    ));
-
-    let paragraph = Paragraph::new(vec![search_line, Line::from(""), help_line]);
-    f.render_widget(paragraph, inner);
 }

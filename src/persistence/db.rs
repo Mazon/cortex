@@ -529,6 +529,7 @@ fn parse_agent_status(s: &str) -> AgentStatus {
         "pending" => AgentStatus::Pending,
         "working" | "running" | "busy" => AgentStatus::Running,
         "hung" => AgentStatus::Hung,
+        "question" => AgentStatus::Question,
         "ready" => AgentStatus::Ready,
         "done" | "complete" | "completed" | "idle" => AgentStatus::Complete,
         "failed" | "error" => AgentStatus::Error,

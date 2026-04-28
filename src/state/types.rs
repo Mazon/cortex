@@ -32,6 +32,7 @@ pub enum AgentStatus {
     Pending,
     Running,
     Hung,
+    Question,
     Ready,
     Complete,
     Error,
@@ -44,6 +45,7 @@ impl AgentStatus {
             AgentStatus::Pending => "·",
             AgentStatus::Running => "◐",
             AgentStatus::Hung => "⏸",
+            AgentStatus::Question => "?",
             AgentStatus::Ready => "◉",
             AgentStatus::Complete => "✓",
             AgentStatus::Error => "✗",
@@ -56,7 +58,7 @@ impl AgentStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            AgentStatus::Complete | AgentStatus::Ready | AgentStatus::Hung | AgentStatus::Error
+            AgentStatus::Complete | AgentStatus::Ready | AgentStatus::Hung | AgentStatus::Question | AgentStatus::Error
         )
     }
 }
@@ -67,6 +69,7 @@ impl std::fmt::Display for AgentStatus {
             AgentStatus::Pending => write!(f, "pending"),
             AgentStatus::Running => write!(f, "working"),
             AgentStatus::Hung => write!(f, "hung"),
+            AgentStatus::Question => write!(f, "question"),
             AgentStatus::Ready => write!(f, "ready"),
             AgentStatus::Complete => write!(f, "done"),
             AgentStatus::Error => write!(f, "failed"),
@@ -120,10 +123,6 @@ pub enum AppMode {
     InputPrompt,
     /// Project rename prompt.
     ProjectRename,
-    /// Search/filter mode — filters kanban tasks by text.
-    Search,
-    /// Visual (multi-select) mode — select multiple tasks for bulk actions.
-    Visual,
     /// Diff review mode — view git diff for a completed "do" task.
     DiffReview,
 }
@@ -322,22 +321,6 @@ pub struct UIState {
     /// When empty, the task detail view shows the parent task's output.
     /// When non-empty, the task detail view shows the top-of-stack session's output.
     pub session_nav_stack: Vec<SessionRef>,
-    /// Active search/filter query. When `Some`, only tasks whose title or
-    /// description contains this text (case-insensitive) are shown in the kanban.
-    pub search_query: Option<String>,
-    /// Pre-lowercased search query cache. Updated atomically alongside
-    /// `search_query` via `set_search_query()` to avoid re-lowercasing on
-    /// every tick/render cycle.
-    pub search_query_lower: Option<String>,
-    /// Whether visual (multi-select) mode is active. In this mode, arrow keys
-    /// extend the selection range, and bulk actions can be performed.
-    pub visual_mode: bool,
-    /// Set of task IDs currently selected in visual mode.
-    pub selected_tasks: std::collections::HashSet<String>,
-    /// The anchor task ID for visual mode selection — the task where visual
-    /// mode was entered. Moving the cursor extends the selection from anchor
-    /// to focused task.
-    pub visual_anchor_task_id: Option<String>,
     /// State for the diff review view. When `Some`, the user is reviewing
     /// git diff changes for a completed "do" task.
     pub diff_review: Option<DiffReviewState>,
@@ -360,11 +343,6 @@ impl Default for UIState {
             detail_editor: None,
             user_scroll_offset: None,
             session_nav_stack: Vec::new(),
-            search_query: None,
-            search_query_lower: None,
-            visual_mode: false,
-            selected_tasks: std::collections::HashSet::new(),
-            visual_anchor_task_id: None,
             diff_review: None,
         }
     }
@@ -1220,9 +1198,16 @@ impl ProjectRegistry {
     }
 
     /// Set a project's reconnecting state. No-op if the project doesn't exist.
+    ///
+    /// When `reconnecting` is `true`, `connected` is also set to `false` to keep
+    /// the connection state model semantically consistent — a project cannot be
+    /// both "connected" and "reconnecting" simultaneously.
     pub fn set_project_reconnecting(&mut self, project_id: &str, reconnecting: bool) {
         if let Some(p) = self.projects.iter_mut().find(|p| p.id == project_id) {
             p.reconnecting = reconnecting;
+            if reconnecting {
+                p.connected = false;
+            }
         }
     }
 
@@ -2282,6 +2267,29 @@ mod tests {
     #[test]
     fn extract_tool_summary_empty_json() {
         assert_eq!(extract_tool_summary("read", "{}"), "...");
+    }
+
+    // ── AgentStatus::Question ──────────────────────────────────────────
+
+    #[test]
+    fn question_status_is_terminal() {
+        assert!(AgentStatus::Question.is_terminal());
+    }
+
+    #[test]
+    fn question_status_display() {
+        assert_eq!(AgentStatus::Question.to_string(), "question");
+    }
+
+    #[test]
+    fn question_status_icon() {
+        assert_eq!(AgentStatus::Question.icon(), "?");
+    }
+
+    #[test]
+    fn running_status_is_not_terminal() {
+        assert!(!AgentStatus::Running.is_terminal());
+        assert!(!AgentStatus::Pending.is_terminal());
     }
 
     // ── Helper ───────────────────────────────────────────────────────────

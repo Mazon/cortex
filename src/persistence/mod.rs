@@ -635,4 +635,27 @@ use std::collections::HashMap;
         // Cleanup
         let _ = std::fs::remove_file(&db_path);
     }
+
+    #[test]
+    fn question_status_round_trips_through_database() {
+        // Verify that AgentStatus::Question persists and loads correctly.
+        let db_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let db_path = db_dir.path().join("test.db");
+        let db = db::Db::new(&db_path).expect("failed to open test db");
+
+        let project = make_project();
+        db.save_project(&project).expect("save_project failed");
+
+        let mut task = make_task();
+        task.agent_status = AgentStatus::Question;
+        task.pending_question_count = 1;
+        db.save_task(&task).expect("save_task failed");
+
+        let loaded = db.load_tasks(&task.project_id).expect("load_tasks failed");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].agent_status, AgentStatus::Question);
+        assert_eq!(loaded[0].pending_question_count, 1);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
 }

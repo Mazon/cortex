@@ -23,17 +23,18 @@ pub enum Action {
     ScrollKanbanRight,
     // Task operations
     CreateTask,
-    EditTask,
+    OpenTaskDetail,
     MoveForward,
     MoveBackward,
     MoveTaskUp,
     MoveTaskDown,
     DeleteTask,
-    ViewTask,
     AbortSession,
     RetryTask,
     // Subagent drill-down
     DrillDownSubagent,
+    // Review changes (git diff)
+    ReviewChanges,
     // Project operations
     SetWorkingDirectory,
     DeleteProject,
@@ -61,7 +62,7 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.kanban_up, Action::NavUp);
         parse_and_add(&mut bindings, &config.kanban_down, Action::NavDown);
         parse_and_add(&mut bindings, &config.todo_new, Action::CreateTask);
-        parse_and_add(&mut bindings, &config.todo_edit, Action::EditTask);
+        parse_and_add(&mut bindings, &config.task_open, Action::OpenTaskDetail);
         parse_and_add(
             &mut bindings,
             &config.kanban_move_forward,
@@ -75,13 +76,17 @@ impl KeyMatcher {
         parse_and_add(&mut bindings, &config.task_move_up, Action::MoveTaskUp);
         parse_and_add(&mut bindings, &config.task_move_down, Action::MoveTaskDown);
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
-        parse_and_add(&mut bindings, &config.task_view, Action::ViewTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
         parse_and_add(&mut bindings, &config.retry_task, Action::RetryTask);
         parse_and_add(
             &mut bindings,
             &config.drill_down_subagent,
             Action::DrillDownSubagent,
+        );
+        parse_and_add(
+            &mut bindings,
+            &config.review_changes,
+            Action::ReviewChanges,
         );
         parse_and_add(
             &mut bindings,
@@ -332,10 +337,10 @@ mod tests {
             Some(Action::CreateTask)
         );
 
-        // EditTask: e
+        // OpenTaskDetail: enter
         assert_eq!(
-            matcher.match_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
-            Some(Action::EditTask)
+            matcher.match_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Action::OpenTaskDetail)
         );
 
         // MoveForward: m
@@ -360,12 +365,6 @@ mod tests {
         assert_eq!(
             matcher.match_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::SHIFT)),
             Some(Action::DeleteProject)
-        );
-
-        // ViewTask: v
-        assert_eq!(
-            matcher.match_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
-            Some(Action::ViewTask)
         );
 
         // HelpToggle: ?
@@ -396,6 +395,12 @@ mod tests {
         assert_eq!(
             matcher.match_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::RetryTask)
+        );
+
+        // ReviewChanges: shift+d
+        assert_eq!(
+            matcher.match_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::SHIFT)),
+            Some(Action::ReviewChanges)
         );
 
         // AbortSession: ctrl+a a (multi-key leader — not matchable via single KeyEvent)

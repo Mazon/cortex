@@ -153,8 +153,14 @@ Persisted data (SQLite database, logs) is stored under `$XDG_DATA_HOME/cortex/` 
 | `Ctrl+K` | Previous project |
 | `Ctrl+N` | New project |
 | `Ctrl+A` `A` | Abort active session |
-| `R` | Rename active project |
-| `D` | Set working directory |
+| `r` | Rename active project |
+| `d` | Set working directory |
+| `Shift+R` | Retry hung / failed task |
+| `Shift+D` | Review changes (diff) |
+| `Ctrl+X` | Drill down into subagent |
+| `PageUp` | Scroll columns left |
+| `PageDown` | Scroll columns right |
+| `Ctrl+R` | Reset circuit breaker |
 | `Ctrl+Q` | Quit |
 
 ### Task editor (fixed)
@@ -176,6 +182,12 @@ Persisted data (SQLite database, logs) is stored under `$XDG_DATA_HOME/cortex/` 
 | Key | Action |
 |---|---|
 | `Esc` | Return to kanban board |
+| `Ctrl+S` / `Ctrl+Enter` | Send message to agent |
+| `y` | Approve pending permission |
+| `n` | Reject pending permission |
+| `1-9` | Answer pending question |
+| `↑` / `↓` | Scroll agent output |
+| `PageUp` / `PageDown` | Scroll description |
 
 ## Architecture
 

@@ -292,34 +292,10 @@ fn build_contextual_hints(state: &AppState) -> Vec<String> {
         AppMode::InputPrompt | AppMode::ProjectRename => {
             groups.push("Enter: submit  Esc: cancel".to_string());
         }
-        AppMode::Search => {
-            groups.push("Enter: apply filter  Esc: cancel".to_string());
-        }
-        AppMode::Visual => {
-            groups.push(format!(
-                "j/k: select  m: move fwd  M: move back  Esc: exit ({} selected)",
-                state.ui.selected_tasks.len()
-            ));
-        }
         AppMode::DiffReview => {
             groups.push("j/k: scroll  h/l: prev/next file  Esc: close".to_string());
         }
         AppMode::Normal => {
-            // Show visual mode indicator if active
-            if state.ui.visual_mode {
-                groups.push(format!(
-                    "VISUAL ({} selected)  m: move  Esc: exit",
-                    state.ui.selected_tasks.len()
-                ));
-            }
-
-            // Show active search indicator
-            if let Some(ref query) = state.ui.search_query {
-                if !query.is_empty() {
-                    groups.push(format!("Filter: \"{}\"  /: edit  Esc: clear", query));
-                }
-            }
-
             match state.ui.focused_panel {
                 FocusedPanel::TaskDetail => {
                     // Task detail view hints
