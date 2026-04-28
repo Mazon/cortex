@@ -256,7 +256,25 @@ pub async fn sse_event_loop(
                 }
                 state.mark_render_dirty();
             }
-            return;
+            // Enter slow-retry mode instead of giving up permanently.
+            // The permanently_disconnected state is still set (red indicator)
+            // but the loop keeps trying at a very slow rate so the app
+            // recovers automatically when the server comes back online.
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                    tracing::debug!(
+                        "SSE slow-retry: resetting after permanent disconnect cooldown"
+                    );
+                    reconnect_attempt = 0;
+                    backoff_power = 0;
+                    continue;
+                }
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() {
+                        return;
+                    }
+                }
+            }
         }
 
         // Exponential backoff with max 30s, but also break on shutdown.
