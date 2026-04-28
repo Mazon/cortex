@@ -76,18 +76,13 @@ pub async fn sse_event_loop(
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
+                // Snapshot reconnect count before resetting — used below for
+                // recovery diagnostics.
+                let was_reconnecting = reconnect_attempt > 0;
                 backoff_power = 0; // Reset backoff on successful connection
                 reconnect_attempt = 0; // Reset consecutive failure counter on success
                 let mut stream = stream;
-
-                // Mark reconnection complete — we have a live stream.
-                // Propagate to all projects sharing this server URL.
-                {
-                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                    for pid in &project_ids {
-                        state.set_project_connected(pid, true);
-                    }
-                }
+                let mut first_event_received = false;
 
                 loop {
                     tokio::select! {
@@ -124,6 +119,19 @@ pub async fn sse_event_loop(
                                     continue;
                                 }
                             };
+
+                            // Mark connected only after the first successful event —
+                            // avoids a brief "connected" flash on short-lived streams
+                            // that return 200 but close before delivering data.
+                            if !first_event_received {
+                                first_event_received = true;
+                                {
+                                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                                    for pid in &project_ids {
+                                        state.set_project_connected(pid, true);
+                                    }
+                                }
+                            }
 
                             let (action, finalize_session_id, finalize_task_id) = {
                                 let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
