@@ -146,6 +146,13 @@ pub async fn sse_event_loop(
                                     for pid in &project_ids {
                                         state.set_project_connected(pid, true);
                                     }
+                                    if was_reconnecting {
+                                        state.set_notification(
+                                            "Connection restored".to_string(),
+                                            crate::state::types::NotificationVariant::Success,
+                                            3000,
+                                        );
+                                    }
                                 }
                             }
 
@@ -329,6 +336,13 @@ pub async fn sse_event_loop(
             for pid in &project_ids {
                 state.set_project_reconnecting(pid, true);
                 state.set_project_reconnect_attempt(pid, reconnect_attempt);
+            }
+            if reconnect_attempt == 1 {
+                state.set_notification(
+                    "SSE connection lost — reconnecting...".to_string(),
+                    crate::state::types::NotificationVariant::Warning,
+                    4000,
+                );
             }
             state.mark_render_dirty();
         }
