@@ -658,4 +658,223 @@ use std::collections::HashMap;
 
         let _ = std::fs::remove_file(&db_path);
     }
+
+    // ─── Regression: multi-project kanban_order isolation ────────────────
+
+    /// Regression test for the bug where creating a new project and saving
+    /// its kanban order would destroy the first project's kanban_order entries
+    /// because `save_kanban_order` used `DELETE FROM kanban_order WHERE
+    /// column_id = ?1` (deleting ALL projects' entries for a shared column).
+    ///
+    /// Scenario:
+    /// 1. Create Project A with 2 tasks in "todo" column
+    /// 2. Save state (persists kanban_order for Project A)
+    /// 3. Create Project B with 1 task in "todo" column
+    /// 4. Switch to Project B and save state
+    /// 5. Restore state for Project A
+    /// 6. Verify Project A's tasks are still present and in correct order
+    #[test]
+    fn regression_multi_project_kanban_order_isolation() {
+        let db_path = temp_db_path("multi_project_kanban");
+        let _ = std::fs::remove_file(&db_path);
+
+        let db = db::Db::new(&db_path).expect("failed to open test db");
+
+        // ── Project A with 2 tasks in "todo" ──
+        let project_a = CortexProject {
+            id: "proj-a".to_string(),
+            name: "Project A".to_string(),
+            working_directory: "/tmp/a".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+            ..Default::default()
+        };
+        let task_a1 = CortexTask {
+            id: "task-a1".to_string(),
+            number: 1,
+            title: "A Task 1".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: None,
+            planning_context: None,
+            pending_description: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-a".to_string(),
+        };
+        let task_a2 = CortexTask {
+            id: "task-a2".to_string(),
+            number: 2,
+            title: "A Task 2".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 1001,
+            last_activity_at: 1001,
+            error_message: None,
+            plan_output: None,
+            planning_context: None,
+            pending_description: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 1001,
+            updated_at: 1001,
+            project_id: "proj-a".to_string(),
+        };
+
+        // ── Build AppState with Project A ──
+        let mut tasks_a: HashMap<String, CortexTask> = HashMap::new();
+        tasks_a.insert(task_a1.id.clone(), task_a1.clone());
+        tasks_a.insert(task_a2.id.clone(), task_a2.clone());
+
+        let mut kanban_a: HashMap<String, Vec<String>> = HashMap::new();
+        kanban_a.insert("todo".to_string(), vec![task_a1.id.clone(), task_a2.id.clone()]);
+
+        let mut counters_a: HashMap<String, u32> = HashMap::new();
+        counters_a.insert("proj-a".to_string(), 2);
+
+        let mut state = AppState {
+            project_registry: crate::state::types::ProjectRegistry {
+                projects: vec![project_a.clone()],
+                active_project_id: Some("proj-a".to_string()),
+                task_number_counters: counters_a.clone(),
+                circuit_breaker_failures: std::collections::HashMap::new(),
+                circuit_breaker_tripped_at: std::collections::HashMap::new(),
+            },
+            tasks: tasks_a,
+            kanban: crate::state::types::KanbanState {
+                columns: kanban_a.clone(),
+                focused_column_index: 0,
+                focused_task_index: HashMap::new(),
+                kanban_scroll_offset: 0,
+            },
+            ui: crate::state::types::UIState::default(),
+            session_tracker: crate::state::types::SessionTracker::default(),
+            dirty_flags: crate::state::types::DirtyFlags::default(),
+        };
+
+        // Mark tasks dirty and save
+        state.dirty_flags.dirty_tasks.insert(task_a1.id.clone());
+        state.dirty_flags.dirty_tasks.insert(task_a2.id.clone());
+        save_state(&mut state, &db).expect("save_state failed (Project A)");
+
+        // ── Now add Project B with 1 task in "todo" ──
+        let project_b = CortexProject {
+            id: "proj-b".to_string(),
+            name: "Project B".to_string(),
+            working_directory: "/tmp/b".to_string(),
+            status: ProjectStatus::Idle,
+            position: 1,
+            ..Default::default()
+        };
+        let task_b1 = CortexTask {
+            id: "task-b1".to_string(),
+            number: 1,
+            title: "B Task 1".to_string(),
+            description: String::new(),
+            column: KanbanColumn("todo".to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Pending,
+            entered_column_at: 2000,
+            last_activity_at: 2000,
+            error_message: None,
+            plan_output: None,
+            planning_context: None,
+            pending_description: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            created_at: 2000,
+            updated_at: 2000,
+            project_id: "proj-b".to_string(),
+        };
+
+        // Add Project B and its task to the state
+        state.add_project(project_b.clone());
+        state.tasks.insert(task_b1.id.clone(), task_b1.clone());
+        state.kanban.columns.clear(); // Clear old columns
+        state.kanban.columns.insert("todo".to_string(), vec![task_b1.id.clone()]);
+        state.project_registry.active_project_id = Some("proj-b".to_string());
+        state.project_registry.task_number_counters.insert("proj-b".to_string(), 1);
+
+        // Mark everything dirty and save
+        state.dirty_flags.dirty_tasks.insert(task_b1.id.clone());
+        save_state(&mut state, &db).expect("save_state failed (Project B added)");
+
+        // ── Verify at DB level: both projects' tasks exist ──
+        let db_tasks_a = db.load_tasks("proj-a").expect("load_tasks proj-a failed");
+        assert_eq!(db_tasks_a.len(), 2, "Project A should still have 2 tasks in DB");
+        let db_tasks_b = db.load_tasks("proj-b").expect("load_tasks proj-b failed");
+        assert_eq!(db_tasks_b.len(), 1, "Project B should have 1 task in DB");
+
+        // ── Verify kanban_order: both projects' orders preserved ──
+        let kanban_order = db.load_kanban_order().expect("load_kanban_order failed");
+        let todo_order = kanban_order.get("todo").expect("todo column missing from kanban_order");
+        assert_eq!(
+            todo_order.len(),
+            3,
+            "kanban_order should have 3 entries (2 from proj-a + 1 from proj-b)"
+        );
+        assert!(todo_order.contains(&task_a1.id), "task-a1 should be in kanban_order");
+        assert!(todo_order.contains(&task_a2.id), "task-a2 should be in kanban_order");
+        assert!(todo_order.contains(&task_b1.id), "task-b1 should be in kanban_order");
+
+        // ── Restore state with Project A as active ──
+        // First, set active project to proj-a in DB
+        db.set_metadata("active_project_id", "proj-a").expect("set_metadata failed");
+
+        let mut restored = AppState::default();
+        restore_state(&mut restored, &db).expect("restore_state failed");
+
+        // Project A's tasks should be in the kanban with correct order
+        let restored_todo = restored.kanban.columns.get("todo").expect("todo column missing");
+        assert_eq!(
+            restored_todo.len(),
+            2,
+            "Restored kanban should have 2 tasks for Project A"
+        );
+        assert_eq!(
+            restored_todo[0], task_a1.id,
+            "First task should be task-a1 (preserved order)"
+        );
+        assert_eq!(
+            restored_todo[1], task_a2.id,
+            "Second task should be task-a2 (preserved order)"
+        );
+
+        // All tasks should be in memory (both projects)
+        assert_eq!(restored.tasks.len(), 3, "All 3 tasks should be in memory");
+        assert!(restored.tasks.contains_key(&task_a1.id));
+        assert!(restored.tasks.contains_key(&task_a2.id));
+        assert!(restored.tasks.contains_key(&task_b1.id));
+
+        // ── Now restore with Project B as active ──
+        db.set_metadata("active_project_id", "proj-b").expect("set_metadata failed");
+        let mut restored_b = AppState::default();
+        restore_state(&mut restored_b, &db).expect("restore_state failed (proj-b)");
+
+        let restored_b_todo = restored_b.kanban.columns.get("todo").expect("todo column missing");
+        assert_eq!(
+            restored_b_todo.len(),
+            1,
+            "Restored kanban should have 1 task for Project B"
+        );
+        assert_eq!(
+            restored_b_todo[0], task_b1.id,
+            "Task should be task-b1"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_file(&db_path);
+    }
 }

@@ -398,6 +398,11 @@ impl AppState {
                 .unwrap_or(false);
             if !is_hung {
                 self.set_task_error(&task_id, error.to_string());
+                self.set_notification(
+                    format!("Task error: {}", error.chars().take(80).collect::<String>()),
+                    NotificationVariant::Error,
+                    5000,
+                );
             } else {
                 tracing::debug!(
                     task_id = %task_id,

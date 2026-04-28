@@ -405,6 +405,80 @@ impl AppState {
         self.ui.mode = AppMode::Normal;
     }
 
+    // ─── New Project Directory ─────────────────────────────────────────────
+
+    /// Open an input prompt to create a new project from a directory path.
+    /// Pre-populates the input with the current working directory.
+    /// On submit, the directory basename is used as the project name.
+    pub fn open_new_project_directory(&mut self) {
+        let current_dir = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        self.ui.input_text = current_dir;
+        self.ui.input_cursor = self.ui.input_text.chars().count();
+        self.ui.prompt_label = "Project directory:".to_string();
+        self.ui.prompt_context = Some("new_project_directory".to_string());
+        self.ui.mode = AppMode::InputPrompt;
+    }
+
+    /// Submit the new project directory prompt. Validates the path, extracts
+    /// the directory basename as the project name, creates the project, and
+    /// selects it.
+    ///
+    /// Returns:
+    /// - `Ok(name)` with the project name on success.
+    /// - `Err(message)` if the path is empty, doesn't exist, or isn't a directory.
+    pub fn submit_new_project_directory(&mut self) -> Result<String, String> {
+        let dir = self.ui.input_text.trim().to_string();
+        if dir.is_empty() {
+            return Err("Directory path cannot be empty".to_string());
+        }
+
+        let path = std::path::Path::new(&dir);
+        if !path.exists() {
+            return Err(format!("Directory does not exist: {}", dir));
+        }
+        if !path.is_dir() {
+            return Err(format!("Path is not a directory: {}", dir));
+        }
+
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| dir.clone());
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let pos = self.project_registry.projects.len();
+        let project = CortexProject {
+            id: id.clone(),
+            name: name.clone(),
+            working_directory: dir,
+            status: ProjectStatus::Idle,
+            position: pos,
+            ..Default::default()
+        };
+        self.add_project(project);
+        self.select_project(&id);
+
+        // Reset prompt state
+        self.ui.input_text.clear();
+        self.ui.input_cursor = 0;
+        self.ui.prompt_label.clear();
+        self.ui.prompt_context = None;
+        self.ui.mode = AppMode::Normal;
+
+        Ok(name)
+    }
+
+    /// Cancel the new project directory prompt, discarding changes.
+    pub fn cancel_new_project_directory(&mut self) {
+        self.ui.input_text.clear();
+        self.ui.input_cursor = 0;
+        self.ui.prompt_label.clear();
+        self.ui.prompt_context = None;
+        self.ui.mode = AppMode::Normal;
+    }
+
     // ─── Project Rename ─────────────────────────────────────────────────
 
     /// Open the project rename prompt, pre-populating the input with the

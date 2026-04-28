@@ -145,6 +145,7 @@ impl AppState {
             .or_default()
             .push(id.clone());
         self.mark_task_dirty(&id);
+        self.mark_render_dirty();
         task
     }
 
@@ -183,6 +184,7 @@ impl AppState {
         self.clamp_focused_task_index(&from_column.0);
 
         self.mark_task_dirty(task_id);
+        self.mark_render_dirty();
         true
     }
 
@@ -619,13 +621,69 @@ impl AppState {
         self.project_registry.active_project_id = active_project_id;
         self.project_registry.task_number_counters = counters;
 
-        let pid = self.project_registry.active_project_id.clone();
-        if let Some(pid) = pid {
-            self.rebuild_kanban_for_project(&pid);
+        if let Some(ref pid) = self.project_registry.active_project_id {
+            // Filter kanban columns to only include the active project's tasks,
+            // preserving the persisted order from the database. This is
+            // critical — calling rebuild_kanban_for_project would discard the
+            // order by iterating over self.tasks (a HashMap with random order).
+            let pid = pid.clone();
+            self.filter_kanban_for_project(&pid);
         }
     }
 
     // ─── Internal Helpers ────────────────────────────────────────────────
+
+    /// Filter `self.kanban.columns` in place to only include tasks belonging
+    /// to the given project, preserving the persisted order from the database.
+    /// Also resets focus state (focused_task_index, scroll offset, etc.).
+    ///
+    /// This is used during [`Self::restore_state`] to narrow the DB-loaded
+    /// kanban (which contains ALL projects' tasks) down to the active project,
+    /// without losing the persisted task ordering.
+    fn filter_kanban_for_project(&mut self, project_id: &str) {
+        // Build a set of task IDs that belong to this project
+        let project_task_ids: std::collections::HashSet<&str> = self
+            .tasks
+            .values()
+            .filter(|t| t.project_id == project_id)
+            .map(|t| t.id.as_str())
+            .collect();
+
+        // Retain only this project's tasks in each column, preserving order
+        for task_ids in self.kanban.columns.values_mut() {
+            task_ids.retain(|id| project_task_ids.contains(id.as_str()));
+        }
+
+        // Remove empty columns (no tasks from this project)
+        self.kanban.columns.retain(|_, ids| !ids.is_empty());
+
+        // Reset focus state
+        self.kanban.focused_task_index.clear();
+        self.kanban.kanban_scroll_offset = 0;
+
+        // Prefer "planning" as the default focused column; fall back to first available
+        let focused_col = if self.kanban.columns.contains_key("planning") {
+            "planning".to_string()
+        } else if self.kanban.columns.contains_key("todo") {
+            "todo".to_string()
+        } else {
+            self.kanban
+                .columns
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "planning".to_string())
+        };
+
+        self.ui.focused_column = focused_col.clone();
+        self.kanban.focused_column_index = 1; // "planning" is index 1 in default config
+        self.kanban.focused_task_index.insert(focused_col.clone(), 0);
+        self.ui.focused_task_id = self
+            .kanban
+            .columns
+            .get(&focused_col)
+            .and_then(|ids| ids.first().cloned());
+    }
 
     fn rebuild_kanban_for_project(&mut self, project_id: &str) {
         let mut columns: HashMap<String, Vec<String>> = HashMap::new();

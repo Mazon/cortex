@@ -3,7 +3,6 @@
 //! Features:
 //! - Two-row metadata header with status pill, agent type, column, and timer
 //! - Description block with character count and styled borders
-//! - Error display section with red-tinted border
 //! - Subagent summary with bordered block and done count
 //! - Streaming output with message count, tool indicators, and subtle background
 //! - Permissions block with styled action buttons
@@ -20,7 +19,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 /// Render the task detail panel in the given area.
 ///
 /// Shows task metadata (title, status, timer, agent), description,
-/// error display, streaming agent output, messages, subagent
+/// streaming agent output, messages, subagent
 /// summary, and pending permissions.
 /// When drilled into a subagent (via ctrl+x), shows the subagent's
 /// output with a breadcrumb navigation bar.
@@ -95,15 +94,7 @@ pub fn render_task_detail(
     let editor_is_focused = state.ui.detail_editor.as_ref().map_or(false, |e| e.is_focused);
     let editor_discard_warning = state.ui.detail_editor.as_ref().map_or(false, |e| e.discard_warning_shown);
 
-    // Error section
-    let has_error = task.agent_status == AgentStatus::Error
-        && task.error_message
-            .as_ref()
-            .map_or(false, |e| !e.trim().is_empty());
-    let error_rows: u16 = if has_error { 4 } else { 0 };
-
     // Clone data needed after mutable borrow of state (for description editor)
-    let error_message = task.error_message.clone();
 
     // Subagent summary
     let subagent_count = if !is_drilled {
@@ -132,7 +123,6 @@ pub fn render_task_detail(
     let fixed_total = metadata_height
         + separator_height
         + breadcrumb_rows
-        + error_rows
         + subagent_block_rows
         + permission_rows
         + footer_height;
@@ -148,22 +138,20 @@ pub fn render_task_detail(
     //   [1] separator (1 row)
     //   [2] breadcrumb (0 or 1)
     //   [3] description (variable)
-    //   [4] error (0 or 4)
-    //   [5] subagent summary (0 or variable)
-    //   [6] streaming (Min(0) — fills remaining)
-    //   [7] permissions (0 or 3)
-    //   [8] footer (1 row)
+    //   [4] subagent summary (0 or variable)
+    //   [5] streaming (Min(0) — fills remaining)
+    //   [6] permissions (0 or 3)
+    //   [7] footer (1 row)
 
     let v_constraints: Vec<Constraint> = vec![
         Constraint::Length(metadata_height),    // [0] Metadata header
         Constraint::Length(separator_height),   // [1] Separator
         Constraint::Length(breadcrumb_rows),    // [2] Breadcrumb
         Constraint::Length(desc_rows),          // [3] Description
-        Constraint::Length(error_rows),         // [4] Error
-        Constraint::Length(subagent_block_rows), // [5] Subagent summary
-        Constraint::Min(0),                     // [6] Streaming block
-        Constraint::Length(permission_rows),    // [7] Permissions
-        Constraint::Length(footer_height),      // [8] Footer
+        Constraint::Length(subagent_block_rows), // [4] Subagent summary
+        Constraint::Min(0),                     // [5] Streaming block
+        Constraint::Length(permission_rows),    // [6] Permissions
+        Constraint::Length(footer_height),      // [7] Footer
     ];
 
     let v_layout = Layout::default()
@@ -187,53 +175,47 @@ pub fn render_task_detail(
     // 4. Description block (takes task_id to avoid borrow conflict with &mut state)
     render_description_block(f, v_layout[3], task_id, state);
 
-    // 5. Error section (conditional)
-    if has_error {
-        if let Some(ref err) = error_message {
-            render_error_section(f, v_layout[4], err);
-        }
-    }
-
-    // 6. Subagent summary (only when not drilled in and has subagents)
+    // 5. Subagent summary (only when not drilled in and has subagents)
     if subagent_count > 0 {
-        render_subagent_summary(f, v_layout[5], state, task_id, theme);
+        render_subagent_summary(f, v_layout[4], state, task_id, theme);
     }
 
-    // 7. Streaming output + messages
+    // 6. Streaming output + messages
     if is_drilled {
-        render_subagent_streaming_block(f, v_layout[6], state, now);
+        render_subagent_streaming_block(f, v_layout[5], state, now);
     } else {
-        render_streaming_block(f, v_layout[6], state, task_id, now);
+        render_streaming_block(f, v_layout[5], state, task_id, now);
     }
 
-    // 8. Pending permissions / questions
+    // 7. Pending permissions / questions
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[7], session);
+                    render_permissions(f, v_layout[6], session);
                 }
             }
         } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[7], session);
+            render_permissions(f, v_layout[6], session);
         }
     }
 
-    // 9. Footer key hints
+    // 8. Footer key hints
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
             .and_then(|sid| state.session_tracker.cached_streaming_lines.get(sid))
-            .map(|(_, lines)| lines.len() > v_layout[6].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
             .unwrap_or(false)
     } else {
         state
-            .session_tracker.cached_streaming_lines
+            .session_tracker
+            .cached_streaming_lines
             .get(task_id)
-            .map(|(_, lines)| lines.len() > v_layout[6].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
             .unwrap_or(false)
     };
-    render_footer(f, v_layout[8], has_scrollable_output, is_drilled, editor_is_focused, editor_discard_warning);
+    render_footer(f, v_layout[7], has_scrollable_output, is_drilled, editor_is_focused, editor_discard_warning);
 }
 
 // ─── Section Renderers ────────────────────────────────────────────────────
@@ -589,41 +571,6 @@ fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mu
             }
         }
     }
-}
-
-/// Render the error section with red-tinted border and background.
-fn render_error_section(f: &mut Frame, area: Rect, error_msg: &str) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(180, 50, 50)))
-        .title(Span::styled(
-            " ✗ Error ",
-            Style::default()
-                .fg(Color::Rgb(220, 80, 80))
-                .add_modifier(Modifier::BOLD),
-        ))
-        .style(Style::default().bg(Color::Rgb(40, 20, 20)));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height == 0 {
-        return;
-    }
-
-    // Truncate error message to fit
-    let max_chars = (inner.width as usize) * (inner.height as usize);
-    let truncated: String = error_msg.chars().take(max_chars).collect();
-    let truncated = if error_msg.len() > max_chars {
-        format!("{}...", truncated)
-    } else {
-        truncated
-    };
-
-    let para = Paragraph::new(truncated.as_str())
-        .style(Style::default().fg(Color::Rgb(220, 120, 120)))
-        .wrap(Wrap { trim: true });
-    f.render_widget(para, inner);
 }
 
 /// Render the streaming output block with messages.

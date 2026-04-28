@@ -13,6 +13,7 @@ pub mod task_card;
 pub mod task_detail;
 pub mod task_editor;
 pub mod diff_view;
+pub mod tracing_layer;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;

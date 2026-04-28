@@ -190,6 +190,7 @@ pub fn on_task_moved(
                         cooldown_secs = opencode_config.circuit_breaker_cooldown_secs,
                         "Circuit breaker tripped — skipping agent start (cooldown active)"
                     );
+                    // Note: tracing layer also captures this warning automatically
                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_notification(
                         format!(
@@ -359,6 +360,7 @@ fn start_agent(
                             "Failed to create session after retries: {}",
                             e
                         );
+                        // Note: tracing layer also captures this error automatically
                         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                         if let Some(ref pid) = project_id {
@@ -399,6 +401,7 @@ fn start_agent(
                         "Failed to create session after retries: {}",
                         e
                     );
+                    // Note: tracing layer also captures this error automatically
                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                     // Record circuit breaker failure
@@ -456,6 +459,7 @@ fn start_agent(
                     "Failed to send prompt after retries: {}",
                     e
                 );
+                // Note: tracing layer also captures this error automatically
                 let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                 s.set_task_error(
                     &task_id_clone,

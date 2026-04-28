@@ -16,6 +16,7 @@ pub fn render_input_prompt(f: &mut Frame, state: &crate::state::types::AppState)
     let title = match state.ui.prompt_context.as_deref() {
         Some("rename_project") => " Rename Project ",
         Some("set_working_directory") => " Set Working Directory ",
+        Some("new_project_directory") => " New Project ",
         _ => " Input ",
     };
 

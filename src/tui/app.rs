@@ -17,6 +17,7 @@ use std::time::Duration;
 enum InputPrompt {
     RenameProject,
     WorkingDirectory,
+    NewProjectDirectory,
 }
 
 /// The main TUI application.
@@ -767,6 +768,7 @@ impl App {
                                         perm_id, e
                                     );
                                     // Keep the permission in the pending list so the user can retry
+                                    // Note: tracing layer also captures this error automatically
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.set_notification(
                                         format!("Failed to resolve permission: {}", e),
@@ -885,6 +887,7 @@ impl App {
                                         "Failed to resolve question {}: {}",
                                         question_id, e
                                     );
+                                    // Note: tracing layer also captures this error automatically
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.set_notification(
                                         format!("Failed to answer question: {}", e),
@@ -997,25 +1000,7 @@ impl App {
 
     fn handle_new_project(&mut self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let id = uuid::Uuid::new_v4().to_string();
-        let pos = state.project_registry.projects.len();
-        let project = crate::state::types::CortexProject {
-            id: id.clone(),
-            name: format!("Project {}", pos + 1),
-            working_directory: std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string()),
-            status: crate::state::types::ProjectStatus::Idle,
-            position: pos,
-            ..Default::default()
-        };
-        state.add_project(project);
-        state.select_project(&id);
-        state.set_notification(
-            format!("Created project {}", pos + 1),
-            crate::state::types::NotificationVariant::Success,
-            3000,
-        );
+        state.open_new_project_directory();
     }
 
     fn handle_rename_project(&mut self) {
@@ -1324,21 +1309,32 @@ impl App {
             if let Some(client) = client {
                 let state = self.state.clone();
                 tokio::spawn(async move {
-                    match client.abort_session(&sid).await {
+                    let abort_failed = match client.abort_session(&sid).await {
                         Ok(aborted) => {
                             let _ = aborted;
+                            false
                         }
                         Err(e) => {
                             tracing::error!("Failed to abort session {}: {}", sid, e);
+                            // Tracing layer will also push a notification automatically
+                            true
                         }
-                    }
+                    };
                     // Update notification after attempt
                     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.set_notification(
-                        format!("Session abort requested: {}", sid),
-                        crate::state::types::NotificationVariant::Warning,
-                        3000,
-                    );
+                    if abort_failed {
+                        state.set_notification(
+                            format!("Failed to abort session: {}", sid),
+                            crate::state::types::NotificationVariant::Error,
+                            5000,
+                        );
+                    } else {
+                        state.set_notification(
+                            format!("Session abort requested: {}", sid),
+                            crate::state::types::NotificationVariant::Warning,
+                            3000,
+                        );
+                    }
                     state.mark_render_dirty();
                 });
             } else {
@@ -1453,10 +1449,40 @@ impl App {
                 let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                 state.set_task_session_id(&task_id, None);
                 state.clear_session_data(&task_id);
+
+                // Fix 1: Reset stale pending counts so indicators don't linger
                 if let Some(task) = state.tasks.get_mut(&task_id) {
                     task.error_message = None;
+                    task.pending_permission_count = 0;
+                    task.pending_question_count = 0;
                 }
+
+                // Fix 2: Clean up stale subagent sessions from previous run
+                if let Some(sessions) = state.session_tracker.subagent_sessions.remove(&task_id) {
+                    for sub in &sessions {
+                        state.session_tracker.subagent_to_parent.remove(&sub.session_id);
+                        state.session_tracker.subagent_session_data.remove(&sub.session_id);
+                    }
+                }
+
                 state.update_task_agent_status(&task_id, AgentStatus::Running);
+
+                // Fix 3: Recalculate project status so it reflects Running
+                if let Some(task) = state.tasks.get(&task_id) {
+                    let project_id = task.project_id.clone();
+                    state.update_project_status(&project_id);
+                }
+
+                // Fix 4: Clear navigation stack if it references this task
+                if state.ui.session_nav_stack.iter().any(|r| r.task_id == task_id) {
+                    state.ui.session_nav_stack.clear();
+                    // If we were viewing this task's detail, close it since
+                    // the old session data is now invalid
+                    if state.ui.viewing_task_id.as_deref() == Some(&task_id) {
+                        state.close_task_detail();
+                    }
+                }
+
                 state.mark_render_dirty();
 
                 // Capture previous agent type for on_task_moved
@@ -1945,6 +1971,24 @@ impl App {
                             }
                         }
                     }
+                    InputPrompt::NewProjectDirectory => {
+                        match state.submit_new_project_directory() {
+                            Ok(name) => {
+                                state.set_notification(
+                                    format!("Created project \"{}\"", name),
+                                    crate::state::types::NotificationVariant::Success,
+                                    3000,
+                                );
+                            }
+                            Err(msg) => {
+                                state.set_notification(
+                                    msg,
+                                    crate::state::types::NotificationVariant::Error,
+                                    3000,
+                                );
+                            }
+                        }
+                    }
                 }
             }
             KeyCode::Esc => {
@@ -1952,6 +1996,7 @@ impl App {
                 match prompt {
                     InputPrompt::RenameProject => state.cancel_project_rename(),
                     InputPrompt::WorkingDirectory => state.cancel_working_directory(),
+                    InputPrompt::NewProjectDirectory => state.cancel_new_project_directory(),
                 }
             }
             KeyCode::Char(c) => {
@@ -2022,9 +2067,20 @@ impl App {
         self.handle_text_input(key, InputPrompt::RenameProject);
     }
 
-    /// Handle key events in InputPrompt mode (used for working directory).
+    /// Handle key events in InputPrompt mode (used for working directory and
+    /// new project directory).
     fn handle_input_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
-        self.handle_text_input(key, InputPrompt::WorkingDirectory);
+        let prompt_type = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ui.prompt_context.as_deref().map(|c| match c {
+                "new_project_directory" => InputPrompt::NewProjectDirectory,
+                "set_working_directory" => InputPrompt::WorkingDirectory,
+                _ => InputPrompt::WorkingDirectory,
+            })
+        };
+        if let Some(pt) = prompt_type {
+            self.handle_text_input(key, pt);
+        }
     }
 
     /// Handle key events in TaskEditor mode.

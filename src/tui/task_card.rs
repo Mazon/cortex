@@ -90,7 +90,7 @@ pub fn render_task_card(
     }
 
     // Build status line as styled spans so indicators get bold + bright colors
-    let status_spans: Vec<Span<'_>> = if !has_permissions && !has_questions {
+    let mut status_spans: Vec<Span<'_>> = if !has_permissions && !has_questions {
         vec![Span::styled(status_line, Style::default().fg(status_color))]
     } else {
         let mut spans = Vec::new();
@@ -177,6 +177,14 @@ pub fn render_task_card(
 
         spans
     };
+
+    // Add a dim keybinding hint for hung/error tasks to improve discoverability
+    if matches!(task.agent_status, AgentStatus::Hung | AgentStatus::Error) {
+        status_spans.push(Span::styled(
+            " [R]",
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     if inner.height >= 1 {
         // Line 1 (title) — always render if we have any space

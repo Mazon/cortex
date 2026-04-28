@@ -14,6 +14,7 @@ use clap::Parser;
 use persistence::db::Db;
 use state::types::{AgentStatus, AppState};
 use tui::app::App;
+use tracing_subscriber::prelude::*;
 
 /// cortex — TUI Kanban board with OpenCode SDK integration
 #[derive(Parser, Debug)]
@@ -43,13 +44,17 @@ fn main() -> Result<()> {
 
     let config = config::load_config(&config_path)?;
 
-    // Initialize tracing — writes to stderr by default
+    // Initialize tracing — writes to stderr by default, plus routes
+    // Warn/Error events to the TUI notification bar once AppState exists.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log.level));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
+    let tui_layer = tui::tracing_layer::TuiNotificationLayer::new();
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_target(false)) // stderr layer
+        .with(tui_layer.clone()) // TUI notification layer
         .init();
 
     // Enter alternate screen early to hide any residual startup output
@@ -101,6 +106,10 @@ fn main() -> Result<()> {
 
         // Create app state
         let state = Arc::new(Mutex::new(AppState::default()));
+
+        // Wire the tracing layer to the app state so Warn/Error events
+        // are automatically pushed to the notification bar.
+        tui_layer.set_state(&state);
 
         // === Lock ordering convention ===
         //
@@ -179,11 +188,23 @@ fn main() -> Result<()> {
                         }
                         Err(e) => {
                             tracing::error!("Failed to create OpenCode client: {}", e);
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                            s.set_notification(
+                                format!("Failed to connect to OpenCode server: {}", e),
+                                crate::state::types::NotificationVariant::Error,
+                                8000,
+                            );
                         }
                     }
                 }
                 Err(e) => {
                     tracing::error!("Failed to start OpenCode server: {}", e);
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!("Failed to start OpenCode server: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        8000,
+                    );
                 }
             }
         }

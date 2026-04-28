@@ -159,10 +159,15 @@ impl Db {
     // ─── Kanban Order ──────────────────────────────────────────────────
 
     pub fn save_kanban_order(&self, column: &KanbanColumn, task_ids: &[String]) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM kanban_order WHERE column_id = ?1",
-            params![column.0],
-        )?;
+        // Only delete entries for the task_ids being re-saved, NOT all entries
+        // for this column. Column names (e.g. "todo") are shared across projects,
+        // so a blanket column-level DELETE would destroy other projects' order.
+        for task_id in task_ids {
+            self.conn.execute(
+                "DELETE FROM kanban_order WHERE task_id = ?1",
+                params![task_id],
+            )?;
+        }
         for (pos, task_id) in task_ids.iter().enumerate() {
             self.conn.execute(
                 "INSERT INTO kanban_order (column_id, task_id, position) VALUES (?1, ?2, ?3)",
@@ -275,10 +280,15 @@ impl Db {
         task_ids: &[String],
         tx: &Transaction,
     ) -> Result<()> {
-        tx.execute(
-            "DELETE FROM kanban_order WHERE column_id = ?1",
-            params![column.0],
-        )?;
+        // Only delete entries for the task_ids being re-saved, NOT all entries
+        // for this column. Column names (e.g. "todo") are shared across projects,
+        // so a blanket column-level DELETE would destroy other projects' order.
+        for task_id in task_ids {
+            tx.execute(
+                "DELETE FROM kanban_order WHERE task_id = ?1",
+                params![task_id],
+            )?;
+        }
         for (pos, task_id) in task_ids.iter().enumerate() {
             tx.execute(
                 "INSERT INTO kanban_order (column_id, task_id, position) VALUES (?1, ?2, ?3)",
