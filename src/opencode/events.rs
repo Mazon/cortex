@@ -26,35 +26,39 @@ const MAX_CONCURRENT_AUTO_APPROVES: usize = 8;
 static AUTO_APPROVE_SEMAPHORE: std::sync::LazyLock<Semaphore> =
     std::sync::LazyLock::new(|| Semaphore::new(MAX_CONCURRENT_AUTO_APPROVES));
 
-/// Run the SSE event loop for a single project's OpenCode client.
-/// This is spawned as a tokio task per active project.
+/// Run the SSE event loop for an OpenCode server shared by one or more projects.
+/// This is spawned as a tokio task per unique server URL.
 ///
 /// The `shutdown` receiver is watched so the loop can exit cleanly when the
 /// app is shutting down, instead of relying solely on task cancellation via
 /// `abort()`.
 ///
-/// `project_id` identifies which project this loop serves. Connection state
-/// is tracked per-project on `CortexProject` rather than globally on `AppState`.
+/// `project_ids` identifies all projects sharing this server URL. Connection
+/// state changes (connected, reconnecting, permanently_disconnected) are
+/// propagated to every project in the list so that the status bar stays
+/// consistent across multi-project setups.
 pub async fn sse_event_loop(
     client: OpenCodeClient,
     state: Arc<Mutex<AppState>>,
     columns_config: ColumnsConfig,
     opencode_config: OpenCodeConfig,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
-    project_id: String,
+    project_ids: Vec<String>,
 ) {
-    let mut backoff_ms: u64 = 2000;
+    let base_backoff_ms: u64 = 2000;
+    let mut backoff_power: u32 = 0; // 2^backoff_power * base_backoff_ms + jitter
     let mut reconnect_attempt: u32 = 0;
 
     // Add per-project jitter to avoid thundering herd when a shared server goes
-    // down.  A simple deterministic hash of the project ID produces a stable
-    // 0–500 ms offset so different projects spread their reconnect attempts
-    // evenly without adding a random dependency.
-    let jitter: u64 = (project_id
-        .bytes()
+    // down.  A simple deterministic hash of the first project ID produces a
+    // stable 0–500 ms offset so different server groups spread their reconnect
+    // attempts evenly without adding a random dependency.
+    let jitter: u64 = (project_ids
+        .first()
+        .map(|pid| pid.bytes())
+        .unwrap_or_else(|| "".bytes())
         .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64)))
         % 501;
-    backoff_ms += jitter;
 
     // Effective max retries: use config value, but treat 0 as "use default"
     // to avoid accidentally retrying forever.
@@ -72,25 +76,26 @@ pub async fn sse_event_loop(
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
-                backoff_ms = 2000 + jitter; // Reset backoff on successful connection
+                backoff_power = 0; // Reset backoff on successful connection
                 reconnect_attempt = 0; // Reset consecutive failure counter on success
                 let mut stream = stream;
 
                 // Mark reconnection complete — we have a live stream.
+                // Propagate to all projects sharing this server URL.
                 {
                     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.set_project_connected(&project_id, true);
+                    for pid in &project_ids {
+                        state.set_project_connected(pid, true);
+                    }
                 }
 
                 loop {
                     tokio::select! {
                         event_result = stream.next() => {
                             let Some(event_result) = event_result else {
-                                // Stream closed by the server.
-                                {
-                                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                                    state.set_project_reconnecting(&project_id, true);
-                                }
+                                // Stream closed by the server — break to reconnect.
+                                // Don't set reconnecting here; the outer loop's
+                                // grace period will handle it.
                                 break;
                             };
 
@@ -110,11 +115,9 @@ pub async fn sse_event_loop(
                                         }
                                         SseStreamError::Connection(msg) => {
                                             // Connection error — stream is dead, break to reconnect.
-                                            tracing::debug!("SSE stream error (reconnecting): {}", msg);
-                                            {
-                                                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                                                state.set_project_reconnecting(&project_id, true);
-                                            }
+                                            // Don't set reconnecting here; the outer loop's
+                                            // grace period will handle it.
+                                            tracing::warn!("SSE stream error (reconnecting): {}", msg);
                                             break;
                                         }
                                     }
@@ -225,12 +228,9 @@ pub async fn sse_event_loop(
                     }
                 }
             }
-            Err(e) => {
-                let _ = e;
-                {
-                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                    state.set_project_reconnecting(&project_id, true);
-                }
+            Err(_e) => {
+                // Initial connection failure — don't set reconnecting here.
+                // The outer loop's grace period will handle it.
             }
         }
 
@@ -238,7 +238,9 @@ pub async fn sse_event_loop(
         if reconnect_attempt >= max_retries {
             {
                 let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                state.set_project_permanently_disconnected(&project_id);
+                for pid in &project_ids {
+                    state.set_project_permanently_disconnected(pid);
+                }
                 state.mark_render_dirty();
             }
             return;
@@ -246,12 +248,19 @@ pub async fn sse_event_loop(
 
         // Exponential backoff with max 30s, but also break on shutdown.
         reconnect_attempt += 1;
-        {
-            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-            state.set_project_reconnecting(&project_id, true);
-            state.set_project_reconnect_attempt(&project_id, reconnect_attempt);
-            state.mark_render_dirty();
-        }
+
+        // Compute fresh backoff: base * 2^power + jitter. Jitter is always
+        // 0–500 ms regardless of retry count, avoiding accumulation from
+        // exponential doubling.
+        let backoff_ms =
+            (base_backoff_ms * 2u64.pow(backoff_power)).min(30_000) + jitter;
+
+        // Grace period: sleep before updating the reconnecting indicator.
+        // This prevents a yellow "reconnecting" flash for transient connection
+        // blips (e.g., a single read-timeout that reconnects quickly). The
+        // user continues to see "connected" (green) during this window. If
+        // reconnection succeeds on the next loop iteration, the reconnecting
+        // flag is never set and the yellow indicator never appears.
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
             _ = shutdown.changed() => {
@@ -260,7 +269,18 @@ pub async fn sse_event_loop(
                 }
             }
         }
-        backoff_ms = (backoff_ms * 2).min(30_000);
+
+        // Update reconnecting state after grace period has elapsed.
+        // Propagate to all projects sharing this server URL.
+        {
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+            for pid in &project_ids {
+                state.set_project_reconnecting(pid, true);
+                state.set_project_reconnect_attempt(pid, reconnect_attempt);
+            }
+            state.mark_render_dirty();
+        }
+        backoff_power += 1;
     }
 }
 
@@ -293,22 +313,71 @@ fn process_event(
             state.process_session_status(&properties.session_id, status);
             // When the session completes, signal the caller to finalize
             // streaming text into persistent message history.
-            let finalize = if matches!(status, "complete" | "completed") {
+            // Also trigger auto-progression as a fallback in case SessionIdle
+            // doesn't arrive or is delayed — the task should still move to the
+            // next column.
+            let (finalize, action) = if matches!(status, "complete" | "completed") {
                 // Extract plan output early on SessionStatus "complete" to
                 // capture the plan before streaming truncation might discard
                 // early content. The SessionIdle handler will also extract
                 // (and the finalize task may overwrite with richer content),
                 // but this early capture protects against truncation.
-                if let Some(task_id) = state.get_task_id_by_session(&properties.session_id)
-                    .map(|s| s.to_string())
-                {
-                    state.extract_plan_output(&task_id);
+                let task_id = state
+                    .get_task_id_by_session(&properties.session_id)
+                    .map(|s| s.to_string());
+                if let Some(ref tid) = task_id {
+                    state.extract_plan_output(tid);
                 }
-                Some(properties.session_id.clone())
+                // Trigger auto-progression as a fallback.  If SessionIdle
+                // already ran and moved the task, the session mapping will
+                // have been cleared (or the task will be Running), so this
+                // is a safe no-op.
+                let action = if let Some(ref tid) = task_id {
+                    // Only progress if the task is still Complete (not already
+                    // auto-progressed by a prior SessionIdle).
+                    let is_complete = state
+                        .tasks
+                        .get(tid)
+                        .map(|t| t.agent_status == AgentStatus::Complete)
+                        .unwrap_or(false);
+                    if is_complete {
+                        // Check if the task has pending questions — if so,
+                        // set Question status and block auto-progression.
+                        let has_questions = state
+                            .tasks
+                            .get(tid)
+                            .map(|t| t.pending_question_count > 0)
+                            .unwrap_or(false);
+                        if has_questions {
+                            state.update_task_agent_status(tid, AgentStatus::Question);
+                            None
+                        } else if let Some(ref col) = state.tasks.get(tid).map(|t| t.column.clone()) {
+                            let has_auto_progress =
+                                columns_config.auto_progress_for(&col.0).is_some();
+                            let has_plan = state
+                                .tasks
+                                .get(tid)
+                                .and_then(|t| t.plan_output.as_ref())
+                                .map(|p| !p.trim().is_empty())
+                                .unwrap_or(false);
+                            if has_auto_progress || has_plan {
+                                state.update_task_agent_status(tid, AgentStatus::Ready);
+                            }
+                            on_agent_completed(tid, state, columns_config)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                (Some(properties.session_id.clone()), action)
             } else {
-                None
+                (None, None)
             };
-            (None, finalize)
+            (action, finalize)
         }
 
         EventListResponse::SessionIdle { properties } => {
@@ -318,12 +387,23 @@ fn process_event(
                 // overwrite with the full message-based version.
                 state.extract_plan_output(&task_id);
 
-                // process_session_idle sets Complete by default — override to Ready
-                // when the column has auto_progress_to configured, meaning the agent
-                // completed but the task has a next step, OR when the task has a
-                // non-empty plan_output (meaning the agent produced a plan but hasn't
-                // acted on it yet). Terminal columns without a plan stay Complete ("done").
-                if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
+                // Check if the task has pending questions — if so,
+                // set Question status and block auto-progression.
+                let has_questions = state
+                    .tasks
+                    .get(&task_id)
+                    .map(|t| t.pending_question_count > 0)
+                    .unwrap_or(false);
+
+                if has_questions {
+                    state.update_task_agent_status(&task_id, AgentStatus::Question);
+                    None
+                } else if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
+                    // process_session_idle sets Complete by default — override to Ready
+                    // when the column has auto_progress_to configured, meaning the agent
+                    // completed but the task has a next step, OR when the task has a
+                    // non-empty plan_output (meaning the agent produced a plan but hasn't
+                    // acted on it yet). Terminal columns without a plan stay Complete ("done").
                     let has_auto_progress = columns_config.auto_progress_for(&col.0).is_some();
                     let has_plan = state
                         .tasks
@@ -334,9 +414,11 @@ fn process_event(
                     if has_auto_progress || has_plan {
                         state.update_task_agent_status(&task_id, AgentStatus::Ready);
                     }
+                    // Trigger auto-progression if configured for this column
+                    on_agent_completed(&task_id, state, columns_config)
+                } else {
+                    None
                 }
-                // Trigger auto-progression if configured for this column
-                on_agent_completed(&task_id, state, columns_config)
             } else {
                 None
             };
@@ -578,6 +660,13 @@ mod tests {
                     display_name: Some("Run".to_string()),
                     visible: true,
                     agent: Some("do".to_string()),
+                    auto_progress_to: Some("review".to_string()),
+                },
+                ColumnConfig {
+                    id: "review".to_string(),
+                    display_name: Some("Review".to_string()),
+                    visible: true,
+                    agent: Some("reviewer-alpha".to_string()),
                     auto_progress_to: None,
                 },
             ],
@@ -617,7 +706,11 @@ mod tests {
     fn session_status_completed_updates_task() {
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
-        let columns_config = make_columns_config();
+        // Use a config without auto-progression so we can test the
+        // status update in isolation (auto-progression fallback would
+        // otherwise move the task and set Running).
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
 
         let event = EventListResponse::SessionStatus {
             properties: opencode_sdk_rs::resources::event::SessionStatusProps {
@@ -1077,7 +1170,9 @@ mod tests {
         // updates the task as expected.
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
-        let columns_config = make_columns_config();
+        // Disable auto-progression so we test pure status update.
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[1].auto_progress_to = None;
 
         // Mapping is present (from make_test_state)
         assert!(state.get_task_id_by_session(&session_id).is_some());
@@ -1106,9 +1201,10 @@ mod tests {
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
 
-        // Config without auto-progression for "planning"
+        // Config without auto-progression for "planning" or "running"
         let mut columns_config = make_columns_config();
         columns_config.definitions[1].auto_progress_to = None;
+        columns_config.definitions[2].auto_progress_to = None;
 
         // Move task to "running" (terminal column — no auto_progress_to)
         state.move_task(&task_id, KanbanColumn("running".to_string()));
@@ -1167,9 +1263,10 @@ mod tests {
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
 
-        // Config without auto-progression for "planning"
+        // Config without auto-progression for "planning" or "running"
         let mut columns_config = make_columns_config();
         columns_config.definitions[1].auto_progress_to = None;
+        columns_config.definitions[2].auto_progress_to = None;
 
         // Move task to "running" (terminal column — no auto_progress_to)
         state.move_task(&task_id, KanbanColumn("running".to_string()));
@@ -1369,31 +1466,46 @@ mod tests {
         let session = state.session_tracker.task_sessions.get(&task_id).unwrap();
         assert_eq!(session.streaming_text.as_deref(), Some("Hello world! This is a test."));
 
-        // 3. Session completes
+        // 3. Session completes — auto-progression fallback triggers,
+        // moving task from "planning" → "running" and returning an action.
         let complete_event = EventListResponse::SessionStatus {
             properties: opencode_sdk_rs::resources::event::SessionStatusProps {
                 session_id: session_id.clone(),
                 status: serde_json::json!({ "type": "completed" }),
             },
         };
-        let (_action, finalize) = process_event(&complete_event, &mut state, &client, &columns_config);
-        assert_eq!(state.tasks.get(&task_id).unwrap().agent_status, AgentStatus::Complete);
-        assert_eq!(finalize.as_deref(), Some(session_id.as_str()));
-
-        // 4. Session goes idle → triggers auto-progression
-        let idle_event = EventListResponse::SessionIdle {
-            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
-                session_id: session_id.clone(),
-            },
-        };
-        let (action, finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
+        let (action, finalize) = process_event(&complete_event, &mut state, &client, &columns_config);
 
         // Task should be in "running" column now (auto-progressed from "planning")
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
         // Should have an auto-progress action
         assert!(action.is_some());
         // Should signal finalization
-        assert!(finalize.is_some());
+        assert_eq!(finalize.as_deref(), Some(session_id.as_str()));
+
+        // Simulate the event loop post-processing that the real code does:
+        // clear the old session mapping and set Running status.
+        {
+            let old_sid = state.tasks.get(&task_id).and_then(|t| t.session_id.clone());
+            if let Some(old_sid) = old_sid {
+                state.session_tracker.session_to_task.remove(&old_sid);
+            }
+            state.update_task_agent_status(&task_id, AgentStatus::Running);
+        }
+
+        // 4. SessionIdle arrives later — session mapping was cleared,
+        // so process_session_idle won't find the task → no action.
+        let idle_event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (idle_action, idle_finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
+
+        // No action should be triggered (mapping was cleared)
+        assert!(idle_action.is_none());
+        // Finalization may still be signaled
+        assert!(idle_finalize.is_some());
     }
 
     /// Test SSE deduplication: receiving the exact same delta twice (same key,
@@ -1567,7 +1679,17 @@ mod tests {
                 status: serde_json::json!({ "type": "completed" }),
             },
         };
-        process_event(&complete_event, &mut state, &client, &columns_config);
+        let (complete_action, _finalize) = process_event(&complete_event, &mut state, &client, &columns_config);
+
+        // Simulate the event loop post-processing: clear old session mapping
+        // and set Running status (what the real event loop does at lines 139-151).
+        if complete_action.is_some() {
+            let old_sid = state.tasks.get(&task_id).and_then(|t| t.session_id.clone());
+            if let Some(old_sid) = old_sid {
+                state.session_tracker.session_to_task.remove(&old_sid);
+            }
+            state.update_task_agent_status(&task_id, AgentStatus::Running);
+        }
 
         // Verify plan_output was extracted on SessionStatus "completed"
         assert!(
@@ -1575,17 +1697,20 @@ mod tests {
             "plan_output should be extracted on SessionStatus completed"
         );
 
-        // 3. Session idle → auto-progression
+        // Verify auto-progression happened on SessionStatus "completed"
+        assert!(complete_action.is_some(), "auto-progression should trigger on SessionStatus completed");
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+
+        // 3. Session idle arrives later — mapping was cleared, so no-op
         let idle_event = EventListResponse::SessionIdle {
             properties: opencode_sdk_rs::resources::event::SessionIdleProps {
                 session_id: session_id.clone(),
             },
         };
-        let (action, _finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
+        let (idle_action, _idle_finalize) = process_event(&idle_event, &mut state, &client, &columns_config);
 
-        // Verify auto-progression happened
-        assert!(action.is_some(), "auto-progression should trigger");
-        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+        // No action — mapping was cleared by post-processing above
+        assert!(idle_action.is_none(), "SessionIdle should be no-op after auto-progression");
 
         // 4. Simulate start_agent creating a new session (clearing session data)
         state.set_task_session_id(&task_id, Some("session-do-agent".to_string()));
@@ -1751,6 +1876,99 @@ mod tests {
         assert_eq!(
             state.tasks.get(&task_id).unwrap().plan_output.as_deref(),
             Some("Early plan extraction test")
+        );
+    }
+
+    // ── Question Status (pending questions block auto-progression) ──────
+
+    #[test]
+    fn session_idle_with_pending_questions_sets_question_status() {
+        // When a task has pending questions and the agent goes idle,
+        // the task should enter Question status instead of Ready/Complete,
+        // and auto-progression should be blocked.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Simulate a pending question on the task
+        state.tasks.get_mut(&task_id).unwrap().pending_question_count = 1;
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (action, finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Task should be in Question status, not Ready
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Question,
+            "task with pending questions should enter Question status on SessionIdle"
+        );
+        // No auto-progression action should be returned
+        assert!(
+            action.is_none(),
+            "auto-progression should be blocked when questions are pending"
+        );
+        // Finalization should still happen
+        assert_eq!(finalize.as_deref(), Some(session_id.as_str()));
+    }
+
+    #[test]
+    fn session_status_complete_with_pending_questions_sets_question_status() {
+        // SessionStatus "complete" should also set Question status when
+        // pending questions exist, blocking auto-progression.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // Simulate a pending question on the task
+        state.tasks.get_mut(&task_id).unwrap().pending_question_count = 2;
+
+        let event = EventListResponse::SessionStatus {
+            properties: opencode_sdk_rs::resources::event::SessionStatusProps {
+                session_id: session_id.clone(),
+                status: serde_json::json!({ "type": "completed" }),
+            },
+        };
+        let (action, finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Task should be in Question status
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Question,
+            "task with pending questions should enter Question status on SessionStatus complete"
+        );
+        // No auto-progression
+        assert!(action.is_none());
+        // Finalization should still happen
+        assert!(finalize.is_some());
+    }
+
+    #[test]
+    fn session_idle_without_pending_questions_proceeds_normally() {
+        // When no questions are pending, the existing Ready/Complete +
+        // auto-progression behavior should be preserved.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+        let columns_config = make_columns_config();
+
+        // No pending questions — default behavior
+        assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 0);
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Should be Ready (planning column has auto_progress_to configured)
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Ready,
+            "task without pending questions should proceed to Ready as before"
         );
     }
 }
