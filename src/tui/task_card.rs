@@ -60,25 +60,6 @@ pub fn render_task_card(
     };
 
     let mut status_line = format!("{} {}", status_icon, status_text);
-    // Append truncated error message when task is in error state
-    if task.agent_status == AgentStatus::Error {
-        if let Some(ref msg) = task.error_message {
-            if !msg.is_empty() {
-                // Build the full line first, then truncate to card width
-                let error_detail = format!("{}: {}", status_line, msg);
-                let max_len = inner.width as usize;
-                if error_detail.chars().count() > max_len {
-                    let truncated: String = error_detail
-                        .chars()
-                        .take(max_len.saturating_sub(3))
-                        .collect();
-                    status_line = format!("{}...", truncated);
-                } else {
-                    status_line = error_detail;
-                }
-            }
-        }
-    }
     // Permission/question indicators — bold + bright colors for visibility
     let has_permissions = task.pending_permission_count > 0;
     let has_questions = task.pending_question_count > 0;
