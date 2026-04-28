@@ -228,9 +228,14 @@ pub async fn sse_event_loop(
                     }
                 }
             }
-            Err(_e) => {
+            Err(e) => {
                 // Initial connection failure — don't set reconnecting here.
                 // The outer loop's grace period will handle it.
+                tracing::debug!(
+                    "SSE initial connection failed (attempt {}): {}",
+                    reconnect_attempt + 1,
+                    e
+                );
             }
         }
 
