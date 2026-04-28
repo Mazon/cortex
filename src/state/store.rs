@@ -344,6 +344,56 @@ impl AppState {
         }
     }
 
+    /// Populate a task's session data from fetched messages.
+    ///
+    /// Used on startup to restore agent output for tasks that were Running
+    /// (or Question/Error) when the application was restarted. The full
+    /// message history is fetched from the OpenCode server and injected into
+    /// `task_sessions` so the task detail panel can render the output.
+    pub fn rehydrate_task_session(
+        &mut self,
+        task_id: &str,
+        messages: Vec<TaskMessage>,
+    ) {
+        let session = self
+            .session_tracker
+            .task_sessions
+            .entry(task_id.to_string())
+            .or_insert_with(|| TaskDetailSession {
+                task_id: task_id.to_string(),
+                ..Default::default()
+            });
+
+        // Carry over the session_id from the task if we have one
+        if session.session_id.is_none() {
+            session.session_id = self
+                .tasks
+                .get(task_id)
+                .and_then(|t| t.session_id.clone());
+        }
+
+        session.messages = messages;
+        // Clear any stale streaming state — messages replace it
+        session.streaming_text = None;
+        session.render_version += 1;
+        self.mark_render_dirty();
+    }
+
+    /// Mark a running task whose session no longer exists on the server as Error.
+    ///
+    /// This can happen when the application is restarted while an agent was
+    /// running and the OpenCode server no longer has the session data (e.g.,
+    /// the session was never persisted, or the data directory was cleaned).
+    pub fn mark_orphaned_running_task(&mut self, task_id: &str) {
+        self.set_task_error(
+            task_id,
+            "Agent session lost — the session no longer exists on the server. \
+             This can happen when the application is restarted while an agent \
+             was running."
+                .to_string(),
+        );
+    }
+
     /// Set the agent type on a task (e.g., when an agent is started from
     /// column config). This is informational — it's displayed in the
     /// task detail view and persisted to the database. Marks state dirty.

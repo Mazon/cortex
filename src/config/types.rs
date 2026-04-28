@@ -211,10 +211,20 @@ pub struct OpenCodeConfig {
     /// Set to 0 to retry forever (not recommended). Defaults to 50.
     #[serde(default = "default_sse_max_retries")]
     pub sse_max_retries: u32,
-    /// Read timeout (per-chunk) for SSE event streams, in seconds.
-    /// The timer resets after every successful chunk, so the stream
-    /// only dies when no data arrives for this duration. Defaults to 120s.
+    /// ~~Read timeout (per-chunk) for SSE event streams, in seconds.~~
+    ///
+    /// **Deprecated:** This field is no longer used. The SSE client now
+    /// relies on TCP keepalive probes (15s idle, 15s interval, 3 retries)
+    /// and HTTP/2 keepalive PING frames (30s interval) instead of a
+    /// per-chunk `read_timeout`. Setting this field in your config will
+    /// have no effect. It is retained for backward compatibility with
+    /// existing `cortex.toml` files — it will be silently parsed and
+    /// ignored.
     #[serde(default = "default_sse_read_timeout_secs")]
+    #[deprecated(
+        since = "0.5.0",
+        note = "No longer used. SSE connections now use TCP keepalive and HTTP/2 PING frames."
+    )]
     pub sse_read_timeout_secs: u64,
     /// Timeout in seconds after which a Running task with no SSE activity
     /// is considered "Hung". Defaults to 300 (5 minutes).
@@ -242,12 +252,10 @@ fn default_sse_max_retries() -> u32 {
 
 /// Default value for `OpenCodeConfig::sse_read_timeout_secs`.
 ///
-/// Set to 120s (2 minutes) to avoid false reconnection triggers during idle
-/// periods. The timer resets after every successful chunk read, so the stream
-/// only dies when no data (events, heartbeats, or keep-alive comments) arrives
-/// for this duration. A value that's too low (e.g. 60s) causes the SSE client
-/// to disconnect and reconnect every ~62 seconds during idle, producing a
-/// noticeable yellow "reconnecting" flash in the status bar.
+/// Retained for backward config compatibility only — the field is deprecated
+/// and no longer used. The SSE client now uses TCP keepalive and HTTP/2
+/// keepalive PING frames instead of a per-chunk `read_timeout`.
+#[allow(deprecated)]
 fn default_sse_read_timeout_secs() -> u64 {
     120
 }
@@ -290,6 +298,7 @@ impl Default for OpenCodeConfig {
             mcp_servers: HashMap::new(),
             request_timeout_secs: default_request_timeout_secs(),
             sse_max_retries: default_sse_max_retries(),
+            #[allow(deprecated)]
             sse_read_timeout_secs: default_sse_read_timeout_secs(),
             hung_agent_timeout_secs: default_hung_agent_timeout_secs(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),

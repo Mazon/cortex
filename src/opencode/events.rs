@@ -76,6 +76,10 @@ pub async fn sse_event_loop(
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
+                tracing::info!(
+                    "SSE stream established (server: {})",
+                    client.base_url()
+                );
                 // Snapshot reconnect count before resetting — used below for
                 // recovery diagnostics.
                 let was_reconnecting = reconnect_attempt > 0;
@@ -91,6 +95,9 @@ pub async fn sse_event_loop(
                                 // Stream closed by the server — break to reconnect.
                                 // Don't set reconnecting here; the outer loop's
                                 // grace period will handle it.
+                                tracing::info!(
+                                    "SSE stream closed by server (clean close, will reconnect)"
+                                );
                                 break;
                             };
 
@@ -112,7 +119,10 @@ pub async fn sse_event_loop(
                                             // Connection error — stream is dead, break to reconnect.
                                             // Don't set reconnecting here; the outer loop's
                                             // grace period will handle it.
-                                            tracing::debug!("SSE stream error (reconnecting): {}", msg);
+                                            tracing::warn!(
+                                                "SSE connection error (will reconnect): {}",
+                                                msg
+                                            );
                                             break;
                                         }
                                     }
@@ -245,8 +255,8 @@ pub async fn sse_event_loop(
             Err(e) => {
                 // Initial connection failure — don't set reconnecting here.
                 // The outer loop's grace period will handle it.
-                tracing::debug!(
-                    "SSE initial connection failed (attempt {}): {}",
+                tracing::warn!(
+                    "SSE connection failed (attempt {}): {}",
                     reconnect_attempt + 1,
                     e
                 );
@@ -255,6 +265,11 @@ pub async fn sse_event_loop(
 
         // Check if we've exceeded the max retry limit.
         if reconnect_attempt >= max_retries {
+            tracing::warn!(
+                "SSE max retries reached ({}), entering slow-retry mode (projects: {:?})",
+                max_retries,
+                project_ids
+            );
             {
                 let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                 for pid in &project_ids {
@@ -317,6 +332,12 @@ pub async fn sse_event_loop(
             }
             state.mark_render_dirty();
         }
+        tracing::info!(
+            "SSE reconnecting (attempt {}, backoff {}ms, projects: {:?})",
+            reconnect_attempt,
+            backoff_ms,
+            project_ids
+        );
         backoff_power += 1;
     }
 }

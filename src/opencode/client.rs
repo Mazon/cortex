@@ -18,20 +18,23 @@ use crate::state::types::{CortexTask, MessageRole, TaskMessage, TaskMessagePart,
 /// Cortex-specific wrapper around the `opencode-sdk-rs` `Opencode` client.
 ///
 /// Holds both the SDK client (for non-SSE API calls like session CRUD,
-/// chat, permissions) and an hpx client configured with `read_timeout`
-/// (for SSE event streaming).
+/// chat, permissions) and an hpx client for SSE event streaming.
+///
+/// **Connection stability:** The SSE client does *not* set a `read_timeout`
+/// on the hpx client. Instead, it relies on TCP keepalive probes
+/// (default: 15s idle, 15s interval, 3 retries ≈ dead-server detection
+/// in ~45–60 s) and optional HTTP/2 PING frames. This avoids the
+/// periodic disconnect-reconnect cycle caused by a `read_timeout` firing
+/// during idle periods when the server sends no SSE heartbeats.
 #[derive(Clone)]
 pub struct OpenCodeClient {
     sdk: opencode_sdk_rs::Opencode,
-    /// Per-chunk read timeout (seconds) for SSE event streams.
-    sse_read_timeout_secs: u64,
 }
 
 impl OpenCodeClient {
     /// Create a new `OpenCodeClient` connected to the given base URL.
     ///
-    /// Uses a default SSE read timeout of 60 seconds. Prefer
-    /// [`from_config_with_url`] when a config is available.
+    /// Prefer [`from_config_with_url`] when a config is available.
     pub fn new(base_url: &str) -> Result<Self> {
         let sdk = opencode_sdk_rs::Opencode::builder()
             .base_url(base_url)
@@ -39,26 +42,20 @@ impl OpenCodeClient {
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        Ok(Self {
-            sdk,
-            sse_read_timeout_secs: 120,
-        })
+        Ok(Self { sdk })
     }
 
     /// Create a new `OpenCodeClient` using config values but connected to
     /// the specified URL (which may differ from `config.hostname:config.port`
     /// when the server picks a random port).
-    pub fn from_config_with_url(config: &OpenCodeConfig, url: &str) -> Result<Self> {
+    pub fn from_config_with_url(_config: &OpenCodeConfig, url: &str) -> Result<Self> {
         let sdk = opencode_sdk_rs::Opencode::builder()
             .base_url(url)
-            .timeout(Duration::from_secs(config.request_timeout_secs))
+            .timeout(Duration::from_secs(_config.request_timeout_secs))
             .max_retries(2)
             .build()
             .context("Failed to build OpenCode SDK client")?;
-        Ok(Self {
-            sdk,
-            sse_read_timeout_secs: config.sse_read_timeout_secs,
-        })
+        Ok(Self { sdk })
     }
 
     /// Create a new OpenCode session.
@@ -239,22 +236,44 @@ impl OpenCodeClient {
     }
 
     /// Subscribe to the OpenCode SSE event stream using a direct hpx
-    /// connection with `read_timeout` instead of the SDK's `total_timeout`.
+    /// connection.
     ///
     /// **Why not the SDK?** The SDK's `OpencodeBuilder` only exposes
     /// `timeout()` which sets hpx's `total_timeout` — a single-shot timer
     /// that kills the response body after N seconds and never resets.
-    /// For SSE streams that last hours, this is fatal. hpx's `read_timeout`
-    /// resets after every successful chunk read, so as long as heartbeats
-    /// arrive every ~5s, the stream continues indefinitely.
+    /// For SSE streams that last hours, this is fatal.
+    ///
+    /// **Connection stability:** No `read_timeout` is set on the hpx client.
+    /// The OpenCode server does not send periodic SSE heartbeats, so a
+    /// `read_timeout` would kill the connection during every idle period.
+    /// Instead, we rely on:
+    /// - **TCP keepalive** (hpx default: 15s idle, 15s interval, 3 retries)
+    ///   to detect dead servers within ~45–60 seconds.
+    /// - **HTTP/2 keepalive PING frames** (when negotiated) to prevent
+    /// intermediaries from closing idle connections.
     ///
     /// Returns our own [`SseEventStream`] which behaves identically to the
-    /// SDK's `SseStream` but wraps an hpx client configured with
-    /// `read_timeout(sse_read_timeout_secs)`.
+    /// SDK's `SseStream` but wraps an hpx client configured for long-lived
+    /// SSE connections.
     pub async fn subscribe_to_events(&self) -> Result<SseEventStream<EventListResponse>> {
+        // Build HTTP/2 keepalive options — PING frames every 30 s while
+        // idle keep the connection alive through HTTP/2-aware proxies and
+        // prevent the server from closing it due to inactivity.
+        let http2_opts = hpx::http2::Http2Options::builder()
+            .keep_alive_interval(Duration::from_secs(30))
+            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_while_idle(true)
+            .build();
+
         let hpx_client = hpx::Client::builder()
             .timeout(Duration::from_secs(30)) // TCP connect + HTTP headers
-            .read_timeout(Duration::from_secs(self.sse_read_timeout_secs.max(5))) // per-chunk body timeout (min 5s)
+            // No read_timeout — rely on TCP keepalive (15s default) to detect
+            // dead servers. A read_timeout would kill idle SSE streams since
+            // the server doesn't send periodic heartbeats.
+            .tcp_keepalive(Duration::from_secs(15))          // Start probing after 15s idle
+            .tcp_keepalive_interval(Duration::from_secs(15)) // Probe every 15s
+            .tcp_keepalive_retries(3)                        // 3 retries → dead in ~60s
+            .http2_options(http2_opts)
             .build()
             .context("Failed to build hpx client for SSE")?;
 
@@ -477,7 +496,7 @@ mod tests {
     // payloads through it, and consume the resulting `SseEventStream<EventListResponse>`
     // via the real `OpenCodeClient`.  They exercise the complete pipeline:
     //
-    //   hpx client (read_timeout) → HTTP response → byte stream → SSE decode → JSON parse
+    //   hpx client (TCP keepalive) → HTTP response → byte stream → SSE decode → JSON parse
 
     /// Spin up a minimal HTTP/1.1 server that writes `payload` as the SSE
     /// body, then closes the connection.

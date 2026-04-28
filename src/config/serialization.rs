@@ -235,6 +235,7 @@ mod tests {
     use crate::config::types::{OpenCodeAgentConfig, OpenCodeMcpServerConfig, OpenCodeModelConfig};
 
     fn empty_config() -> OpenCodeConfig {
+        #[allow(deprecated)]
         OpenCodeConfig {
             model: OpenCodeModelConfig {
                 id: String::new(),

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::Parser;
 use persistence::db::Db;
-use state::types::AppState;
+use state::types::{AgentStatus, AppState};
 use tui::app::App;
 
 /// cortex — TUI Kanban board with OpenCode SDK integration
@@ -238,6 +238,63 @@ fn main() -> Result<()> {
             let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
             for pid in &project_ids {
                 state.set_project_connected(pid, true);
+            }
+        }
+
+        // Rehydrate sessions for tasks that were active at shutdown.
+        // After restart, `task_sessions` is empty (transient runtime state),
+        // so tasks that were Running/Question/Error show no agent output.
+        // We fetch their full message history from the OpenCode server to
+        // restore the display.
+        {
+            let rehydrate_tasks: Vec<(String, String)> = {
+                let state = state.lock().unwrap_or_else(|e| e.into_inner());
+                state
+                    .tasks
+                    .iter()
+                    .filter(|(_, t)| {
+                        matches!(
+                            t.agent_status,
+                            AgentStatus::Running | AgentStatus::Question | AgentStatus::Error
+                        ) && t.session_id.is_some()
+                    })
+                    .map(|(id, t)| (id.clone(), t.session_id.clone().unwrap()))
+                    .collect()
+            };
+
+            if !rehydrate_tasks.is_empty() {
+                tracing::info!(
+                    count = rehydrate_tasks.len(),
+                    "Rehydrating sessions for active tasks after restart"
+                );
+            }
+
+            for (task_id, session_id) in &rehydrate_tasks {
+                if let Some(client) = opencode_clients.values().next() {
+                    match client.fetch_session_messages(session_id).await {
+                        Ok(messages) => {
+                            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.rehydrate_task_session(task_id, messages.clone());
+
+                            tracing::info!(
+                                task_id = %task_id,
+                                session_id = %session_id,
+                                msg_count = messages.len(),
+                                "Rehydrated session for active task"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                task_id = %task_id,
+                                session_id = %session_id,
+                                error = %e,
+                                "Session not found after restart — marking task as Error"
+                            );
+                            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.mark_orphaned_running_task(task_id);
+                        }
+                    }
+                }
             }
         }
 
