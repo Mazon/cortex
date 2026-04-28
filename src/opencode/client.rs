@@ -41,7 +41,7 @@ impl OpenCodeClient {
             .context("Failed to build OpenCode SDK client")?;
         Ok(Self {
             sdk,
-            sse_read_timeout_secs: 60,
+            sse_read_timeout_secs: 120,
         })
     }
 
