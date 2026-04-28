@@ -76,7 +76,7 @@ pub async fn sse_event_loop(
 
         match client.subscribe_to_events().await {
             Ok(stream) => {
-                tracing::info!(
+                tracing::debug!(
                     "SSE stream established (server: {})",
                     client.base_url()
                 );
@@ -95,7 +95,7 @@ pub async fn sse_event_loop(
                                 // Stream closed by the server — break to reconnect.
                                 // Don't set reconnecting here; the outer loop's
                                 // grace period will handle it.
-                                tracing::info!(
+                                tracing::debug!(
                                     "SSE stream closed by server (clean close, will reconnect)"
                                 );
                                 break;
@@ -112,14 +112,14 @@ pub async fn sse_event_loop(
                                                 // the server payload (e.g. FileDiff.before for new files).
                                                 // The stream is still healthy — skip silently.
                                             } else {
-                                                tracing::warn!("Skipping malformed SSE event: {}", msg);
+                                                tracing::debug!("Skipping malformed SSE event: {}", msg);
                                             }
                                         }
                                         SseStreamError::Connection(msg) => {
                                             // Connection error — stream is dead, break to reconnect.
                                             // Don't set reconnecting here; the outer loop's
                                             // grace period will handle it.
-                                            tracing::warn!(
+                                            tracing::debug!(
                                                 "SSE connection error (will reconnect): {}",
                                                 msg
                                             );
@@ -235,7 +235,7 @@ pub async fn sse_event_loop(
                                                 s.finalize_session_streaming(&task_id, messages);
                                             }
                                             Err(e) => {
-                                                tracing::warn!("Failed to fetch session messages for finalization (streaming text preserved): {}", e);
+                                                tracing::debug!("Failed to fetch session messages for finalization (streaming text preserved): {}", e);
                                                 // Don't clear streaming_text — it's the only copy of the agent's output.
                                                 // It will be cleaned up when a new session starts.
                                             }
@@ -255,7 +255,7 @@ pub async fn sse_event_loop(
             Err(e) => {
                 // Initial connection failure — don't set reconnecting here.
                 // The outer loop's grace period will handle it.
-                tracing::warn!(
+                tracing::debug!(
                     "SSE connection failed (attempt {}): {}",
                     reconnect_attempt + 1,
                     e
@@ -265,7 +265,7 @@ pub async fn sse_event_loop(
 
         // Check if we've exceeded the max retry limit.
         if reconnect_attempt >= max_retries {
-            tracing::warn!(
+            tracing::debug!(
                 "SSE max retries reached ({}), entering slow-retry mode (projects: {:?})",
                 max_retries,
                 project_ids
@@ -332,7 +332,7 @@ pub async fn sse_event_loop(
             }
             state.mark_render_dirty();
         }
-        tracing::info!(
+        tracing::debug!(
             "SSE reconnecting (attempt {}, backoff {}ms, projects: {:?})",
             reconnect_attempt,
             backoff_ms,

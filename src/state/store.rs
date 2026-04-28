@@ -622,12 +622,18 @@ impl AppState {
         self.project_registry.task_number_counters = counters;
 
         if let Some(ref pid) = self.project_registry.active_project_id {
-            // Filter kanban columns to only include the active project's tasks,
-            // preserving the persisted order from the database. This is
-            // critical — calling rebuild_kanban_for_project would discard the
-            // order by iterating over self.tasks (a HashMap with random order).
             let pid = pid.clone();
-            self.filter_kanban_for_project(&pid);
+            if !self.kanban.columns.is_empty() {
+                // We have persisted kanban order — filter to the active project,
+                // preserving the order from the database.
+                self.filter_kanban_for_project(&pid);
+            }
+            // If kanban_columns was empty (no persisted order) or after
+            // filtering nothing remains for this project, fall back to
+            // rebuilding from self.tasks.
+            if self.kanban.columns.is_empty() {
+                self.rebuild_kanban_for_project(&pid);
+            }
         }
     }
 

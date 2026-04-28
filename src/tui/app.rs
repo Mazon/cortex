@@ -1974,6 +1974,14 @@ impl App {
                     InputPrompt::NewProjectDirectory => {
                         match state.submit_new_project_directory() {
                             Ok(name) => {
+                                // Register the shared OpenCode client for the new project.
+                                // All projects share a single server, so we clone any existing client.
+                                if let Some(new_pid) = state.project_registry.active_project_id.clone() {
+                                    if let Some(existing_client) = self.opencode_clients.values().next() {
+                                        self.opencode_clients.insert(new_pid.clone(), existing_client.clone());
+                                        state.set_project_connected(&new_pid, true);
+                                    }
+                                }
                                 state.set_notification(
                                     format!("Created project \"{}\"", name),
                                     crate::state::types::NotificationVariant::Success,
