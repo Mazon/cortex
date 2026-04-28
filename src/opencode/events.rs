@@ -112,7 +112,7 @@ pub async fn sse_event_loop(
                                             // Connection error — stream is dead, break to reconnect.
                                             // Don't set reconnecting here; the outer loop's
                                             // grace period will handle it.
-                                            tracing::warn!("SSE stream error (reconnecting): {}", msg);
+                                            tracing::debug!("SSE stream error (reconnecting): {}", msg);
                                             break;
                                         }
                                     }

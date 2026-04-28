@@ -331,7 +331,7 @@ impl Default for UIState {
         Self {
             mode: AppMode::Normal,
             focused_panel: FocusedPanel::Kanban,
-            focused_column: KanbanColumn::TODO.to_string(),
+            focused_column: "planning".to_string(),
             focused_task_id: None,
             viewing_task_id: None,
             notifications: VecDeque::new(),

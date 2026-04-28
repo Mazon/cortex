@@ -588,22 +588,31 @@ impl AppState {
             }
         }
         self.kanban.columns = columns;
-        // Reset focused column to first visible
-        self.kanban.focused_column_index = 0;
         self.kanban.focused_task_index.clear();
         self.kanban.kanban_scroll_offset = 0;
 
-        // Initialize focused_task_id to first task in first column
-        let first_col = self.kanban.columns.keys().next().cloned();
-        if let Some(ref col) = first_col {
-            self.ui.focused_column = col.clone();
-            self.kanban.focused_task_index.insert(col.clone(), 0);
-            self.ui.focused_task_id = self
-                .kanban
+        // Prefer "planning" as the default focused column; fall back to first available
+        let focused_col = if self.kanban.columns.contains_key("planning") {
+            "planning".to_string()
+        } else if self.kanban.columns.contains_key("todo") {
+            "todo".to_string()
+        } else {
+            self.kanban
                 .columns
-                .get(col)
-                .and_then(|ids| ids.first().cloned());
-        }
+                .keys()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| "planning".to_string())
+        };
+
+        self.ui.focused_column = focused_col.clone();
+        self.kanban.focused_column_index = 1; // "planning" is index 1 in default config
+        self.kanban.focused_task_index.insert(focused_col.clone(), 0);
+        self.ui.focused_task_id = self
+            .kanban
+            .columns
+            .get(&focused_col)
+            .and_then(|ids| ids.first().cloned());
     }
 
     /// Get tasks for the active project in a given column.
