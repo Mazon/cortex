@@ -61,3 +61,19 @@ clean:
 
 # Run full CI pipeline locally (fmt-check + clippy + test)
 ci: fmt-check clippy test
+
+# Run tests with verbose output
+test-verbose:
+    cargo test -- --nocapture
+
+# Run tests for a specific module (usage: just test-module events)
+test-module MODULE:
+    cargo test --lib -p cortex {{MODULE}}
+
+# Run only unit tests (skip slow integration tests)
+test-unit:
+    cargo test --lib
+
+# Run benchmarks (usage: just bench)
+bench:
+    cargo bench

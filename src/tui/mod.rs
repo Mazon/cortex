@@ -1,6 +1,7 @@
 //! TUI module — terminal user interface for cortex.
 
 pub mod app;
+pub mod diff_view;
 pub mod editor_handler;
 pub mod help;
 pub mod kanban;
@@ -12,12 +13,11 @@ pub mod status_bar;
 pub mod task_card;
 pub mod task_detail;
 pub mod task_editor;
-pub mod diff_view;
 pub mod tracing_layer;
 
+use crate::state::types::FocusedPanel;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use crate::state::types::FocusedPanel;
 
 /// Minimum terminal dimensions (width × height) required for the TUI layout.
 /// Below this, a "terminal too small" message is shown instead of the normal
@@ -75,45 +75,48 @@ pub fn render_normal(
 
     let now = chrono::Utc::now().timestamp();
 
-    // Main horizontal layout: sidebar | kanban
+    // Vertical layout: content area (sidebar | kanban) | status bar
+    // Status bar spans the full terminal width so "● connected" is at the far left.
     let sidebar_width = config.theme.sidebar_width;
-    let constraints = [
+    let v_constraints = [
+        Constraint::Min(0),   // Content area (sidebar + kanban)
+        Constraint::Length(2), // Status bar (1 top border + 1 content)
+    ];
+    let v_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(v_constraints)
+        .split(area);
+
+    // Horizontal layout for content area: sidebar | kanban
+    let h_constraints = [
         Constraint::Length(sidebar_width),
         Constraint::Min(0), // Kanban takes remaining space
     ];
     let h_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(constraints)
-        .split(area);
+        .constraints(h_constraints)
+        .split(v_layout[0]);
 
-    // Vertical layout for sidebar: sidebar content | status bar
-    let v_constraints = [
-        Constraint::Min(0),
-        Constraint::Length(1), // Status bar
-    ];
-    let sidebar_v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(v_constraints)
-        .split(h_layout[0]);
-
-    // Vertical layout for kanban: kanban content | status bar
-    let kanban_v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(v_constraints)
-        .split(h_layout[1]);
-
-    sidebar::render_sidebar(f, sidebar_v[0], state, config);
+    sidebar::render_sidebar(f, h_layout[0], state, config);
     match state.ui.focused_panel {
         FocusedPanel::Kanban => {
-            kanban::render_kanban(f, kanban_v[0], state, config, now);
+            kanban::render_kanban(f, h_layout[1], state, config, now);
         }
         FocusedPanel::TaskDetail => {
             if let Some(task_id) = state.ui.viewing_task_id.clone() {
-                task_detail::render_task_detail(f, kanban_v[0], state, &task_id, &config.theme, now);
+                task_detail::render_task_detail(
+                    f,
+                    h_layout[1],
+                    state,
+                    &task_id,
+                    &config.theme,
+                    now,
+                );
             } else {
-                kanban::render_kanban(f, kanban_v[0], state, config, now);
+                kanban::render_kanban(f, h_layout[1], state, config, now);
             }
         }
     }
-    status_bar::render_status_bar(f, kanban_v[1], state, &config.theme);
+    let status_area = v_layout[1].inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    status_bar::render_status_bar(f, status_area, state, &config.theme);
 }

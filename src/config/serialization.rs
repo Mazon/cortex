@@ -106,7 +106,10 @@ impl OpenCodeServerConfig {
                 .agents
                 .iter()
                 .map(|(name, agent_cfg)| {
-                    (name.clone(), AgentConfig::from_agent(agent_cfg, default_provider))
+                    (
+                        name.clone(),
+                        AgentConfig::from_agent(agent_cfg, default_provider),
+                    )
                 })
                 .collect();
             Some(mapped)
@@ -119,9 +122,7 @@ impl OpenCodeServerConfig {
             let mapped: HashMap<String, McpServerEntry> = config
                 .mcp_servers
                 .iter()
-                .map(|(name, server_cfg)| {
-                    (name.clone(), McpServerEntry::from_server(server_cfg))
-                })
+                .map(|(name, server_cfg)| (name.clone(), McpServerEntry::from_server(server_cfg)))
                 .collect();
             Some(mapped)
         } else {
@@ -224,6 +225,11 @@ fn resolve_provider_config(
 /// Converts the internal [`OpenCodeConfig`] into the JSON format expected by the
 /// OpenCode server, applying field-name mappings and resolving API key
 /// environment variables.
+///
+/// # SECURITY WARNING
+/// The returned JSON may contain API keys in `provider.<name>.options.apiKey`.
+/// **Never log the output of this function** — it would leak secrets.
+/// The JSON is only safe to pass as an env var to the child OpenCode process.
 pub fn build_opencode_config_json(config: &OpenCodeConfig) -> String {
     let server_config = OpenCodeServerConfig::from_config(config);
     serde_json::to_string(&server_config).unwrap_or_else(|_| "{}".to_string())
@@ -248,7 +254,6 @@ mod tests {
             mcp_servers: HashMap::new(),
             request_timeout_secs: 0,
             sse_max_retries: 50,
-            sse_read_timeout_secs: 120,
             hung_agent_timeout_secs: 300,
             circuit_breaker_threshold: 3,
             circuit_breaker_cooldown_secs: 60,
@@ -506,10 +511,7 @@ mod tests {
             "filesystem".to_string(),
             OpenCodeMcpServerConfig {
                 command: "npx".to_string(),
-                args: Some(vec![
-                    "-y".to_string(),
-                    "@anthropic/mcp-server".to_string(),
-                ]),
+                args: Some(vec!["-y".to_string(), "@anthropic/mcp-server".to_string()]),
                 env: None,
             },
         );
@@ -535,10 +537,7 @@ mod tests {
             "filesystem".to_string(),
             OpenCodeMcpServerConfig {
                 command: "npx".to_string(),
-                args: Some(vec![
-                    "-y".to_string(),
-                    "@anthropic/mcp-server".to_string(),
-                ]),
+                args: Some(vec!["-y".to_string(), "@anthropic/mcp-server".to_string()]),
                 env: None,
             },
         );
@@ -746,10 +745,7 @@ mod tests {
             "filesystem".to_string(),
             OpenCodeMcpServerConfig {
                 command: "npx".to_string(),
-                args: Some(vec![
-                    "-y".to_string(),
-                    "@anthropic/mcp-server".to_string(),
-                ]),
+                args: Some(vec!["-y".to_string(), "@anthropic/mcp-server".to_string()]),
                 env: None,
             },
         );
@@ -764,7 +760,10 @@ mod tests {
         // Agent should be present with correct fields
         assert!(parsed["agent"]["coder"].is_object());
         assert_eq!(parsed["agent"]["coder"]["model"], "anthropic/claude-3");
-        assert_eq!(parsed["agent"]["coder"]["prompt"], "You are a coding assistant");
+        assert_eq!(
+            parsed["agent"]["coder"]["prompt"],
+            "You are a coding assistant"
+        );
         assert_eq!(parsed["agent"]["coder"]["maxSteps"], 20);
         let tools = parsed["agent"]["coder"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 3);

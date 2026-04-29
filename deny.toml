@@ -1,0 +1,39 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Detect duplicate dependencies with different versions.
+targets = []
+
+[advisories]
+# Ignore IDs of known vulnerabilities that have been evaluated and accepted.
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+[licenses]
+# List of allowed licenses.
+# For more details see: https://embarkstudios.github.io/cargo-deny/licenses/
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+]
+
+[bans]
+# Deny specific crates that are known to be problematic.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+# Require dependencies to come from crates.io.
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -71,6 +71,10 @@ pub fn handle_editor_input(
                 }
                 EditorAction::None
             }
+            EditorKeyAction::Submit => {
+                // Submit is not used in the fullscreen task editor
+                EditorAction::None
+            }
         };
     }
 
@@ -110,8 +114,8 @@ pub fn handle_editor_input(
             editor.scroll_offset = editor.scroll_offset.saturating_sub(5);
         }
         KeyCode::PageDown => {
-            editor.scroll_offset = (editor.scroll_offset + 5)
-                .min(editor.desc_lines.len().saturating_sub(1));
+            editor.scroll_offset =
+                (editor.scroll_offset + 5).min(editor.desc_lines.len().saturating_sub(1));
         }
         _ => {}
     }
@@ -142,7 +146,8 @@ mod tests {
 
     fn new_editor_with_columns() -> TaskEditorState {
         let mut editor = TaskEditorState::new_for_create("todo");
-        editor.available_columns = vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
+        editor.available_columns =
+            vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
         editor
     }
 
@@ -167,7 +172,11 @@ mod tests {
     #[test]
     fn escape_returns_cancel() {
         let mut editor = new_editor();
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::Cancel);
     }
 
@@ -181,7 +190,11 @@ mod tests {
     #[test]
     fn ctrl_enter_returns_save() {
         let mut editor = new_editor();
-        let action = handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::CONTROL), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Enter, KeyModifiers::CONTROL),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::Save);
     }
 
@@ -191,7 +204,11 @@ mod tests {
     fn tab_stays_on_description_when_no_columns() {
         let mut editor = new_editor();
         assert_eq!(editor.focused_field, EditorField::Description);
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Tab, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.focused_field, EditorField::Description);
     }
 
@@ -199,7 +216,11 @@ mod tests {
     fn tab_cycles_description_to_column() {
         let mut editor = new_editor_with_columns();
         assert_eq!(editor.focused_field, EditorField::Description);
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Tab, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.focused_field, EditorField::Column);
     }
 
@@ -207,7 +228,11 @@ mod tests {
     fn tab_cycles_column_back_to_description() {
         let mut editor = new_editor_with_columns();
         editor.focused_field = EditorField::Column;
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Tab, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.focused_field, EditorField::Description);
     }
 
@@ -216,10 +241,18 @@ mod tests {
         let mut editor = new_editor_with_columns();
         assert_eq!(editor.focused_field, EditorField::Description);
 
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Tab, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.focused_field, EditorField::Column);
 
-        handle_editor_input(&mut editor, key(KeyCode::Tab, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Tab, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.focused_field, EditorField::Description);
     }
 
@@ -230,7 +263,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("line1");
         editor.cursor_col = 5;
-        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.description(), "line1\n");
         assert_eq!(editor.cursor_row, 1);
         assert_eq!(editor.cursor_col, 0);
@@ -241,7 +278,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("line1");
         editor.cursor_col = 3;
-        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.description(), "lin\ne1");
         assert_eq!(editor.cursor_row, 1);
         assert_eq!(editor.cursor_col, 0);
@@ -268,7 +309,11 @@ mod tests {
     #[test]
     fn alt_char_is_ignored() {
         let mut editor = new_editor();
-        handle_editor_input(&mut editor, key(KeyCode::Char('a'), KeyModifiers::ALT), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Char('a'), KeyModifiers::ALT),
+            &default_matcher(),
+        );
         assert_eq!(editor.description(), "");
     }
 
@@ -280,7 +325,11 @@ mod tests {
         editor.set_description("hello");
         editor.cursor_row = 0;
         editor.cursor_col = 3;
-        handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Backspace, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.description(), "helo");
         assert_eq!(editor.cursor_col, 2);
     }
@@ -293,7 +342,11 @@ mod tests {
         editor.set_description("abc");
         editor.cursor_row = 0;
         editor.cursor_col = 1;
-        handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Delete, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.description(), "ac");
     }
 
@@ -304,7 +357,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("abc");
         editor.cursor_col = 2;
-        handle_editor_input(&mut editor, key(KeyCode::Left, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Left, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 1);
     }
 
@@ -312,7 +369,11 @@ mod tests {
     fn left_arrow_does_not_go_negative() {
         let mut editor = new_editor();
         editor.cursor_col = 0;
-        handle_editor_input(&mut editor, key(KeyCode::Left, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Left, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 0);
     }
 
@@ -321,7 +382,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("abc");
         editor.cursor_col = 1;
-        handle_editor_input(&mut editor, key(KeyCode::Right, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Right, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 2);
     }
 
@@ -330,7 +395,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("abc");
         editor.cursor_col = 3;
-        handle_editor_input(&mut editor, key(KeyCode::Right, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Right, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 3);
     }
 
@@ -339,7 +408,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("abc");
         editor.cursor_col = 2;
-        handle_editor_input(&mut editor, key(KeyCode::Home, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Home, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 0);
     }
 
@@ -348,7 +421,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("abc");
         editor.cursor_col = 0;
-        handle_editor_input(&mut editor, key(KeyCode::End, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::End, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_col, 3);
     }
 
@@ -359,22 +436,46 @@ mod tests {
         editor.cursor_row = 2;
         editor.cursor_col = 3;
 
-        handle_editor_input(&mut editor, key(KeyCode::Up, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Up, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 1);
 
-        handle_editor_input(&mut editor, key(KeyCode::Up, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Up, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 0);
 
-        handle_editor_input(&mut editor, key(KeyCode::Up, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Up, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 0);
 
-        handle_editor_input(&mut editor, key(KeyCode::Down, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Down, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 1);
 
-        handle_editor_input(&mut editor, key(KeyCode::Down, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Down, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 2);
 
-        handle_editor_input(&mut editor, key(KeyCode::Down, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Down, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.cursor_row, 2);
     }
 
@@ -384,7 +485,11 @@ mod tests {
     fn pageup_decreases_scroll_offset() {
         let mut editor = new_editor();
         editor.scroll_offset = 10;
-        handle_editor_input(&mut editor, key(KeyCode::PageUp, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::PageUp, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.scroll_offset, 5);
     }
 
@@ -392,7 +497,11 @@ mod tests {
     fn pageup_clamps_at_zero() {
         let mut editor = new_editor();
         editor.scroll_offset = 3;
-        handle_editor_input(&mut editor, key(KeyCode::PageUp, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::PageUp, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.scroll_offset, 0);
     }
 
@@ -401,7 +510,11 @@ mod tests {
         let mut editor = new_editor();
         editor.desc_lines = (0..20).map(|i| format!("line {}", i)).collect();
         editor.scroll_offset = 0;
-        handle_editor_input(&mut editor, key(KeyCode::PageDown, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::PageDown, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.scroll_offset, 5);
     }
 
@@ -410,7 +523,11 @@ mod tests {
         let mut editor = new_editor();
         editor.desc_lines = (0..5).map(|i| format!("line {}", i)).collect();
         editor.scroll_offset = 0;
-        handle_editor_input(&mut editor, key(KeyCode::PageDown, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::PageDown, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(editor.scroll_offset, 4);
     }
 
@@ -419,7 +536,11 @@ mod tests {
     #[test]
     fn f1_key_returns_none() {
         let mut editor = new_editor();
-        let action = handle_editor_input(&mut editor, key(KeyCode::F(1), KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::F(1), KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::None);
     }
 
@@ -454,7 +575,11 @@ mod tests {
     #[test]
     fn esc_without_changes_cancels_immediately() {
         let mut editor = new_editor();
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::Cancel);
     }
 
@@ -464,7 +589,11 @@ mod tests {
         handle_editor_input(&mut editor, char_key('H'), &default_matcher());
         assert!(editor.has_unsaved_changes);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::None);
         assert!(editor.discard_warning_shown);
     }
@@ -474,10 +603,18 @@ mod tests {
         let mut editor = new_editor();
         handle_editor_input(&mut editor, char_key('H'), &default_matcher());
 
-        handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert!(editor.discard_warning_shown);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::Cancel);
     }
 
@@ -486,14 +623,22 @@ mod tests {
         let mut editor = new_editor();
         handle_editor_input(&mut editor, char_key('A'), &default_matcher());
 
-        handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert!(editor.discard_warning_shown);
 
         handle_editor_input(&mut editor, char_key('B'), &default_matcher());
         assert!(!editor.discard_warning_shown);
         assert!(editor.has_unsaved_changes);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &default_matcher());
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Esc, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert_eq!(action, EditorAction::None);
         assert!(editor.discard_warning_shown);
     }
@@ -503,7 +648,11 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("ab");
         editor.cursor_col = 2;
-        handle_editor_input(&mut editor, key(KeyCode::Backspace, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Backspace, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert!(editor.has_unsaved_changes);
     }
 
@@ -512,14 +661,22 @@ mod tests {
         let mut editor = new_editor();
         editor.set_description("ab");
         editor.cursor_col = 0;
-        handle_editor_input(&mut editor, key(KeyCode::Delete, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Delete, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert!(editor.has_unsaved_changes);
     }
 
     #[test]
     fn newline_sets_unsaved_changes() {
         let mut editor = new_editor();
-        handle_editor_input(&mut editor, key(KeyCode::Enter, KeyModifiers::NONE), &default_matcher());
+        handle_editor_input(
+            &mut editor,
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            &default_matcher(),
+        );
         assert!(editor.has_unsaved_changes);
     }
 
@@ -546,10 +703,15 @@ mod tests {
         config.cancel = "ctrl+g".to_string();
         let matcher = EditorKeyMatcher::from_config(&config);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Char('g'), KeyModifiers::CONTROL), &matcher);
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            &matcher,
+        );
         assert_eq!(action, EditorAction::Cancel);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &matcher);
+        let action =
+            handle_editor_input(&mut editor, key(KeyCode::Esc, KeyModifiers::NONE), &matcher);
         assert_eq!(action, EditorAction::None);
     }
 
@@ -562,11 +724,19 @@ mod tests {
 
         handle_editor_input(&mut editor, char_key('H'), &matcher);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Char('c'), KeyModifiers::CONTROL), &matcher);
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &matcher,
+        );
         assert_eq!(action, EditorAction::None);
         assert!(editor.discard_warning_shown);
 
-        let action = handle_editor_input(&mut editor, key(KeyCode::Char('c'), KeyModifiers::CONTROL), &matcher);
+        let action = handle_editor_input(
+            &mut editor,
+            key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &matcher,
+        );
         assert_eq!(action, EditorAction::Cancel);
     }
 }

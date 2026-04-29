@@ -1,21 +1,30 @@
 //! SQLite database operations for persistence.
 
+use crate::state::types::{AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus};
 use anyhow::Result;
-use crate::state::types::{
-    AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
-};
 use rusqlite::{params, Connection, Transaction};
 use std::collections::HashMap;
 use std::path::Path;
 
 /// Database wrapper for SQLite persistence.
+///
+/// Provides task, project, and kanban order CRUD operations backed by SQLite
+/// with WAL journaling and foreign key enforcement.
+///
+/// # Example
+///
+/// ```no_run
+/// use cortex::persistence::db::Db;
+///
+/// let db = Db::new(&path)?;
+/// // Tables are created automatically by run_migrations()
+/// ```
 pub struct Db {
     pub conn: Connection,
 }
 
 /// Current schema version. Increment this and add a new migration function
 /// in `run_migrations()` when modifying the database schema.
-#[allow(dead_code)]
 const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 impl Db {
@@ -90,6 +99,7 @@ impl Db {
                     entered_column_at: row.get(15)?,
                     last_activity_at: row.get(16)?,
                     pending_description: row.get(17)?,
+                    queued_prompt: None, // Transient — not persisted
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -228,11 +238,7 @@ impl Db {
 
     // ─── Transaction-aware variants (for use within save_state) ──────
 
-    pub fn save_project_with_conn(
-        &self,
-        project: &CortexProject,
-        tx: &Transaction,
-    ) -> Result<()> {
+    pub fn save_project_with_conn(&self, project: &CortexProject, tx: &Transaction) -> Result<()> {
         tx.execute(
             "INSERT OR REPLACE INTO projects (id, name, working_directory, status, position) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -303,10 +309,7 @@ impl Db {
             "DELETE FROM kanban_order WHERE task_id = ?1",
             params![task_id],
         )?;
-        tx.execute(
-            "DELETE FROM tasks WHERE id = ?1",
-            params![task_id],
-        )?;
+        tx.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
         Ok(())
     }
 
@@ -323,7 +326,10 @@ impl Db {
             "DELETE FROM kanban_order WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?1)",
             params![project_id],
         )?;
-        tx.execute("DELETE FROM tasks WHERE project_id = ?1", params![project_id])?;
+        tx.execute(
+            "DELETE FROM tasks WHERE project_id = ?1",
+            params![project_id],
+        )?;
         tx.execute(
             "DELETE FROM metadata WHERE key = ?1",
             params![format!("counter_{}", project_id)],
@@ -332,12 +338,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn set_metadata_with_conn(
-        &self,
-        key: &str,
-        value: &str,
-        tx: &Transaction,
-    ) -> Result<()> {
+    pub fn set_metadata_with_conn(&self, key: &str, value: &str, tx: &Transaction) -> Result<()> {
         tx.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -408,7 +409,10 @@ fn get_schema_version(conn: &Connection) -> Result<u32> {
     // Check if _meta table exists at all
     let has_meta: bool = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='_meta'")
-        .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, String>(0)).map(|_| true))
+        .and_then(|mut stmt| {
+            stmt.query_row([], |row| row.get::<_, String>(0))
+                .map(|_| true)
+        })
         .unwrap_or(false);
 
     if !has_meta {
@@ -486,7 +490,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if current < 2 {
         migrate_v1_to_v2(conn)?;
-        current = 2;
+        current = CURRENT_SCHEMA_VERSION;
         set_schema_version(conn, current)?;
     }
 
@@ -524,10 +528,7 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
         .any(|c| c == "pending_description");
 
     if !has_column {
-        conn.execute(
-            "ALTER TABLE tasks ADD COLUMN pending_description TEXT",
-            [],
-        )?;
+        conn.execute("ALTER TABLE tasks ADD COLUMN pending_description TEXT", [])?;
     }
     Ok(())
 }
@@ -544,7 +545,10 @@ fn parse_agent_status(s: &str) -> AgentStatus {
         "done" | "complete" | "completed" | "idle" => AgentStatus::Complete,
         "failed" | "error" => AgentStatus::Error,
         _ => {
-            tracing::warn!("Unknown agent_status value in database: {:?}, defaulting to Pending", s);
+            tracing::warn!(
+                "Unknown agent_status value in database: {:?}, defaulting to Pending",
+                s
+            );
             AgentStatus::Pending
         }
     }
@@ -560,7 +564,10 @@ fn parse_project_status(s: &str) -> ProjectStatus {
         "error" => ProjectStatus::Error,
         "hung" => ProjectStatus::Hung,
         _ => {
-            tracing::warn!("Unknown project_status value in database: {:?}, defaulting to Disconnected", s);
+            tracing::warn!(
+                "Unknown project_status value in database: {:?}, defaulting to Disconnected",
+                s
+            );
             ProjectStatus::Disconnected
         }
     }

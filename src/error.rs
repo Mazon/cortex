@@ -13,6 +13,7 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 /// Specific failure modes for the SSE event stream.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum SseErrorKind {
     /// The remote closed the connection unexpectedly.
@@ -37,6 +38,7 @@ pub enum SseErrorKind {
 /// display. The [`Display`](std::fmt::Display) impl produces a concise,
 /// human-readable message; the full structured data is available via the
 /// public fields.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum AppError {
     /// A configuration file could not be loaded or parsed.
@@ -46,25 +48,16 @@ pub enum AppError {
     },
 
     /// An error originating from SQLite / rusqlite.
-    Database {
-        source: rusqlite::Error,
-    },
+    Database { source: rusqlite::Error },
 
     /// The OpenCode API returned a non-success HTTP status.
-    OpenCodeApi {
-        status: u16,
-        message: String,
-    },
+    OpenCodeApi { status: u16, message: String },
 
     /// Failed to establish or maintain a connection to the OpenCode server.
-    OpenCodeConnection {
-        message: String,
-    },
+    OpenCodeConnection { message: String },
 
     /// An error in the SSE event stream.
-    SseStream {
-        kind: SseErrorKind,
-    },
+    SseStream { kind: SseErrorKind },
 
     /// A standard I/O error with additional context.
     Io {
@@ -73,14 +66,10 @@ pub enum AppError {
     },
 
     /// A failure during state persistence (save / restore).
-    Persistence {
-        message: String,
-    },
+    Persistence { message: String },
 
     /// A TUI / rendering error.
-    Ui {
-        message: String,
-    },
+    Ui { message: String },
 }
 
 // ---------------------------------------------------------------------------

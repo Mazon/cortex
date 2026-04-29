@@ -35,18 +35,17 @@ impl TuiNotificationLayer {
         if let Some(weak) = guard.as_ref() {
             if let Some(state_arc) = weak.upgrade() {
                 if let Ok(mut state) = state_arc.lock() {
-                    let truncated =
-                        if message.chars().count() > self.max_message_len {
-                            format!(
-                                "{}...",
-                                message
-                                    .chars()
-                                    .take(self.max_message_len - 3)
-                                    .collect::<String>()
-                            )
-                        } else {
+                    let truncated = if message.chars().count() > self.max_message_len {
+                        format!(
+                            "{}...",
                             message
-                        };
+                                .chars()
+                                .take(self.max_message_len - 3)
+                                .collect::<String>()
+                        )
+                    } else {
+                        message
+                    };
                     state.set_notification(truncated, variant, 5000);
                     state.mark_render_dirty();
                 }
@@ -105,10 +104,10 @@ where
     }
 }
 
-/// Returns true if the message is an SSE infrastructure warning that
-/// should be suppressed from the TUI notification bar. These are
-/// connection lifecycle events shown by the status bar's connection
-/// indicator (● connected / ◐ reconnecting / ✕ disconnected).
+/// Returns true if the message is a warning that should be suppressed from
+/// the TUI notification bar because it's already handled elsewhere (e.g.
+/// by an explicit notification call or a status bar indicator).
+/// Includes SSE connection lifecycle events and hung-task detection.
 fn is_sse_infrastructure_warning(message: &str) -> bool {
     message.contains("SSE connection error")
         || message.contains("SSE connection failed")
@@ -117,6 +116,7 @@ fn is_sse_infrastructure_warning(message: &str) -> bool {
         || message.contains("Skipping malformed SSE event")
         || message.contains("Failed to fetch session messages for finalization")
         || message.contains("SSE buffer exceeded")
+        || message.contains("Marking task as Hung") // Handled by explicit notification in app.rs
 }
 
 /// Helper visitor that extracts the "message" field from a tracing event.
@@ -133,11 +133,7 @@ impl StringVisitor {
 }
 
 impl tracing::field::Visit for StringVisitor {
-    fn record_debug(
-        &mut self,
-        field: &tracing::field::Field,
-        value: &dyn std::fmt::Debug,
-    ) {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{:?}", value);
             // Strip surrounding quotes if present
@@ -145,8 +141,7 @@ impl tracing::field::Visit for StringVisitor {
                 && self.message.ends_with('"')
                 && self.message.len() >= 2
             {
-                self.message =
-                    self.message[1..self.message.len() - 1].to_string();
+                self.message = self.message[1..self.message.len() - 1].to_string();
             }
         }
     }

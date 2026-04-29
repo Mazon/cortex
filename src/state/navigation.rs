@@ -63,18 +63,17 @@ impl AppState {
     }
 
     /// Open the task detail panel for a given task.
-    /// Initializes the inline description editor from the task's current description
-    /// (or `pending_description` if set).
+    /// Initializes the inline prompt input editor as empty (the prompt input
+    /// is a follow-up prompt field, not a description editor).
     pub fn open_task_detail(&mut self, task_id: &str) {
         self.ui.viewing_task_id = Some(task_id.to_string());
         self.ui.focused_panel = FocusedPanel::TaskDetail;
         self.ui.user_scroll_offset = None;
 
-        // Initialize the inline description editor from the task's description
-        if let Some(task) = self.tasks.get(task_id) {
-            let desc = task.pending_description.as_deref().unwrap_or(&task.description);
-            self.ui.detail_editor = Some(DetailEditorState::new_from_description(desc));
-        }
+        // Initialize the prompt input editor as empty — it's a follow-up prompt field,
+        // not a description editor. The task description is shown as pinned context
+        // at the top of the agent output via `active_prompt`.
+        self.ui.detail_editor = Some(DetailEditorState::new_from_description(""));
     }
 
     /// Close the task detail panel and return focus to the kanban board.
@@ -189,7 +188,10 @@ impl AppState {
     ///
     /// Returns `None` if the stack is empty (viewing the parent task).
     pub fn get_drilldown_session_id(&self) -> Option<&str> {
-        self.ui.session_nav_stack.last().map(|r| r.session_id.as_str())
+        self.ui
+            .session_nav_stack
+            .last()
+            .map(|r| r.session_id.as_str())
     }
 
     /// Check if the user is currently drilled into a subagent.
@@ -213,10 +215,7 @@ impl AppState {
     // ─── Task Editor Mode ────────────────────────────────────────────────
 
     /// Open the task editor in "create" mode.
-    pub fn open_task_editor_create(
-        &mut self,
-        default_column: &str,
-    ) {
+    pub fn open_task_editor_create(&mut self, default_column: &str) {
         self.ui.task_editor = Some(TaskEditorState::new_for_create(default_column));
         self.ui.mode = AppMode::TaskEditor;
     }
@@ -257,7 +256,8 @@ impl AppState {
                 // Editing existing task — check if column changed before mutable borrow
                 let needs_column_move = {
                     let task = self.tasks.get(task_id);
-                    task.map(|t| t.column.0.as_str() != column_id).unwrap_or(false)
+                    task.map(|t| t.column.0.as_str() != column_id)
+                        .unwrap_or(false)
                 };
 
                 if let Some(task) = self.tasks.get_mut(task_id) {
@@ -284,7 +284,8 @@ impl AppState {
             None => {
                 // Creating new task
                 let project_id = self
-                    .project_registry.active_project_id
+                    .project_registry
+                    .active_project_id
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
                 let task = self.create_todo(title, description, &project_id);
@@ -327,7 +328,8 @@ impl AppState {
     pub fn open_set_working_directory(&mut self) {
         let current_dir = match self.project_registry.active_project_id.as_ref() {
             Some(pid) => self
-                .project_registry.projects
+                .project_registry
+                .projects
                 .iter()
                 .find(|p| &p.id == pid)
                 .map(|p| p.working_directory.clone()),
@@ -373,6 +375,9 @@ impl AppState {
 
         // Validate the path before accepting it.
         let path = std::path::Path::new(&dir);
+        if !path.is_absolute() {
+            return Err("Working directory must be an absolute path".to_string());
+        }
         if !path.exists() {
             return Err(format!("Directory does not exist: {}", dir));
         }
@@ -380,7 +385,12 @@ impl AppState {
             return Err(format!("Path is not a directory: {}", dir));
         }
 
-        if let Some(project) = self.project_registry.projects.iter_mut().find(|p| p.id == project_id) {
+        if let Some(project) = self
+            .project_registry
+            .projects
+            .iter_mut()
+            .find(|p| p.id == project_id)
+        {
             project.working_directory = dir;
             // Reset prompt state and return to normal mode
             self.ui.input_text.clear();
@@ -486,7 +496,8 @@ impl AppState {
     pub fn open_project_rename(&mut self) {
         let current_name = match self.project_registry.active_project_id.as_ref() {
             Some(pid) => self
-                .project_registry.projects
+                .project_registry
+                .projects
                 .iter()
                 .find(|p| &p.id == pid)
                 .map(|p| p.name.clone()),
@@ -522,7 +533,8 @@ impl AppState {
 
         let project_id = self.project_registry.active_project_id.clone()?;
         let old_name = self
-            .project_registry.projects
+            .project_registry
+            .projects
             .iter_mut()
             .find(|p| p.id == project_id)
             .map(|p| {

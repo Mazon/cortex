@@ -5,9 +5,7 @@
 //! - `render_diff_review()` — renders a full-screen diff viewer with file navigation
 
 use crate::config::types::ThemeConfig;
-use crate::state::types::{
-    AppState, DiffFile, DiffLine, DiffLineKind, DiffReviewState,
-};
+use crate::state::types::{AppState, DiffFile, DiffLine, DiffLineKind, DiffReviewState};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -20,12 +18,7 @@ const MAX_DIFF_SIZE: usize = 1_048_576;
 /// the task number, file index, and file path. The body shows the diff
 /// with color-coded additions (green), removals (red), context (dim white),
 /// and hunk headers (blue). The footer shows keybinding hints.
-pub fn render_diff_review(
-    f: &mut Frame,
-    area: Rect,
-    state: &mut AppState,
-    theme: &ThemeConfig,
-) {
+pub fn render_diff_review(f: &mut Frame, area: Rect, state: &mut AppState, theme: &ThemeConfig) {
     let review = match &state.ui.diff_review {
         Some(r) => r,
         None => return,
@@ -82,7 +75,7 @@ pub fn render_diff_review(
     // Layout: title bar (1 row) | diff content | footer (1 row)
     let v_constraints = [
         Constraint::Length(1), // Title bar
-        Constraint::Min(0),   // Diff content
+        Constraint::Min(0),    // Diff content
         Constraint::Length(1), // Footer
     ];
     let v_layout = Layout::default()
@@ -91,7 +84,9 @@ pub fn render_diff_review(
         .split(area);
 
     // ── Title bar ─────────────────────────────────────────────────────────
-    let file_idx = review.selected_file_index.min(review.files.len().saturating_sub(1));
+    let file_idx = review
+        .selected_file_index
+        .min(review.files.len().saturating_sub(1));
     let file = &review.files[file_idx];
     let total_files = review.files.len();
 
@@ -119,10 +114,7 @@ pub fn render_diff_review(
         ));
     }
     if file.is_binary {
-        title_spans.push(Span::styled(
-            "binary ",
-            Style::default().fg(Color::Yellow),
-        ));
+        title_spans.push(Span::styled("binary ", Style::default().fg(Color::Yellow)));
     }
     if file.is_renamed {
         title_spans.push(Span::styled(
@@ -160,14 +152,17 @@ pub fn render_diff_review(
     }
 
     // File index indicator
-    title_spans.push(Span::styled(" ", Style::default().fg(Color::Rgb(45, 48, 62))));
+    title_spans.push(Span::styled(
+        " ",
+        Style::default().fg(Color::Rgb(45, 48, 62)),
+    ));
     title_spans.push(Span::styled(
         format!("File {}/{}", file_idx + 1, total_files),
         Style::default().fg(Color::Rgb(100, 104, 120)),
     ));
 
-    let title_para = Paragraph::new(Line::from(title_spans))
-        .style(Style::default().bg(Color::Rgb(30, 34, 50)));
+    let title_para =
+        Paragraph::new(Line::from(title_spans)).style(Style::default().bg(Color::Rgb(30, 34, 50)));
     f.render_widget(title_para, v_layout[0]);
 
     // ── Diff content ──────────────────────────────────────────────────────
@@ -207,8 +202,8 @@ pub fn render_diff_review(
         Span::styled(" back", desc),
     ];
 
-    let footer_para = Paragraph::new(Line::from(footer_spans))
-        .style(Style::default().bg(Color::Rgb(30, 34, 50)));
+    let footer_para =
+        Paragraph::new(Line::from(footer_spans)).style(Style::default().bg(Color::Rgb(30, 34, 50)));
     f.render_widget(footer_para, v_layout[2]);
 }
 
@@ -219,7 +214,7 @@ fn render_diff_content(f: &mut Frame, area: Rect, file: &DiffFile, scroll_offset
         return;
     }
 
-    let total_lines = file.lines.len();
+    let _total_lines = file.lines.len();
 
     // Build all lines first, then slice for visible area
     let visible_lines: Vec<Line<'_>> = file
@@ -239,11 +234,18 @@ fn render_diff_content(f: &mut Frame, area: Rect, file: &DiffFile, scroll_offset
 fn build_styled_line(line: &DiffLine) -> Line<'_> {
     match &line.kind {
         DiffLineKind::Context => {
-            let prefix = format!("{:>4} {:>4} ", line.old_line_no.unwrap_or(0), line.new_line_no.unwrap_or(0));
+            let prefix = format!(
+                "{:>4} {:>4} ",
+                line.old_line_no.unwrap_or(0),
+                line.new_line_no.unwrap_or(0)
+            );
             Line::from(vec![
                 Span::styled(prefix, Style::default().fg(Color::Rgb(60, 64, 80))),
                 Span::styled(" ", Style::default().fg(Color::Rgb(60, 64, 80))),
-                Span::styled(&line.content, Style::default().fg(Color::Rgb(160, 164, 180))),
+                Span::styled(
+                    &line.content,
+                    Style::default().fg(Color::Rgb(160, 164, 180)),
+                ),
             ])
         }
         DiffLineKind::Addition => {
@@ -252,7 +254,10 @@ fn build_styled_line(line: &DiffLine) -> Line<'_> {
             Line::from(vec![
                 Span::styled(prefix, Style::default().fg(Color::Rgb(40, 80, 40))),
                 Span::styled("+", Style::default().fg(Color::Rgb(80, 180, 80))),
-                Span::styled(&line.content, Style::default().fg(Color::Rgb(120, 220, 120))),
+                Span::styled(
+                    &line.content,
+                    Style::default().fg(Color::Rgb(120, 220, 120)),
+                ),
             ])
         }
         DiffLineKind::Removal => {
@@ -261,7 +266,10 @@ fn build_styled_line(line: &DiffLine) -> Line<'_> {
             Line::from(vec![
                 Span::styled(prefix, Style::default().fg(Color::Rgb(80, 40, 40))),
                 Span::styled("-", Style::default().fg(Color::Rgb(220, 80, 80))),
-                Span::styled(&line.content, Style::default().fg(Color::Rgb(220, 120, 120))),
+                Span::styled(
+                    &line.content,
+                    Style::default().fg(Color::Rgb(220, 120, 120)),
+                ),
             ])
         }
         DiffLineKind::HunkHeader {
@@ -270,18 +278,19 @@ fn build_styled_line(line: &DiffLine) -> Line<'_> {
             new_start,
             new_count,
         } => {
-            let header = format!("@@ -{},{} +{},{} @@", old_start, old_count, new_start, new_count);
+            let header = format!(
+                "@@ -{},{} +{},{} @@",
+                old_start, old_count, new_start, new_count
+            );
             Line::from(Span::styled(
                 header,
                 Style::default().fg(Color::Rgb(100, 149, 237)), // Cornflower blue
             ))
         }
-        DiffLineKind::NoNewlineAtEndOfFile => {
-            Line::from(Span::styled(
-                &line.content,
-                Style::default().fg(Color::Rgb(120, 80, 160)),
-            ))
-        }
+        DiffLineKind::NoNewlineAtEndOfFile => Line::from(Span::styled(
+            &line.content,
+            Style::default().fg(Color::Rgb(120, 80, 160)),
+        )),
     }
 }
 
@@ -394,7 +403,7 @@ pub fn parse_git_diff(output: &str) -> Vec<DiffFile> {
             // If path is /dev/null, it's a new file
             if raw_line.contains("/dev/null") {
                 file.is_new = true;
-            } else if let Some(ref mut old_path) = file.old_path {
+            } else if let Some(ref _old_path) = file.old_path {
                 // Already have old_path from rename
             } else if !file.is_renamed {
                 // Extract path from --- a/path
@@ -419,7 +428,8 @@ pub fn parse_git_diff(output: &str) -> Vec<DiffFile> {
 
         // Hunk header
         if raw_line.starts_with("@@ ") {
-            if let Some((old_start, old_count, new_start, new_count)) = parse_hunk_header(raw_line) {
+            if let Some((old_start, old_count, new_start, new_count)) = parse_hunk_header(raw_line)
+            {
                 old_line_no = old_start;
                 new_line_no = new_start;
                 file.lines.push(DiffLine {
@@ -507,7 +517,11 @@ fn extract_path_from_git_header(header: &str) -> String {
         header[pos + 3..].to_string()
     } else {
         // Fallback: just return the part after the first space
-        header.split_whitespace().nth(1).unwrap_or(header).to_string()
+        header
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or(header)
+            .to_string()
     }
 }
 
@@ -545,7 +559,9 @@ fn parse_range(range: &str) -> Option<(u32, u32)> {
 /// Clamps `scroll_offset` to valid bounds for the current file.
 /// Returns `true` if the scroll actually changed.
 pub fn scroll_diff(state: &mut DiffReviewState, delta: i32) -> bool {
-    let file_idx = state.selected_file_index.min(state.files.len().saturating_sub(1));
+    let file_idx = state
+        .selected_file_index
+        .min(state.files.len().saturating_sub(1));
     if let Some(file) = state.files.get(file_idx) {
         let total = file.lines.len();
         let max_offset = total.saturating_sub(1);
@@ -746,7 +762,13 @@ diff --git a/file2.rs b/file2.rs
 "#;
         let files = parse_git_diff(output);
         assert_eq!(files.len(), 1);
-        if let DiffLineKind::HunkHeader { old_start, old_count, new_start, new_count } = &files[0].lines[0].kind {
+        if let DiffLineKind::HunkHeader {
+            old_start,
+            old_count,
+            new_start,
+            new_count,
+        } = &files[0].lines[0].kind
+        {
             assert_eq!(*old_start, 1);
             assert_eq!(*old_count, 1);
             assert_eq!(*new_start, 1);

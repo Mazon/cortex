@@ -88,7 +88,8 @@ impl AppState {
             .map(|s| s.to_string())
         {
             let session = self
-                .session_tracker.task_sessions
+                .session_tracker
+                .task_sessions
                 .entry(task_id.clone())
                 .or_insert_with(|| TaskDetailSession {
                     task_id,
@@ -112,9 +113,7 @@ impl AppState {
                 // Key was seen before but is NOT the current part — replay.
                 return;
             }
-            if is_continuation
-                && session.last_delta_content.as_deref() == Some(delta)
-            {
+            if is_continuation && session.last_delta_content.as_deref() == Some(delta) {
                 // Same key AND identical content — duplicate from a second SSE
                 // loop, not a genuine continuation. Skip to prevent doubling.
                 return;
@@ -179,7 +178,8 @@ impl AppState {
     fn process_subagent_status(&mut self, session_id: &str, _parent_task_id: &str, status: &str) {
         // Ensure subagent session data exists
         let entry = self
-            .session_tracker.subagent_session_data
+            .session_tracker
+            .subagent_session_data
             .entry(session_id.to_string())
             .or_insert_with(TaskDetailSession::default);
         entry.session_id = Some(session_id.to_string());
@@ -206,7 +206,11 @@ impl AppState {
     fn process_subagent_idle(&mut self, session_id: &str, _parent_task_id: &str) {
         self.mark_subagent_inactive(session_id);
         // Clear dedup tracking for the subagent session.
-        if let Some(entry) = self.session_tracker.subagent_session_data.get_mut(session_id) {
+        if let Some(entry) = self
+            .session_tracker
+            .subagent_session_data
+            .get_mut(session_id)
+        {
             entry.seen_delta_keys.clear();
             entry.last_delta_key = None;
             entry.last_delta_content = None;
@@ -227,7 +231,8 @@ impl AppState {
         delta: &str,
     ) {
         let entry = self
-            .session_tracker.subagent_session_data
+            .session_tracker
+            .subagent_session_data
             .entry(session_id.to_string())
             .or_insert_with(TaskDetailSession::default);
         entry.session_id = Some(session_id.to_string());
@@ -242,9 +247,7 @@ impl AppState {
         if !is_continuation && entry.seen_delta_keys.contains(&delta_key) {
             return;
         }
-        if is_continuation
-            && entry.last_delta_content.as_deref() == Some(delta)
-        {
+        if is_continuation && entry.last_delta_content.as_deref() == Some(delta) {
             return;
         }
         if !is_continuation {
@@ -291,7 +294,10 @@ impl AppState {
         }
 
         // Route to parent task if this is a subagent session
-        if let Some(parent_task_id) = self.get_parent_task_for_subagent(session_id).map(|s| s.to_string()) {
+        if let Some(parent_task_id) = self
+            .get_parent_task_for_subagent(session_id)
+            .map(|s| s.to_string())
+        {
             self.process_subagent_status(session_id, &parent_task_id, status);
             return;
         }
@@ -330,7 +336,10 @@ impl AppState {
                     return;
                 }
                 _ => {
-                    tracing::warn!("Unknown session status '{}' for task session, ignoring", status);
+                    tracing::warn!(
+                        "Unknown session status '{}' for task session, ignoring",
+                        status
+                    );
                     return;
                 }
             };
@@ -358,7 +367,9 @@ impl AppState {
             .map(|task_id| {
                 self.update_task_agent_status(&task_id, AgentStatus::Complete);
 
-                let agent_label = self.tasks.get(&task_id)
+                let agent_label = self
+                    .tasks
+                    .get(&task_id)
                     .and_then(|t| t.agent_type.clone())
                     .unwrap_or_else(|| "agent".to_string());
                 self.set_notification(
@@ -373,16 +384,25 @@ impl AppState {
     /// Handle a `SessionError` SSE event — record the error on the task.
     pub fn process_session_error(&mut self, session_id: &str, error: &str) {
         // Check if this is a subagent session first
-        if let Some(parent_task_id) = self.get_parent_task_for_subagent(session_id).map(|s| s.to_string()) {
+        if let Some(parent_task_id) = self
+            .get_parent_task_for_subagent(session_id)
+            .map(|s| s.to_string())
+        {
             self.mark_subagent_error(session_id, error);
             // Also surface on the parent task as a notification
-            let agent_name = self.session_tracker.subagent_sessions
+            let agent_name = self
+                .session_tracker
+                .subagent_sessions
                 .get(&parent_task_id)
                 .and_then(|sessions| sessions.iter().find(|s| s.session_id == session_id))
                 .map(|s| s.agent_name.clone())
                 .unwrap_or_else(|| "subagent".to_string());
             self.set_notification(
-                format!("{} agent error: {}", agent_name, error.chars().take(80).collect::<String>()),
+                format!(
+                    "{} agent error: {}",
+                    agent_name,
+                    error.chars().take(80).collect::<String>()
+                ),
                 crate::state::types::NotificationVariant::Error,
                 5000,
             );
@@ -393,7 +413,9 @@ impl AppState {
             // Skip setting error when the task is already Hung — the Hung
             // status already communicates the inactivity issue, and we don't
             // want to overwrite it with an Error status + error message.
-            let is_hung = self.tasks.get(&task_id)
+            let is_hung = self
+                .tasks
+                .get(&task_id)
                 .map(|t| t.agent_status == AgentStatus::Hung)
                 .unwrap_or(false);
             if !is_hung {
@@ -422,8 +444,9 @@ impl AppState {
         desc: &str,
     ) {
         // Route to parent task if this is a subagent session
-        let (task_id, effective_session_id) = if let Some(parent_task_id) =
-            self.get_parent_task_for_subagent(session_id).map(|s| s.to_string())
+        let (task_id, effective_session_id) = if let Some(parent_task_id) = self
+            .get_parent_task_for_subagent(session_id)
+            .map(|s| s.to_string())
         {
             (parent_task_id, session_id.to_string())
         } else if let Some(task_id) = self
@@ -464,7 +487,9 @@ impl AppState {
                     task_id = %task_id,
                     "extract_plan_output: no session data — creating lazy entry for task"
                 );
-                self.session_tracker.task_sessions.entry(task_id.to_string())
+                self.session_tracker
+                    .task_sessions
+                    .entry(task_id.to_string())
                     .or_insert_with(|| TaskDetailSession {
                         task_id: task_id.to_string(),
                         ..Default::default()
@@ -480,17 +505,24 @@ impl AppState {
 
         let plan = if let Some(session) = self.session_tracker.task_sessions.get(task_id) {
             // Prefer finalized messages (assistant text parts)
-            let from_messages: String = session.messages.iter()
+            let from_messages: String = session
+                .messages
+                .iter()
                 .rev()
                 .filter_map(|msg| {
                     if matches!(msg.role, MessageRole::Assistant) {
-                        msg.parts.iter().filter_map(|p| {
-                            if let TaskMessagePart::Text { text } = p {
-                                Some(text.as_str())
-                            } else {
-                                None
-                            }
-                        }).collect::<Vec<_>>().join("\n").into()
+                        msg.parts
+                            .iter()
+                            .filter_map(|p| {
+                                if let TaskMessagePart::Text { text } = p {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .into()
                     } else {
                         None
                     }
@@ -532,7 +564,9 @@ impl AppState {
         let plan = if plan.len() > PLAN_OUTPUT_CAP_BYTES {
             let start = plan.len() - PLAN_OUTPUT_CAP_BYTES;
             let mut i = start;
-            while i < plan.len() && !plan.is_char_boundary(i) { i += 1; }
+            while i < plan.len() && !plan.is_char_boundary(i) {
+                i += 1;
+            }
             plan[i..].to_string()
         } else {
             plan
@@ -567,13 +601,22 @@ impl AppState {
 
         for msg in &session.messages {
             for part in &msg.parts {
-                if let TaskMessagePart::Tool { tool, state: tool_state, .. } = part {
+                if let TaskMessagePart::Tool {
+                    tool,
+                    state: tool_state,
+                    ..
+                } = part
+                {
                     if *tool_state == ToolState::Completed {
                         tools_used.insert(tool.clone());
                         // Extract file paths from tool inputs for common tools
                         if matches!(tool.as_str(), "read" | "glob" | "grep") {
                             // Extract the file path from the cached_summary if available
-                            if let TaskMessagePart::Tool { cached_summary: Some(ref summary), .. } = part {
+                            if let TaskMessagePart::Tool {
+                                cached_summary: Some(ref summary),
+                                ..
+                            } = part
+                            {
                                 files_examined.push(summary.clone());
                             }
                         }
@@ -587,13 +630,18 @@ impl AppState {
         if !files_examined.is_empty() {
             // Deduplicate while preserving order
             let mut seen = std::collections::HashSet::new();
-            let unique_files: Vec<&String> = files_examined.iter()
+            let unique_files: Vec<&String> = files_examined
+                .iter()
                 .filter(|f| seen.insert(f.as_str()))
                 .take(20) // Cap at 20 entries to avoid bloating the prompt
                 .collect();
             context_parts.push(format!(
                 "Files examined during planning:\n{}",
-                unique_files.iter().map(|f| format!("  - {}", f)).collect::<Vec<_>>().join("\n")
+                unique_files
+                    .iter()
+                    .map(|f| format!("  - {}", f))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ));
         }
 
@@ -628,7 +676,8 @@ impl AppState {
         messages: Vec<TaskMessage>,
     ) -> bool {
         let has_streaming = self
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .get(task_id)
             .is_some_and(|s| s.streaming_text.is_some());
 

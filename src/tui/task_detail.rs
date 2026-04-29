@@ -2,17 +2,18 @@
 //!
 //! Features:
 //! - Two-row metadata header with status pill, agent type, column, and timer
-//! - Description block with character count and styled borders
+//! - Pinned prompt context at top of agent output
 //! - Subagent summary with bordered block and done count
 //! - Streaming output with message count, tool indicators, and subtle background
 //! - Permissions block with styled action buttons
+//! - Always-editable prompt input at the bottom for follow-up prompts
 //! - Grouped footer key hints
 //! - Animated progress indicator for running tasks
 
+use super::format_elapsed_time;
 use crate::state::types::{
     AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
 };
-use super::format_elapsed_time;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -58,7 +59,8 @@ pub fn render_task_detail(
             .unwrap_or(false)
     } else {
         state
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .get(task_id)
             .map(|s| !s.pending_permissions.is_empty() || !s.pending_questions.is_empty())
             .unwrap_or(false)
@@ -91,8 +93,16 @@ pub fn render_task_detail(
     // ── Conditional section flags ──────────────────────────────────────
 
     // Editor state for footer hints
-    let editor_is_focused = state.ui.detail_editor.as_ref().map_or(false, |e| e.is_focused);
-    let editor_discard_warning = state.ui.detail_editor.as_ref().map_or(false, |e| e.discard_warning_shown);
+    let editor_is_focused = state
+        .ui
+        .detail_editor
+        .as_ref()
+        .map_or(false, |e| e.is_focused);
+    let editor_discard_warning = state
+        .ui
+        .detail_editor
+        .as_ref()
+        .map_or(false, |e| e.discard_warning_shown);
 
     // Clone data needed after mutable borrow of state (for description editor)
 
@@ -116,20 +126,20 @@ pub fn render_task_detail(
     let separator_height: u16 = 1;
     // Footer
     let footer_height: u16 = 1;
+    // Prompt input: bordered block needs 3 rows (border top + text + border bottom)
+    let prompt_input_height: u16 = 3;
     // Permissions: bordered block needs 3 rows
     let permission_rows: u16 = if has_permissions { 3 } else { 0 };
 
-    // Calculate available space for desc + streaming
+    // Calculate available space for streaming
     let fixed_total = metadata_height
         + separator_height
         + breadcrumb_rows
         + subagent_block_rows
         + permission_rows
+        + prompt_input_height
         + footer_height;
     let available = inner.height.saturating_sub(fixed_total);
-
-    // Description: 3-4 rows
-    let desc_rows = if available >= 12 { 4u16 } else { 3u16 };
 
     // ── Build layout constraint vector ─────────────────────────────────
     //
@@ -137,21 +147,21 @@ pub fn render_task_detail(
     //   [0] metadata (2 rows)
     //   [1] separator (1 row)
     //   [2] breadcrumb (0 or 1)
-    //   [3] description (variable)
-    //   [4] subagent summary (0 or variable)
-    //   [5] streaming (Min(0) — fills remaining)
-    //   [6] permissions (0 or 3)
+    //   [3] subagent summary (0 or variable)
+    //   [4] streaming (Min(0) — fills remaining)
+    //   [5] permissions (0 or 3)
+    //   [6] prompt input (3 rows fixed)
     //   [7] footer (1 row)
 
     let v_constraints: Vec<Constraint> = vec![
-        Constraint::Length(metadata_height),    // [0] Metadata header
-        Constraint::Length(separator_height),   // [1] Separator
-        Constraint::Length(breadcrumb_rows),    // [2] Breadcrumb
-        Constraint::Length(desc_rows),          // [3] Description
-        Constraint::Length(subagent_block_rows), // [4] Subagent summary
-        Constraint::Min(0),                     // [5] Streaming block
-        Constraint::Length(permission_rows),    // [6] Permissions
-        Constraint::Length(footer_height),      // [7] Footer
+        Constraint::Length(metadata_height),     // [0] Metadata header
+        Constraint::Length(separator_height),    // [1] Separator
+        Constraint::Length(breadcrumb_rows),     // [2] Breadcrumb
+        Constraint::Length(subagent_block_rows), // [3] Subagent summary
+        Constraint::Min(available),              // [4] Streaming block
+        Constraint::Length(permission_rows),     // [5] Permissions
+        Constraint::Length(prompt_input_height), // [6] Prompt input
+        Constraint::Length(footer_height),       // [7] Footer
     ];
 
     let v_layout = Layout::default()
@@ -172,32 +182,34 @@ pub fn render_task_detail(
         render_breadcrumb(f, v_layout[2], state);
     }
 
-    // 4. Description block (takes task_id to avoid borrow conflict with &mut state)
-    render_description_block(f, v_layout[3], task_id, state);
-
-    // 5. Subagent summary (only when not drilled in and has subagents)
+    // 4. Subagent summary (only when not drilled in and has subagents)
     if subagent_count > 0 {
-        render_subagent_summary(f, v_layout[4], state, task_id, theme);
+        render_subagent_summary(f, v_layout[3], state, task_id, theme);
     }
 
-    // 6. Streaming output + messages
+    // 5. Streaming output + messages
     if is_drilled {
-        render_subagent_streaming_block(f, v_layout[5], state, now);
+        render_subagent_streaming_block(f, v_layout[4], state, now);
     } else {
-        render_streaming_block(f, v_layout[5], state, task_id, now);
+        render_streaming_block(f, v_layout[4], state, task_id, now);
     }
 
-    // 7. Pending permissions / questions
+    // 6. Pending permissions / questions
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[6], session);
+                    render_permissions(f, v_layout[5], session);
                 }
             }
         } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[6], session);
+            render_permissions(f, v_layout[5], session);
         }
+    }
+
+    // 7. Prompt input (always editable, single-line)
+    if !is_drilled {
+        render_prompt_input_block(f, v_layout[6], task_id, state);
     }
 
     // 8. Footer key hints
@@ -205,17 +217,24 @@ pub fn render_task_detail(
         drilled_session_id
             .as_ref()
             .and_then(|sid| state.session_tracker.cached_streaming_lines.get(sid))
-            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     } else {
         state
             .session_tracker
             .cached_streaming_lines
             .get(task_id)
-            .map(|(_, lines)| lines.len() > v_layout[5].height as usize)
+            .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     };
-    render_footer(f, v_layout[7], has_scrollable_output, is_drilled, editor_is_focused, editor_discard_warning);
+    render_footer(
+        f,
+        v_layout[7],
+        has_scrollable_output,
+        is_drilled,
+        editor_is_focused,
+        editor_discard_warning,
+    );
 }
 
 // ─── Section Renderers ────────────────────────────────────────────────────
@@ -271,26 +290,16 @@ fn render_metadata_header(
     );
     let agent_name = task.agent_type.as_deref().unwrap_or("none");
 
-    // ── Row 1: Badge + Title + Status pill ────────────────────────────
+    // ── Row 1: Badge + Status pill ────────────────────────────────────
     let badge = format!("#{}", task.number);
-    let display_title = crate::state::types::derive_title_from_description(&task.description);
 
-    // Build left-aligned content: badge + title
-    let left_spans = vec![
-        Span::styled(
-            badge,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            display_title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    // Build left-aligned content: badge only (title is in outer block border)
+    let left_spans = vec![Span::styled(
+        badge,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
 
     // Build right-aligned status pill
     // For running tasks, add a spinning progress indicator
@@ -303,10 +312,7 @@ fn render_metadata_header(
     };
 
     let status_pill = format!("{}{} {}", spinner, status_icon, status_text);
-    let right_spans = vec![Span::styled(
-        status_pill,
-        Style::default().fg(status_color),
-    )];
+    let right_spans = vec![Span::styled(status_pill, Style::default().fg(status_color))];
 
     // Render row 1 with left/right alignment
     let row1_area = Rect::new(area.x, area.y, area.width, 1);
@@ -351,9 +357,7 @@ fn render_metadata_header(
         row2_spans.push(Span::raw("  "));
         row2_spans.push(Span::styled(
             format!("!{}", task.pending_permission_count),
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
     if task.pending_question_count > 0 {
@@ -400,54 +404,37 @@ fn render_split_line(
     f.render_widget(para, area);
 }
 
-/// Render the description block with styled header and character count.
-/// When the detail editor is focused, renders as an editable textarea with cursor.
-fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mut AppState) {
-    let (display_desc, char_count, line_count, has_pending) = {
-        let task = state.tasks.get(task_id);
-        let has_pending = task.map_or(false, |t| t.pending_description.is_some());
-        if let Some(ref editor) = state.ui.detail_editor {
-            let desc = editor.description();
-            let cc = desc.chars().count();
-            let lc = desc.lines().count();
-            (Some(desc), cc, lc, has_pending)
-        } else if let Some(task) = task {
-            let cc = task.description.chars().count();
-            let lc = task.description.lines().count();
-            (Some(task.description.clone()), cc, lc, has_pending)
-        } else {
-            (None, 0, 0, false)
-        }
-    };
-
-    let display_desc = match display_desc {
-        Some(d) => d,
-        None => return,
-    };
-
+/// Render the prompt input block at the bottom of the task detail view.
+///
+/// Always renders as a single-line editable input field. When focused,
+/// shows the typed text with cursor. When unfocused, shows a placeholder.
+/// When the agent is running and a prompt is queued, shows a "queued" indicator.
+fn render_prompt_input_block(f: &mut Frame, area: Rect, task_id: &str, state: &mut AppState) {
     let editor = state.ui.detail_editor.as_mut();
     let is_focused = editor.map_or(false, |e| e.is_focused);
 
-    // Build header label
-    let mut header_label = if display_desc.is_empty() {
-        " Description ".to_string()
-    } else if line_count > 1 {
-        format!(" Description ({} chars, {} lines) ", char_count, line_count)
-    } else {
-        format!(" Description ({} chars) ", char_count)
+    // Check if agent is running and has a queued prompt
+    let (is_running, has_queued_prompt) = {
+        let task = state.tasks.get(task_id);
+        let running = task
+            .map_or(false, |t| matches!(t.agent_status, AgentStatus::Running | AgentStatus::Pending));
+        let queued = task.map_or(false, |t| t.queued_prompt.is_some());
+        (running, queued)
     };
 
-    // Append status indicators to the header
-    if is_focused {
-        header_label.push_str("[EDITING] ");
-    } else if has_pending {
-        header_label.push_str("[⧖ pending] ");
-    }
+    // Build header label
+    let header_label = if is_focused {
+        " Prompt [EDITING] ".to_string()
+    } else if has_queued_prompt {
+        " Prompt [queued] ".to_string()
+    } else {
+        " Prompt ".to_string()
+    };
 
     let border_color = if is_focused {
         Color::Cyan
-    } else if has_pending {
-        Color::Rgb(200, 170, 50) // Yellow/orange for pending
+    } else if has_queued_prompt {
+        Color::Rgb(200, 170, 50) // Yellow/orange for queued
     } else {
         Color::Rgb(70, 74, 90)
     };
@@ -458,7 +445,13 @@ fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mu
         .title(Span::styled(
             header_label,
             Style::default()
-                .fg(if is_focused { Color::Cyan } else { Color::Rgb(130, 134, 160) })
+                .fg(if is_focused {
+                    Color::Cyan
+                } else if has_queued_prompt {
+                    Color::Rgb(200, 170, 50)
+                } else {
+                    Color::Rgb(130, 134, 160)
+                })
                 .add_modifier(Modifier::BOLD),
         ));
 
@@ -470,105 +463,61 @@ fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mu
     }
 
     if is_focused {
-        // ── Editable textarea mode ──
+        // ── Focused: show input text with cursor ──
         if let Some(ref mut editor) = state.ui.detail_editor {
-            let visible_height = inner.height as usize;
-            editor.ensure_cursor_visible(visible_height);
+            let line = editor.desc_lines.first().map_or("", |l| l.as_str());
+            let line_is_empty = line.is_empty();
+            let col = editor.cursor_col.min(line.chars().count());
 
-            let desc_lines = editor.desc_lines();
-            let desc_is_empty = desc_lines.len() == 1 && desc_lines[0].is_empty();
-
-            let lines: Vec<Line> = if desc_is_empty {
-                vec![Line::from(Span::styled(
-                    "Enter description...",
-                    Style::default().fg(Color::Rgb(100, 100, 120)),
-                ))]
+            if line_is_empty {
+                let para = Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        "Type a prompt and press Enter to send...",
+                        Style::default().fg(Color::Rgb(100, 100, 120)),
+                    ),
+                    Span::styled("▊", Style::default().fg(Color::Cyan)),
+                ]));
+                f.render_widget(para, inner);
+                // Set cursor position
+                f.set_cursor_position((inner.x, inner.y));
             } else {
-                desc_lines
-                    .iter()
-                    .skip(editor.scroll_offset)
-                    .take(visible_height)
-                    .map(|s| Line::from(s.as_str()))
-                    .collect()
-            };
-
-            // Add cursor character
-            let display_lines = if !desc_is_empty {
-                let cursor_row = editor.cursor_row;
-                let actual_visible_row = cursor_row.saturating_sub(editor.scroll_offset);
-
-                let mut result = lines;
-                if actual_visible_row < result.len() {
-                    let line = desc_lines.get(cursor_row).map_or("", |l| l.as_str());
-                    let col = editor.cursor_col.min(line.chars().count());
-                    let mut chars: Vec<char> = line.chars().collect();
-                    chars.insert(col, '▊');
-                    let modified_line: String = chars.into_iter().collect();
-                    result[actual_visible_row] = Line::from(modified_line);
-                } else if actual_visible_row == result.len() && result.len() < visible_height {
-                    result.push(Line::from("▊"));
-                }
-                result
-            } else {
-                // Show cursor on the placeholder line
-                let mut result = lines;
-                result[0] = Line::from("▊");
-                result
-            };
-
-            let desc_para = Paragraph::new(display_lines).wrap(Wrap { trim: false });
-            f.render_widget(desc_para, inner);
-
-            // Set cursor position
-            let line = desc_lines.get(editor.cursor_row).map_or("", |l| l.as_str());
-            let cursor_x = inner.x + editor.cursor_col.min(line.chars().count()) as u16;
-            let cursor_y = inner.y + (editor.cursor_row - editor.scroll_offset) as u16;
-            if cursor_y < inner.y + inner.height {
-                f.set_cursor_position((cursor_x, cursor_y));
+                let mut chars: Vec<char> = line.chars().collect();
+                chars.insert(col, '▊');
+                let modified_line: String = chars.into_iter().collect();
+                let para = Paragraph::new(Line::from(modified_line));
+                f.render_widget(para, inner);
+                // Set cursor position
+                let cursor_x = inner.x + col as u16;
+                f.set_cursor_position((cursor_x, inner.y));
             }
         }
     } else {
-        // ── Read-only mode ──
-        if display_desc.is_empty() {
-            let placeholder = Paragraph::new(Span::styled(
-                "  (no description)",
-                Style::default()
-                    .fg(Color::Rgb(100, 100, 120))
-                    .add_modifier(Modifier::ITALIC),
-            ));
-            f.render_widget(placeholder, inner);
-
-            // Show "Tab to edit" hint on the right
-            let hint = Paragraph::new(Span::styled(
-                "Tab to edit ",
-                Style::default().fg(Color::Rgb(80, 84, 100)),
-            ))
-            .alignment(Alignment::Right);
-            f.render_widget(hint, inner);
-        } else {
-            let para = Paragraph::new(display_desc.as_str())
-                .style(Style::default().fg(Color::White))
-                .wrap(Wrap { trim: true });
+        // ── Unfocused: show placeholder or hint ──
+        if has_queued_prompt {
+            let para = Paragraph::new(Line::from(vec![
+                Span::styled("⧖ ", Style::default().fg(Color::Rgb(200, 170, 50))),
+                Span::styled(
+                    "Prompt queued — will be sent after current prompt completes",
+                    Style::default().fg(Color::Rgb(170, 160, 100)),
+                ),
+            ]));
             f.render_widget(para, inner);
-        }
-    }
-
-    // Show validation error if present
-    if let Some(ref editor) = state.ui.detail_editor {
-        if let Some(ref error) = editor.validation_error {
-            let error_widget = Paragraph::new(Span::styled(
-                format!(" ⚠ {}", error),
-                Style::default().fg(Color::Red),
-            ));
-            let error_area = Rect {
-                x: area.x + 1,
-                y: area.y + area.height,
-                width: area.width.saturating_sub(2),
-                height: 1,
-            };
-            if error_area.y < f.area().y + f.area().height {
-                f.render_widget(error_widget, error_area);
+        } else {
+            let mut spans = vec![
+                Span::styled(
+                    "Type a prompt and press Enter...  ",
+                    Style::default().fg(Color::Rgb(80, 84, 100)),
+                ),
+                Span::styled("Tab", Style::default().fg(Color::Rgb(130, 134, 160)).add_modifier(Modifier::BOLD)),
+                Span::styled(" to focus", Style::default().fg(Color::Rgb(80, 84, 100))),
+            ];
+            if is_running {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled("⧖", Style::default().fg(Color::Rgb(200, 170, 50))));
+                spans.push(Span::styled(" agent running", Style::default().fg(Color::Rgb(80, 84, 100))));
             }
+            let para = Paragraph::new(Line::from(spans));
+            f.render_widget(para, inner);
         }
     }
 }
@@ -577,7 +526,13 @@ fn render_description_block(f: &mut Frame, area: Rect, task_id: &str, state: &mu
 ///
 /// Uses a render version cache on `AppState` to avoid rebuilding `Vec<Line>`
 /// on every frame when the session data hasn't changed.
-fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_id: &str, now: i64) {
+fn render_streaming_block(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+    task_id: &str,
+    now: i64,
+) {
     // ── Pre-compute scroll metrics for block title ──────────────────
     let total_lines = state
         .session_tracker
@@ -604,8 +559,8 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         None => auto_scroll_offset,
     };
 
-    let is_manual_scroll = state.ui.user_scroll_offset.is_some()
-        && scroll_offset < auto_scroll_offset;
+    let is_manual_scroll =
+        state.ui.user_scroll_offset.is_some() && scroll_offset < auto_scroll_offset;
 
     // ── Count messages for block title ────────────────────────────────
     let msg_count = state
@@ -622,7 +577,10 @@ fn render_streaming_block(f: &mut Frame, area: Rect, state: &mut AppState, task_
         let last_visible = (scroll_offset + visible_height).min(total_lines);
         let at_bottom = scroll_offset + visible_height >= total_lines;
         if at_bottom {
-            format!(" Agent Output ({} msgs) ▼ {}/{} ", msg_count, last_visible, total_lines)
+            format!(
+                " Agent Output ({} msgs) ▼ {}/{} ",
+                msg_count, last_visible, total_lines
+            )
         } else {
             format!(
                 " Agent Output ({} msgs) ║ {}-{}/{} ",
@@ -757,6 +715,39 @@ fn build_streaming_lines(session: &TaskDetailSession, now: i64) -> Vec<Line<'sta
     let mut prev_role: Option<MessageRole> = None;
     let mut in_code_fence = false;
 
+    // ── Pinned prompt context header ───────────────────────────────
+    if let Some(ref prompt) = session.active_prompt {
+        if !prompt.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(" 📌 ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "Prompt:".to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(130, 134, 160))
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            // Show first 3 lines of prompt, truncated
+            for line in prompt.lines().take(3) {
+                let truncated: String = line.chars().take(80).collect();
+                lines.push(Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled(
+                        truncated,
+                        Style::default().fg(Color::Rgb(100, 105, 125)),
+                    ),
+                ]));
+            }
+            if prompt.lines().count() > 3 {
+                lines.push(Line::from(vec![
+                    Span::styled("   ", Style::default()),
+                    Span::styled("...", Style::default().fg(Color::Rgb(80, 84, 100))),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
     for (msg_idx, msg) in session.messages.iter().enumerate() {
         // ── Emit role header when role changes ─────────────────────
         if prev_role.as_ref() != Some(&msg.role) || msg_idx == 0 {
@@ -820,7 +811,9 @@ fn build_streaming_lines(session: &TaskDetailSession, now: i64) -> Vec<Line<'sta
                     ..
                 } => {
                     let (state_icon, state_color, bar_color) = match tool_state {
-                        ToolState::Pending => ("○", Color::Rgb(100, 100, 120), Color::Rgb(60, 60, 70)),
+                        ToolState::Pending => {
+                            ("○", Color::Rgb(100, 100, 120), Color::Rgb(60, 60, 70))
+                        }
                         ToolState::Running => ("◐", Color::Blue, Color::Rgb(50, 100, 200)),
                         ToolState::Completed => ("✓", Color::Green, Color::Rgb(60, 160, 80)),
                         ToolState::Error => ("✗", Color::Red, Color::Rgb(180, 50, 50)),
@@ -869,10 +862,7 @@ fn build_streaming_lines(session: &TaskDetailSession, now: i64) -> Vec<Line<'sta
                             lines.push(Line::from(vec![
                                 Span::styled("   ", Style::default()),
                                 Span::styled("│ ", Style::default().fg(Color::Rgb(180, 50, 50))),
-                                Span::styled(
-                                    err_line.to_string(),
-                                    Style::default().fg(Color::Red),
-                                ),
+                                Span::styled(err_line.to_string(), Style::default().fg(Color::Red)),
                             ]));
                         }
                     }
@@ -895,9 +885,7 @@ fn build_streaming_lines(session: &TaskDetailSession, now: i64) -> Vec<Line<'sta
                         Span::styled(" ▎ ", Style::default().fg(accent)),
                         Span::styled(
                             "💭 Reasoning ──────────────────────────",
-                            Style::default()
-                                .fg(accent)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(accent).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                     for line in text.lines() {
@@ -1001,7 +989,10 @@ fn tool_accent_color(tool: &str) -> Color {
 
 /// Format a relative time string from a `t{unix_seconds}` timestamp.
 fn format_relative_time(created_at: &str, now: i64) -> String {
-    let secs = match created_at.strip_prefix('t').and_then(|s| s.parse::<i64>().ok()) {
+    let secs = match created_at
+        .strip_prefix('t')
+        .and_then(|s| s.parse::<i64>().ok())
+    {
         Some(s) => s,
         None => return String::new(),
     };
@@ -1131,14 +1122,16 @@ fn render_subagent_summary(
         return;
     }
 
-    let done_count = subagents.iter().filter(|s| !s.active && s.error_message.is_none()).count();
-    let error_count = subagents.iter().filter(|s| s.error_message.is_some()).count();
+    let done_count = subagents
+        .iter()
+        .filter(|s| !s.active && s.error_message.is_none())
+        .count();
+    let error_count = subagents
+        .iter()
+        .filter(|s| s.error_message.is_some())
+        .count();
 
-    let header = format!(
-        " Subagents ({}/{}) ",
-        done_count,
-        subagents.len()
-    );
+    let header = format!(" Subagents ({}/{}) ", done_count, subagents.len());
     let header_style = if error_count > 0 {
         Style::default()
             .fg(theme.error_color())
@@ -1187,7 +1180,10 @@ fn render_subagent_summary(
                 _ => "🤖",
             };
 
-            let label = format!(" {} {} {} (depth {})", icon, agent_icon, sub.agent_name, sub.depth);
+            let label = format!(
+                " {} {} {} (depth {})",
+                icon, agent_icon, sub.agent_name, sub.depth
+            );
             let mut spans = vec![Span::styled(label, Style::default().fg(color))];
             if let Some(ref err) = sub.error_message {
                 let truncated: String = err.chars().take(50).collect();
@@ -1263,8 +1259,8 @@ fn render_subagent_streaming_block(f: &mut Frame, area: Rect, state: &mut AppSta
         None => auto_scroll_offset,
     };
 
-    let is_manual_scroll = state.ui.user_scroll_offset.is_some()
-        && scroll_offset < auto_scroll_offset;
+    let is_manual_scroll =
+        state.ui.user_scroll_offset.is_some() && scroll_offset < auto_scroll_offset;
 
     // Count messages for block title
     let msg_count = state
@@ -1401,16 +1397,17 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
                 " ⚠ Pending ({} perm, {} question{}) ",
                 session.pending_permissions.len(),
                 session.pending_questions.len(),
-                if session.pending_questions.len() != 1 { "s" } else { "" }
+                if session.pending_questions.len() != 1 {
+                    "s"
+                } else {
+                    ""
+                }
             ),
         )
     } else {
         (
             Color::Rgb(160, 140, 50),
-            format!(
-                " ? Questions ({}) ",
-                session.pending_questions.len()
-            ),
+            format!(" ? Questions ({}) ", session.pending_questions.len()),
         )
     };
 
@@ -1439,9 +1436,7 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
         content_lines.push(Line::from(vec![
             Span::styled(
                 format!(" !{} ", perm.id),
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 perm.tool_name.clone(),
@@ -1456,38 +1451,21 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
                 format!("   {} ", perm.description),
                 Style::default().fg(Color::Rgb(200, 200, 210)),
             ),
-            Span::styled(
-                " [",
-                Style::default().fg(Color::Rgb(80, 84, 100)),
-            ),
+            Span::styled(" [", Style::default().fg(Color::Rgb(80, 84, 100))),
             Span::styled(
                 "y",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                ":approve",
-                Style::default().fg(Color::Rgb(80, 84, 100)),
-            ),
-            Span::styled(
-                " / ",
-                Style::default().fg(Color::Rgb(60, 64, 80)),
-            ),
+            Span::styled(":approve", Style::default().fg(Color::Rgb(80, 84, 100))),
+            Span::styled(" / ", Style::default().fg(Color::Rgb(60, 64, 80))),
             Span::styled(
                 "n",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                ":reject",
-                Style::default().fg(Color::Rgb(80, 84, 100)),
-            ),
-            Span::styled(
-                "]",
-                Style::default().fg(Color::Rgb(80, 84, 100)),
-            ),
+            Span::styled(":reject", Style::default().fg(Color::Rgb(80, 84, 100))),
+            Span::styled("]", Style::default().fg(Color::Rgb(80, 84, 100))),
         ]));
     }
 
@@ -1500,10 +1478,7 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                question.question.clone(),
-                Style::default().fg(Color::White),
-            ),
+            Span::styled(question.question.clone(), Style::default().fg(Color::White)),
         ]));
         // Row 2: Answer options
         if !question.answers.is_empty() {
@@ -1552,7 +1527,14 @@ fn render_permissions(f: &mut Frame, area: Rect, session: &TaskDetailSession) {
 ///
 /// Groups hints into Navigation, Actions, and General categories
 /// separated by dim pipe characters.
-fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool, is_drilled: bool, editor_focused: bool, editor_discard_warning: bool) {
+fn render_footer(
+    f: &mut Frame,
+    area: Rect,
+    has_scrollable_output: bool,
+    is_drilled: bool,
+    editor_focused: bool,
+    _editor_discard_warning: bool,
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -1562,31 +1544,19 @@ fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool, is_dril
         .add_modifier(Modifier::BOLD);
     let desc = Style::default().fg(Color::Rgb(90, 94, 110));
     let pipe = Style::default().fg(Color::Rgb(45, 48, 62));
-    let warn = Style::default().fg(Color::Rgb(200, 170, 50));
 
     let mut groups: Vec<Vec<Span<'_>>> = Vec::new();
 
     if editor_focused {
-        // Editor-focused footer hints
-        if editor_discard_warning {
-            groups.push(vec![
-                Span::styled("Esc", key),
-                Span::styled(" confirm discard  ", warn),
-                Span::styled("ctrl+s", key),
-                Span::styled(" save  ", desc),
-                Span::styled("Tab", key),
-                Span::styled(" unfocus", desc),
-            ]);
-        } else {
-            groups.push(vec![
-                Span::styled("ctrl+s", key),
-                Span::styled(" save  ", desc),
-                Span::styled("Esc", key),
-                Span::styled(" unfocus  ", desc),
-                Span::styled("Tab", key),
-                Span::styled(" unfocus", desc),
-            ]);
-        }
+        // Prompt input focused footer hints
+        groups.push(vec![
+            Span::styled("Enter", key),
+            Span::styled(" submit  ", desc),
+            Span::styled("Esc", key),
+            Span::styled(" unfocus  ", desc),
+            Span::styled("Tab", key),
+            Span::styled(" unfocus", desc),
+        ]);
     } else {
         // Normal footer hints
         // Navigation group
@@ -1603,11 +1573,13 @@ fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool, is_dril
             ]);
         }
 
-        // Edit description group
-        groups.push(vec![
-            Span::styled("Tab", key),
-            Span::styled(" edit description", desc),
-        ]);
+        // Focus prompt input group (only when not drilled into subagent)
+        if !is_drilled {
+            groups.push(vec![
+                Span::styled("Tab", key),
+                Span::styled(" focus prompt", desc),
+            ]);
+        }
 
         // Actions group
         let drill_label = if is_drilled {
@@ -1630,10 +1602,7 @@ fn render_footer(f: &mut Frame, area: Rect, has_scrollable_output: bool, is_dril
         ]);
 
         // General group
-        groups.push(vec![
-            Span::styled("Esc", key),
-            Span::styled(" back", desc),
-        ]);
+        groups.push(vec![Span::styled("Esc", key), Span::styled(" back", desc)]);
     }
 
     // Build the final spans with pipe separators between groups

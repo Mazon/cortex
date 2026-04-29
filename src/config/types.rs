@@ -211,21 +211,6 @@ pub struct OpenCodeConfig {
     /// Set to 0 to retry forever (not recommended). Defaults to 50.
     #[serde(default = "default_sse_max_retries")]
     pub sse_max_retries: u32,
-    /// ~~Read timeout (per-chunk) for SSE event streams, in seconds.~~
-    ///
-    /// **Deprecated:** This field is no longer used. The SSE client now
-    /// relies on TCP keepalive probes (15s idle, 15s interval, 3 retries)
-    /// and HTTP/2 keepalive PING frames (30s interval) instead of a
-    /// per-chunk `read_timeout`. Setting this field in your config will
-    /// have no effect. It is retained for backward compatibility with
-    /// existing `cortex.toml` files — it will be silently parsed and
-    /// ignored.
-    #[serde(default = "default_sse_read_timeout_secs")]
-    #[deprecated(
-        since = "0.5.0",
-        note = "No longer used. SSE connections now use TCP keepalive and HTTP/2 PING frames."
-    )]
-    pub sse_read_timeout_secs: u64,
     /// Timeout in seconds after which a Running task with no SSE activity
     /// is considered "Hung". Defaults to 300 (5 minutes).
     #[serde(default = "default_hung_agent_timeout_secs")]
@@ -248,16 +233,6 @@ pub struct OpenCodeConfig {
 
 fn default_sse_max_retries() -> u32 {
     50
-}
-
-/// Default value for `OpenCodeConfig::sse_read_timeout_secs`.
-///
-/// Retained for backward config compatibility only — the field is deprecated
-/// and no longer used. The SSE client now uses TCP keepalive and HTTP/2
-/// keepalive PING frames instead of a per-chunk `read_timeout`.
-#[allow(deprecated)]
-fn default_sse_read_timeout_secs() -> u64 {
-    120
 }
 
 /// Default value for `OpenCodeConfig::hung_agent_timeout_secs`.
@@ -298,8 +273,6 @@ impl Default for OpenCodeConfig {
             mcp_servers: HashMap::new(),
             request_timeout_secs: default_request_timeout_secs(),
             sse_max_retries: default_sse_max_retries(),
-            #[allow(deprecated)]
-            sse_read_timeout_secs: default_sse_read_timeout_secs(),
             hung_agent_timeout_secs: default_hung_agent_timeout_secs(),
             circuit_breaker_threshold: default_circuit_breaker_threshold(),
             circuit_breaker_cooldown_secs: default_circuit_breaker_cooldown_secs(),
@@ -454,20 +427,12 @@ pub struct KeybindingConfig {
     pub retry_task: String,
     #[serde(default = "default_drill_down_subagent")]
     pub drill_down_subagent: String,
-    #[serde(default = "default_scroll_kanban_left")]
-    pub scroll_kanban_left: String,
-    #[serde(default = "default_scroll_kanban_right")]
-    pub scroll_kanban_right: String,
     #[serde(default = "default_help_toggle")]
     pub help_toggle: String,
     #[serde(default = "default_quit")]
     pub quit: String,
     #[serde(default = "default_review_changes")]
     pub review_changes: String,
-    #[serde(default = "default_task_move_up")]
-    pub task_move_up: String,
-    #[serde(default = "default_task_move_down")]
-    pub task_move_down: String,
     /// Editor-specific keybindings (task editor mode).
     #[serde(default)]
     pub editor: EditorKeybindingConfig,
@@ -532,12 +497,6 @@ fn default_retry_task() -> String {
 fn default_drill_down_subagent() -> String {
     "ctrl+x".to_string()
 }
-fn default_scroll_kanban_left() -> String {
-    "pageup".to_string()
-}
-fn default_scroll_kanban_right() -> String {
-    "pagedown".to_string()
-}
 fn default_help_toggle() -> String {
     "?".to_string()
 }
@@ -546,12 +505,6 @@ fn default_quit() -> String {
 }
 fn default_review_changes() -> String {
     "shift+d".to_string()
-}
-fn default_task_move_up() -> String {
-    "ctrl+k".to_string()
-}
-fn default_task_move_down() -> String {
-    "ctrl+j".to_string()
 }
 
 impl Default for KeybindingConfig {
@@ -576,13 +529,9 @@ impl Default for KeybindingConfig {
             abort_session: default_abort_session(),
             retry_task: default_retry_task(),
             drill_down_subagent: default_drill_down_subagent(),
-            scroll_kanban_left: default_scroll_kanban_left(),
-            scroll_kanban_right: default_scroll_kanban_right(),
             help_toggle: default_help_toggle(),
             quit: default_quit(),
             review_changes: default_review_changes(),
-            task_move_up: default_task_move_up(),
-            task_move_down: default_task_move_down(),
             editor: EditorKeybindingConfig::default(),
         }
     }
@@ -679,7 +628,10 @@ impl ThemeConfig {
     /// Status color for running/working agents.
     /// Uses the configured `status_working` hex color, falling back to blue.
     pub fn working_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_working, ratatui::prelude::Color::Rgb(33, 150, 243))
+        parse_hex_color_or(
+            &self.status_working,
+            ratatui::prelude::Color::Rgb(33, 150, 243),
+        )
     }
 
     /// Status color for completed agents.
@@ -691,33 +643,51 @@ impl ThemeConfig {
     /// Status color for question/hung states.
     /// Uses the configured `status_question` hex color, falling back to orange.
     pub fn question_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_question, ratatui::prelude::Color::Rgb(255, 152, 0))
+        parse_hex_color_or(
+            &self.status_question,
+            ratatui::prelude::Color::Rgb(255, 152, 0),
+        )
     }
 
     /// Status color for error states.
     /// Uses the configured `status_error` hex color, falling back to red.
     pub fn error_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_error, ratatui::prelude::Color::Rgb(244, 67, 54))
+        parse_hex_color_or(
+            &self.status_error,
+            ratatui::prelude::Color::Rgb(244, 67, 54),
+        )
     }
 
     /// Status bar color for "connected". Default: green.
     pub fn connected_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_connected, ratatui::prelude::Color::Rgb(76, 175, 80))
+        parse_hex_color_or(
+            &self.status_connected,
+            ratatui::prelude::Color::Rgb(76, 175, 80),
+        )
     }
 
     /// Status bar color for "disconnected". Default: gray.
     pub fn disconnected_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_disconnected, ratatui::prelude::Color::Rgb(136, 136, 136))
+        parse_hex_color_or(
+            &self.status_disconnected,
+            ratatui::prelude::Color::Rgb(136, 136, 136),
+        )
     }
 
     /// Status bar color for "reconnecting". Default: amber.
     pub fn reconnecting_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_reconnecting, ratatui::prelude::Color::Rgb(255, 193, 7))
+        parse_hex_color_or(
+            &self.status_reconnecting,
+            ratatui::prelude::Color::Rgb(255, 193, 7),
+        )
     }
 
     /// Notification color for info messages. Reuses `status_working` (blue).
     pub fn info_color(&self) -> ratatui::prelude::Color {
-        parse_hex_color_or(&self.status_working, ratatui::prelude::Color::Rgb(33, 150, 243))
+        parse_hex_color_or(
+            &self.status_working,
+            ratatui::prelude::Color::Rgb(33, 150, 243),
+        )
     }
 }
 
@@ -753,8 +723,20 @@ mod tests {
     fn finalize_all_visible() {
         let mut config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "b".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "b".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: Vec::new(),
         };
@@ -766,9 +748,27 @@ mod tests {
     fn finalize_skips_hidden_columns() {
         let mut config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "c".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "b".into(),
+                    display_name: None,
+                    visible: false,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "c".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: Vec::new(),
         };
@@ -780,8 +780,20 @@ mod tests {
     fn finalize_all_hidden() {
         let mut config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "a".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: false,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "b".into(),
+                    display_name: None,
+                    visible: false,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: Vec::new(),
         };
@@ -802,9 +814,13 @@ mod tests {
     #[test]
     fn finalize_overwrites_previous_visible_ids() {
         let mut config = ColumnsConfig {
-            definitions: vec![
-                ColumnConfig { id: "x".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-            ],
+            definitions: vec![ColumnConfig {
+                id: "x".into(),
+                display_name: None,
+                visible: true,
+                agent: None,
+                auto_progress_to: None,
+            }],
             visible_ids: vec!["old1".to_string(), "old2".to_string()],
         };
         config.finalize();
@@ -815,9 +831,27 @@ mod tests {
     fn finalize_preserves_definition_order() {
         let mut config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "z".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "m".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "z".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "m".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: Vec::new(),
         };
@@ -829,8 +863,20 @@ mod tests {
     fn visible_column_ids_returns_cached_slice() {
         let mut config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "b".into(),
+                    display_name: None,
+                    visible: false,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: Vec::new(),
         };
@@ -842,8 +888,20 @@ mod tests {
     fn all_column_ids_returns_all() {
         let config = ColumnsConfig {
             definitions: vec![
-                ColumnConfig { id: "a".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-                ColumnConfig { id: "b".into(), display_name: None, visible: false, agent: None, auto_progress_to: None },
+                ColumnConfig {
+                    id: "a".into(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "b".into(),
+                    display_name: None,
+                    visible: false,
+                    agent: None,
+                    auto_progress_to: None,
+                },
             ],
             visible_ids: vec!["a".to_string()],
         };
@@ -854,27 +912,42 @@ mod tests {
 
     #[test]
     fn parse_hex_color_valid_black() {
-        assert_eq!(parse_hex_color("#000000"), Some(ratatui::prelude::Color::Rgb(0, 0, 0)));
+        assert_eq!(
+            parse_hex_color("#000000"),
+            Some(ratatui::prelude::Color::Rgb(0, 0, 0))
+        );
     }
 
     #[test]
     fn parse_hex_color_valid_white() {
-        assert_eq!(parse_hex_color("#FFFFFF"), Some(ratatui::prelude::Color::Rgb(255, 255, 255)));
+        assert_eq!(
+            parse_hex_color("#FFFFFF"),
+            Some(ratatui::prelude::Color::Rgb(255, 255, 255))
+        );
     }
 
     #[test]
     fn parse_hex_color_valid_mixed() {
-        assert_eq!(parse_hex_color("#2196F3"), Some(ratatui::prelude::Color::Rgb(0x21, 0x96, 0xF3)));
+        assert_eq!(
+            parse_hex_color("#2196F3"),
+            Some(ratatui::prelude::Color::Rgb(0x21, 0x96, 0xF3))
+        );
     }
 
     #[test]
     fn parse_hex_color_valid_lowercase() {
-        assert_eq!(parse_hex_color("#ff00aa"), Some(ratatui::prelude::Color::Rgb(255, 0, 170)));
+        assert_eq!(
+            parse_hex_color("#ff00aa"),
+            Some(ratatui::prelude::Color::Rgb(255, 0, 170))
+        );
     }
 
     #[test]
     fn parse_hex_color_valid_mixed_case() {
-        assert_eq!(parse_hex_color("#AbCdEf"), Some(ratatui::prelude::Color::Rgb(0xAB, 0xCD, 0xEF)));
+        assert_eq!(
+            parse_hex_color("#AbCdEf"),
+            Some(ratatui::prelude::Color::Rgb(0xAB, 0xCD, 0xEF))
+        );
     }
 
     #[test]
@@ -935,9 +1008,13 @@ mod tests {
     #[test]
     fn display_name_for_with_display_name() {
         let config = ColumnsConfig {
-            definitions: vec![
-                ColumnConfig { id: "todo".into(), display_name: Some("Todo List".into()), visible: true, agent: None, auto_progress_to: None },
-            ],
+            definitions: vec![ColumnConfig {
+                id: "todo".into(),
+                display_name: Some("Todo List".into()),
+                visible: true,
+                agent: None,
+                auto_progress_to: None,
+            }],
             visible_ids: vec!["todo".into()],
         };
         assert_eq!(config.display_name_for("todo"), "Todo List");
@@ -946,9 +1023,13 @@ mod tests {
     #[test]
     fn display_name_for_falls_back_to_id() {
         let config = ColumnsConfig {
-            definitions: vec![
-                ColumnConfig { id: "custom".into(), display_name: None, visible: true, agent: None, auto_progress_to: None },
-            ],
+            definitions: vec![ColumnConfig {
+                id: "custom".into(),
+                display_name: None,
+                visible: true,
+                agent: None,
+                auto_progress_to: None,
+            }],
             visible_ids: vec!["custom".into()],
         };
         assert_eq!(config.display_name_for("custom"), "custom");

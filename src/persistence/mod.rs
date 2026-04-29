@@ -2,8 +2,8 @@
 
 pub mod db;
 
-use anyhow::Result;
 use crate::state::types::{AppState, CortexTask, KanbanColumn};
+use anyhow::Result;
 use db::Db;
 use std::collections::HashMap;
 
@@ -16,6 +16,17 @@ use std::collections::HashMap;
 ///
 /// Only tasks whose IDs are in `state.dirty_flags.dirty_tasks` are written; unchanged
 /// tasks are skipped. The dirty set is cleared on successful commit.
+///
+/// # Example
+///
+/// ```no_run
+/// use cortex::persistence::{save_state, db::Db};
+///
+/// let db = Db::new(&path)?;
+/// save_state(&mut state, &db)?;
+/// // Dirty flags are cleared automatically on success
+/// ```
+#[tracing::instrument(skip(state, db), fields(dirty_tasks = state.dirty_flags.dirty_tasks.len(), deleted_tasks = state.dirty_flags.deleted_tasks.len()))]
 pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
     let tx = db.conn.unchecked_transaction()?;
 
@@ -82,16 +93,25 @@ pub fn save_state(state: &mut AppState, db: &Db) -> Result<()> {
 /// consistent (tasks reference existing projects, kanban order references
 /// existing tasks, active project exists). Invalid entries are logged and
 /// skipped rather than causing a panic.
+///
+/// # Example
+///
+/// ```no_run
+/// use cortex::persistence::{restore_state, db::Db};
+///
+/// let db = Db::new(&path)?;
+/// restore_state(&mut state, &db)?;
+/// // State now contains all persisted tasks, projects, and kanban order
+/// ```
+#[tracing::instrument(skip(db))]
 pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
     // Load projects
     let projects = db.load_projects()?;
     let mut counters: HashMap<String, u32> = HashMap::new();
 
     // Build a set of valid project IDs for validation
-    let valid_project_ids: std::collections::HashSet<&str> = projects
-        .iter()
-        .map(|p| p.id.as_str())
-        .collect();
+    let valid_project_ids: std::collections::HashSet<&str> =
+        projects.iter().map(|p| p.id.as_str()).collect();
 
     // Load tasks per project
     let mut all_tasks: Vec<CortexTask> = Vec::new();
@@ -102,7 +122,9 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
             if task.project_id != project.id {
                 tracing::warn!(
                     "Task {} references project {} but was loaded under project {}, skipping",
-                    task.id, task.project_id, project.id,
+                    task.id,
+                    task.project_id,
+                    project.id,
                 );
                 continue;
             }
@@ -116,17 +138,16 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
             } else {
                 tracing::warn!(
                     "Invalid task number counter for project {}: {:?}",
-                    project.id, counter_str,
+                    project.id,
+                    counter_str,
                 );
             }
         }
     }
 
     // Build a set of valid task IDs for kanban order validation
-    let valid_task_ids: std::collections::HashSet<&str> = all_tasks
-        .iter()
-        .map(|t| t.id.as_str())
-        .collect();
+    let valid_task_ids: std::collections::HashSet<&str> =
+        all_tasks.iter().map(|t| t.id.as_str()).collect();
 
     // Load kanban order with validation
     let kanban_order = db.load_kanban_order()?;
@@ -141,7 +162,8 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
                     } else {
                         tracing::warn!(
                             "Kanban order references unknown task {} in column {}, skipping",
-                            tid, col_id,
+                            tid,
+                            col_id,
                         );
                         false
                     }
@@ -184,7 +206,7 @@ mod tests {
     use crate::state::types::{
         AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
     };
-use std::collections::HashMap;
+    use std::collections::HashMap;
 
     /// Helper: create a temporary database path that is unique per test invocation.
     fn temp_db_path(suffix: &str) -> std::path::PathBuf {
@@ -210,6 +232,7 @@ use std::collections::HashMap;
             plan_output: Some("Step 1: save\nStep 2: load\nStep 3: verify".to_string()),
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 3,
             pending_question_count: 1,
             created_at: 1_710_000_000_000,
@@ -388,13 +411,22 @@ use std::collections::HashMap;
         );
 
         // ── Assert active project ──
-        assert_eq!(restored.project_registry.active_project_id, Some("proj-1".to_string()));
+        assert_eq!(
+            restored.project_registry.active_project_id,
+            Some("proj-1".to_string())
+        );
 
         // ── Assert task number counter ──
-        assert_eq!(restored.project_registry.task_number_counters.get("proj-1"), Some(&8u32));
+        assert_eq!(
+            restored.project_registry.task_number_counters.get("proj-1"),
+            Some(&8u32)
+        );
 
         // ── Assert session-to-task reverse index ──
-        assert_eq!(restored.session_tracker.session_to_task.get("sess-xyz-999"), Some(&task.id));
+        assert_eq!(
+            restored.session_tracker.session_to_task.get("sess-xyz-999"),
+            Some(&task.id)
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(&db_path);
@@ -457,7 +489,10 @@ use std::collections::HashMap;
         tasks.insert(task2.id.clone(), task2.clone());
 
         let mut kanban_columns: HashMap<String, Vec<String>> = HashMap::new();
-        kanban_columns.insert("running".to_string(), vec![task1.id.clone(), task2.id.clone()]);
+        kanban_columns.insert(
+            "running".to_string(),
+            vec![task1.id.clone(), task2.id.clone()],
+        );
 
         let mut original = AppState {
             project_registry: crate::state::types::ProjectRegistry {
@@ -500,9 +535,19 @@ use std::collections::HashMap;
         restore_state(&mut restored, &db).expect("restore_state failed");
 
         // ── Assert task1 survived, task2 is gone ──
-        assert_eq!(restored.tasks.len(), 1, "expected exactly 1 task after restore");
-        assert!(restored.tasks.contains_key(&task1.id), "task1 should still exist");
-        assert!(!restored.tasks.contains_key(&task2.id), "task2 should be deleted");
+        assert_eq!(
+            restored.tasks.len(),
+            1,
+            "expected exactly 1 task after restore"
+        );
+        assert!(
+            restored.tasks.contains_key(&task1.id),
+            "task1 should still exist"
+        );
+        assert!(
+            !restored.tasks.contains_key(&task2.id),
+            "task2 should be deleted"
+        );
 
         // ── Verify at DB level too ──
         let db_tasks = db.load_tasks("proj-1").expect("load_tasks failed");
@@ -535,7 +580,10 @@ use std::collections::HashMap;
         tasks.insert(task2.id.clone(), task2.clone());
 
         let mut kanban_columns: HashMap<String, Vec<String>> = HashMap::new();
-        kanban_columns.insert("running".to_string(), vec![task1.id.clone(), task2.id.clone()]);
+        kanban_columns.insert(
+            "running".to_string(),
+            vec![task1.id.clone(), task2.id.clone()],
+        );
 
         let mut counters: HashMap<String, u32> = HashMap::new();
         counters.insert("proj-1".to_string(), 8);
@@ -564,20 +612,39 @@ use std::collections::HashMap;
         original.dirty_flags.dirty_tasks.insert(task1.id.clone());
         original.dirty_flags.dirty_tasks.insert(task2.id.clone());
         save_state(&mut original, &db).expect("save_state failed (initial)");
-        assert!(original.dirty_flags.dirty_tasks.is_empty(), "dirty_tasks should be cleared after save");
-        assert!(original.dirty_flags.deleted_tasks.is_empty(), "deleted_tasks should be cleared after save");
-        assert!(original.dirty_flags.deleted_projects.is_empty(), "deleted_projects should be cleared after save");
+        assert!(
+            original.dirty_flags.dirty_tasks.is_empty(),
+            "dirty_tasks should be cleared after save"
+        );
+        assert!(
+            original.dirty_flags.deleted_tasks.is_empty(),
+            "deleted_tasks should be cleared after save"
+        );
+        assert!(
+            original.dirty_flags.deleted_projects.is_empty(),
+            "deleted_projects should be cleared after save"
+        );
 
         // ── Verify DB has the project and tasks before deletion ──
         let db_projects = db.load_projects().expect("load_projects failed");
-        assert_eq!(db_projects.len(), 1, "DB should contain 1 project before delete");
+        assert_eq!(
+            db_projects.len(),
+            1,
+            "DB should contain 1 project before delete"
+        );
         let db_tasks = db.load_tasks("proj-1").expect("load_tasks failed");
         assert_eq!(db_tasks.len(), 2, "DB should contain 2 tasks before delete");
 
         // ── Delete the project via remove_project() ──
         original.remove_project("proj-1");
-        assert!(original.project_registry.projects.is_empty(), "projects should be empty after remove");
-        assert!(original.tasks.is_empty(), "tasks should be empty after remove");
+        assert!(
+            original.project_registry.projects.is_empty(),
+            "projects should be empty after remove"
+        );
+        assert!(
+            original.tasks.is_empty(),
+            "tasks should be empty after remove"
+        );
         assert!(
             original.dirty_flags.deleted_projects.contains("proj-1"),
             "deleted_projects should contain proj-1"
@@ -704,6 +771,7 @@ use std::collections::HashMap;
             plan_output: None,
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -725,6 +793,7 @@ use std::collections::HashMap;
             plan_output: None,
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1001,
@@ -738,7 +807,10 @@ use std::collections::HashMap;
         tasks_a.insert(task_a2.id.clone(), task_a2.clone());
 
         let mut kanban_a: HashMap<String, Vec<String>> = HashMap::new();
-        kanban_a.insert("todo".to_string(), vec![task_a1.id.clone(), task_a2.id.clone()]);
+        kanban_a.insert(
+            "todo".to_string(),
+            vec![task_a1.id.clone(), task_a2.id.clone()],
+        );
 
         let mut counters_a: HashMap<String, u32> = HashMap::new();
         counters_a.insert("proj-a".to_string(), 2);
@@ -792,6 +864,7 @@ use std::collections::HashMap;
             plan_output: None,
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 2000,
@@ -803,9 +876,15 @@ use std::collections::HashMap;
         state.add_project(project_b.clone());
         state.tasks.insert(task_b1.id.clone(), task_b1.clone());
         state.kanban.columns.clear(); // Clear old columns
-        state.kanban.columns.insert("todo".to_string(), vec![task_b1.id.clone()]);
+        state
+            .kanban
+            .columns
+            .insert("todo".to_string(), vec![task_b1.id.clone()]);
         state.project_registry.active_project_id = Some("proj-b".to_string());
-        state.project_registry.task_number_counters.insert("proj-b".to_string(), 1);
+        state
+            .project_registry
+            .task_number_counters
+            .insert("proj-b".to_string(), 1);
 
         // Mark everything dirty and save
         state.dirty_flags.dirty_tasks.insert(task_b1.id.clone());
@@ -813,31 +892,51 @@ use std::collections::HashMap;
 
         // ── Verify at DB level: both projects' tasks exist ──
         let db_tasks_a = db.load_tasks("proj-a").expect("load_tasks proj-a failed");
-        assert_eq!(db_tasks_a.len(), 2, "Project A should still have 2 tasks in DB");
+        assert_eq!(
+            db_tasks_a.len(),
+            2,
+            "Project A should still have 2 tasks in DB"
+        );
         let db_tasks_b = db.load_tasks("proj-b").expect("load_tasks proj-b failed");
         assert_eq!(db_tasks_b.len(), 1, "Project B should have 1 task in DB");
 
         // ── Verify kanban_order: both projects' orders preserved ──
         let kanban_order = db.load_kanban_order().expect("load_kanban_order failed");
-        let todo_order = kanban_order.get("todo").expect("todo column missing from kanban_order");
+        let todo_order = kanban_order
+            .get("todo")
+            .expect("todo column missing from kanban_order");
         assert_eq!(
             todo_order.len(),
             3,
             "kanban_order should have 3 entries (2 from proj-a + 1 from proj-b)"
         );
-        assert!(todo_order.contains(&task_a1.id), "task-a1 should be in kanban_order");
-        assert!(todo_order.contains(&task_a2.id), "task-a2 should be in kanban_order");
-        assert!(todo_order.contains(&task_b1.id), "task-b1 should be in kanban_order");
+        assert!(
+            todo_order.contains(&task_a1.id),
+            "task-a1 should be in kanban_order"
+        );
+        assert!(
+            todo_order.contains(&task_a2.id),
+            "task-a2 should be in kanban_order"
+        );
+        assert!(
+            todo_order.contains(&task_b1.id),
+            "task-b1 should be in kanban_order"
+        );
 
         // ── Restore state with Project A as active ──
         // First, set active project to proj-a in DB
-        db.set_metadata("active_project_id", "proj-a").expect("set_metadata failed");
+        db.set_metadata("active_project_id", "proj-a")
+            .expect("set_metadata failed");
 
         let mut restored = AppState::default();
         restore_state(&mut restored, &db).expect("restore_state failed");
 
         // Project A's tasks should be in the kanban with correct order
-        let restored_todo = restored.kanban.columns.get("todo").expect("todo column missing");
+        let restored_todo = restored
+            .kanban
+            .columns
+            .get("todo")
+            .expect("todo column missing");
         assert_eq!(
             restored_todo.len(),
             2,
@@ -859,20 +958,22 @@ use std::collections::HashMap;
         assert!(restored.tasks.contains_key(&task_b1.id));
 
         // ── Now restore with Project B as active ──
-        db.set_metadata("active_project_id", "proj-b").expect("set_metadata failed");
+        db.set_metadata("active_project_id", "proj-b")
+            .expect("set_metadata failed");
         let mut restored_b = AppState::default();
         restore_state(&mut restored_b, &db).expect("restore_state failed (proj-b)");
 
-        let restored_b_todo = restored_b.kanban.columns.get("todo").expect("todo column missing");
+        let restored_b_todo = restored_b
+            .kanban
+            .columns
+            .get("todo")
+            .expect("todo column missing");
         assert_eq!(
             restored_b_todo.len(),
             1,
             "Restored kanban should have 1 task for Project B"
         );
-        assert_eq!(
-            restored_b_todo[0], task_b1.id,
-            "Task should be task-b1"
-        );
+        assert_eq!(restored_b_todo[0], task_b1.id, "Task should be task-b1");
 
         // Cleanup
         let _ = std::fs::remove_file(&db_path);

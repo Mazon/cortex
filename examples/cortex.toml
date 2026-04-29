@@ -176,15 +176,9 @@ visible = false
 # todo_new = "n"                       # Create a new task
 # task_open = "enter"                  # Open task detail view
 # task_delete = "x"                    # Delete selected task
-# task_move_up = "ctrl+k"              # Move task up within column
-# task_move_down = "ctrl+j"            # Move task down within column
 # retry_task = "shift+r"               # Retry a hung or failed task
 # review_changes = "shift+d"           # Review changes (diff view) for a completed task
 # drill_down_subagent = "ctrl+x"       # Drill down into a subagent session
-
-# Kanban scrolling
-# scroll_kanban_left = "pageup"        # Scroll kanban columns left
-# scroll_kanban_right = "pagedown"     # Scroll kanban columns right
 
 # Project switching
 # prev_project = "ctrl+k"              # Switch to previous project

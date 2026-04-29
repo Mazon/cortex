@@ -10,7 +10,8 @@ impl AppState {
     /// Updates the task's `pending_permission_count`.
     pub fn add_permission_request(&mut self, task_id: &str, request: PermissionRequest) {
         let session = self
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -31,7 +32,8 @@ impl AppState {
         _approved: bool,
     ) {
         let session = self
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -49,7 +51,8 @@ impl AppState {
     /// Updates the task's `pending_question_count`.
     pub fn add_question_request(&mut self, task_id: &str, request: QuestionRequest) {
         let session = self
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -65,7 +68,8 @@ impl AppState {
     /// Updates the task's `pending_question_count`.
     pub fn resolve_question_request(&mut self, task_id: &str, question_id: &str) {
         let session = self
-            .session_tracker.task_sessions
+            .session_tracker
+            .task_sessions
             .entry(task_id.to_string())
             .or_insert_with(|| TaskDetailSession {
                 task_id: task_id.to_string(),
@@ -123,6 +127,7 @@ mod tests {
             plan_output: None,
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: question_count,
             created_at: 1000,
@@ -161,20 +166,26 @@ mod tests {
     fn resolve_question_decrements_count() {
         let (mut state, task_id) = make_task_with_status(AgentStatus::Question, 2);
         // Add questions to the session
-        state.add_question_request(&task_id, QuestionRequest {
-            id: "q1".to_string(),
-            session_id: "s1".to_string(),
-            question: "Q1".to_string(),
-            answers: vec!["A".to_string()],
-            status: "pending".to_string(),
-        });
-        state.add_question_request(&task_id, QuestionRequest {
-            id: "q2".to_string(),
-            session_id: "s1".to_string(),
-            question: "Q2".to_string(),
-            answers: vec!["B".to_string()],
-            status: "pending".to_string(),
-        });
+        state.add_question_request(
+            &task_id,
+            QuestionRequest {
+                id: "q1".to_string(),
+                session_id: "s1".to_string(),
+                question: "Q1".to_string(),
+                answers: vec!["A".to_string()],
+                status: "pending".to_string(),
+            },
+        );
+        state.add_question_request(
+            &task_id,
+            QuestionRequest {
+                id: "q2".to_string(),
+                session_id: "s1".to_string(),
+                question: "Q2".to_string(),
+                answers: vec!["B".to_string()],
+                status: "pending".to_string(),
+            },
+        );
         assert_eq!(state.tasks.get(&task_id).unwrap().pending_question_count, 2);
 
         // Resolve one question

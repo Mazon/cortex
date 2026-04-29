@@ -166,7 +166,10 @@ pub fn on_task_moved(
     let agent = columns_config.agent_for_column(&to_column.0);
     tracing::debug!(
         "on_task_moved: task={}, to_column={}, resolved_agent={:?}, previous_agent={:?}",
-        task_id, to_column.0, agent, previous_agent
+        task_id,
+        to_column.0,
+        agent,
+        previous_agent
     );
     if let Some(agent) = agent {
         // Check circuit breaker before starting agent
@@ -177,10 +180,20 @@ pub fn on_task_moved(
 
         if let Some(ref pid) = project_id {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
-            if s.project_registry.is_circuit_breaker_tripped(pid, opencode_config.circuit_breaker_threshold) {
-                if !s.project_registry.is_circuit_breaker_half_open(pid, opencode_config.circuit_breaker_cooldown_secs) {
+            if s.project_registry
+                .is_circuit_breaker_tripped(pid, opencode_config.circuit_breaker_threshold)
+            {
+                if !s.project_registry.is_circuit_breaker_half_open(
+                    pid,
+                    opencode_config.circuit_breaker_cooldown_secs,
+                ) {
                     // Still in cooldown — skip
-                    let failure_count = s.project_registry.circuit_breaker_failures.get(pid).copied().unwrap_or(0);
+                    let failure_count = s
+                        .project_registry
+                        .circuit_breaker_failures
+                        .get(pid)
+                        .copied()
+                        .unwrap_or(0);
                     drop(s);
                     tracing::warn!(
                         task_id = %task_id,
@@ -214,13 +227,22 @@ pub fn on_task_moved(
             }
         }
 
-        start_agent(task_id, &agent, state, client, opencode_config, previous_agent, project_id);
+        start_agent(
+            task_id,
+            &agent,
+            state,
+            client,
+            opencode_config,
+            previous_agent,
+            project_id,
+        );
     }
 }
 
 /// Start an agent for a task.
 /// Acquires a concurrency-limited permit before creating a session,
 /// preventing too many concurrent OpenCode sessions per project.
+#[tracing::instrument(skip(state, client, opencode_config), fields(task_id, agent))]
 fn start_agent(
     task_id: &str,
     agent: &str,
@@ -256,9 +278,15 @@ fn start_agent(
     // Check if the agent has a specific model configured
     let agent_model = {
         let s = state.lock().unwrap_or_else(|e| e.into_inner());
-        s.tasks.get(&task_id).map(|_| {
-            opencode_config.agents.get(&agent).and_then(|a| a.model.clone())
-        }).flatten()
+        s.tasks
+            .get(&task_id)
+            .map(|_| {
+                opencode_config
+                    .agents
+                    .get(&agent)
+                    .and_then(|a| a.model.clone())
+            })
+            .flatten()
     };
 
     // Determine concurrency limit from config
@@ -325,11 +353,19 @@ fn start_agent(
                     match tokio::time::timeout(
                         Duration::from_secs(10),
                         client.abort_session(old_sid),
-                    ).await {
-                        Ok(Ok(true)) => {},
-                        Ok(Ok(false)) => tracing::warn!("Abort returned false for old session {}", old_sid),
-                        Ok(Err(e)) => tracing::warn!("Failed to abort old session {}: {}", old_sid, e),
-                        Err(_) => tracing::warn!("Timeout aborting old session {} after 10s", old_sid),
+                    )
+                    .await
+                    {
+                        Ok(Ok(true)) => {}
+                        Ok(Ok(false)) => {
+                            tracing::warn!("Abort returned false for old session {}", old_sid)
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Failed to abort old session {}: {}", old_sid, e)
+                        }
+                        Err(_) => {
+                            tracing::warn!("Timeout aborting old session {} after 10s", old_sid)
+                        }
                     }
                 }
 
@@ -338,7 +374,9 @@ fn start_agent(
                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.set_task_session_id(&task_id_clone, None);
                 }
-                match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
+                match retry_with_backoff(3, Duration::from_millis(500), || client.create_session())
+                    .await
+                {
                     Ok(session) => {
                         let sid = session.id.clone();
                         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,9 +400,14 @@ fn start_agent(
                         );
                         // Note: tracing layer also captures this error automatically
                         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                        s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
+                        s.set_task_error(
+                            &task_id_clone,
+                            format!("Failed to create session: {}", e),
+                        );
                         if let Some(ref pid) = project_id {
-                            let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                            let tripped = s
+                                .project_registry
+                                .record_agent_failure(pid, circuit_breaker_threshold);
                             if tripped {
                                 s.set_notification(
                                     format!(
@@ -383,7 +426,9 @@ fn start_agent(
                 existing_sid.clone()
             }
         } else {
-            match retry_with_backoff(3, Duration::from_millis(500), || client.create_session()).await {
+            match retry_with_backoff(3, Duration::from_millis(500), || client.create_session())
+                .await
+            {
                 Ok(session) => {
                     let sid = session.id.clone();
                     // Store session ID and clear any stale streaming data
@@ -406,7 +451,9 @@ fn start_agent(
                     s.set_task_error(&task_id_clone, format!("Failed to create session: {}", e));
                     // Record circuit breaker failure
                     if let Some(ref pid) = project_id {
-                        let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                        let tripped = s
+                            .project_registry
+                            .record_agent_failure(pid, circuit_breaker_threshold);
                         if tripped {
                             s.set_notification(
                                 format!(
@@ -424,24 +471,25 @@ fn start_agent(
         };
 
         // Determine model
-        let model = agent_model.as_deref().map(|m| {
-            if m.contains('/') {
-                m.to_string()
-            } else {
+        let model = agent_model
+            .as_deref()
+            .map(|m| {
+                if m.contains('/') {
+                    m.to_string()
+                } else {
+                    let provider = model_provider.as_deref().unwrap_or("z.ai");
+                    format!("{}/{}", provider, m)
+                }
+            })
+            .or_else(|| {
                 let provider = model_provider.as_deref().unwrap_or("z.ai");
-                format!("{}/{}", provider, m)
-            }
-        }).or_else(|| {
-            let provider = model_provider.as_deref().unwrap_or("z.ai");
-            Some(format!("{}/{}", provider, model_id))
-        });
+                Some(format!("{}/{}", provider, model_id))
+            });
 
         // Send prompt (with retry to tolerate transient HTTP errors)
-        match retry_with_backoff(
-            3,
-            Duration::from_millis(500),
-            || client.send_prompt(&sid, &prompt, Some(&agent), model.as_deref()),
-        )
+        match retry_with_backoff(3, Duration::from_millis(500), || {
+            client.send_prompt(&sid, &prompt, Some(&agent), model.as_deref())
+        })
         .await
         {
             Ok(_) => {
@@ -449,6 +497,13 @@ fn start_agent(
                 if let Some(ref pid) = project_id {
                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.project_registry.record_agent_success(pid);
+                    // Set active_prompt on the session for the pinned header
+                    if let Some(ref sid) = session_id {
+                        if let Some(session) = s.session_tracker.task_sessions.get_mut(sid) {
+                            session.active_prompt = Some(prompt.clone());
+                            session.render_version += 1;
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -461,13 +516,12 @@ fn start_agent(
                 );
                 // Note: tracing layer also captures this error automatically
                 let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                s.set_task_error(
-                    &task_id_clone,
-                    format!("Failed to send prompt: {}", e),
-                );
+                s.set_task_error(&task_id_clone, format!("Failed to send prompt: {}", e));
                 // Record circuit breaker failure
                 if let Some(ref pid) = project_id {
-                    let tripped = s.project_registry.record_agent_failure(pid, circuit_breaker_threshold);
+                    let tripped = s
+                        .project_registry
+                        .record_agent_failure(pid, circuit_breaker_threshold);
                     if tripped {
                         s.set_notification(
                             format!(
@@ -486,35 +540,162 @@ fn start_agent(
 
 /// Action returned by `on_agent_completed` for the caller to execute
 /// after releasing the MutexGuard.
+#[derive(Debug, Clone)]
 pub struct AutoProgressAction {
     pub task_id: String,
     pub target_column: KanbanColumn,
     pub agent: String,
 }
 
+/// Action returned when an agent completes — either auto-progress to
+/// the next column or send a queued follow-up prompt.
+#[derive(Debug, Clone)]
+pub enum AgentCompletionAction {
+    /// Auto-progress the task to the next column and start a new agent.
+    AutoProgress(AutoProgressAction),
+    /// Send a queued follow-up prompt to the existing session.
+    SendQueuedPrompt {
+        task_id: String,
+        prompt: String,
+        session_id: String,
+        agent_type: String,
+    },
+}
+
+/// Send a queued follow-up prompt to an existing agent session.
+///
+/// This is called when an agent completes and a queued prompt was waiting.
+/// Unlike `start_agent`, this reuses the existing session.
+pub fn send_follow_up_prompt(
+    task_id: &str,
+    prompt: &str,
+    session_id: &str,
+    agent_type: &str,
+    state: &Arc<Mutex<AppState>>,
+    client: &OpenCodeClient,
+    opencode_config: &OpenCodeConfig,
+) {
+    // Set active_prompt on the session for the pinned header
+    {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(session) = s.session_tracker.task_sessions.get_mut(session_id) {
+            session.active_prompt = Some(prompt.to_string());
+            session.render_version += 1;
+        }
+        s.update_task_agent_status(task_id, AgentStatus::Running);
+    }
+
+    let state = state.clone();
+    let client = client.clone();
+    let task_id = task_id.to_string();
+    let session_id = session_id.to_string();
+    let agent = agent_type.to_string();
+    let prompt = prompt.to_string();
+    let model_id = opencode_config.model.id.clone();
+    let model_provider = opencode_config.model.provider.clone();
+
+    // Check if the agent has a specific model configured
+    let agent_model = opencode_config
+        .agents
+        .get(&agent)
+        .and_then(|a| a.model.clone());
+
+    tokio::spawn(async move {
+        let model = agent_model
+            .as_deref()
+            .map(|m| {
+                if m.contains('/') {
+                    m.to_string()
+                } else {
+                    let provider = model_provider.as_deref().unwrap_or("z.ai");
+                    format!("{}/{}", provider, m)
+                }
+            })
+            .or_else(|| {
+                let provider = model_provider.as_deref().unwrap_or("z.ai");
+                Some(format!("{}/{}", provider, model_id))
+            });
+
+        match retry_with_backoff(3, Duration::from_millis(500), || {
+            client.send_prompt(&session_id, &prompt, Some(&agent), model.as_deref())
+        })
+        .await
+        {
+            Ok(_) => {
+                tracing::debug!(
+                    "Follow-up prompt sent: task={}, session={}",
+                    task_id,
+                    session_id
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    task_id = %task_id,
+                    session_id = %session_id,
+                    "Failed to send follow-up prompt: {}",
+                    e
+                );
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                s.set_task_error(&task_id, format!("Failed to send follow-up prompt: {}", e));
+            }
+        }
+    });
+}
+
 /// Called when an agent completes (from SSE SessionIdle).
-/// Auto-progresses if the column configures it and returns an action
-/// for the caller to start the target column's agent (if configured).
+/// Checks for queued follow-up prompts first — if one exists, returns
+/// a `SendQueuedPrompt` action instead of auto-progressing.
+/// Otherwise, auto-progresses if the column configures it and returns
+/// an action for the caller to start the target column's agent.
 pub fn on_agent_completed(
     task_id: &str,
     state: &mut AppState,
     columns_config: &ColumnsConfig,
-) -> Option<AutoProgressAction> {
-    let column = state
+) -> Option<AgentCompletionAction> {
+    // Check for queued prompt first — takes priority over auto-progression
+    let queued = state
         .tasks
         .get(task_id)
-        .map(|t| t.column.clone());
+        .and_then(|t| t.queued_prompt.clone());
+
+    if let Some(prompt) = queued {
+        // Clear the queue
+        if let Some(task) = state.tasks.get_mut(task_id) {
+            task.queued_prompt = None;
+        }
+
+        // Get session info
+        let (session_id, agent_type) = state
+            .tasks
+            .get(task_id)
+            .map(|t| (t.session_id.clone(), t.agent_type.clone()))
+            .unwrap_or((None, None));
+
+        if let (Some(session_id), Some(agent_type)) = (session_id, agent_type) {
+            // Keep the task in its current column — don't auto-progress
+            return Some(AgentCompletionAction::SendQueuedPrompt {
+                task_id: task_id.to_string(),
+                prompt,
+                session_id,
+                agent_type,
+            });
+        }
+        // No session — fall through to auto-progression
+    }
+
+    // Normal auto-progression logic
+    let column = state.tasks.get(task_id).map(|t| t.column.clone());
     if let Some(col) = column {
         if let Some(target) = columns_config.auto_progress_for(&col.0) {
             state.move_task(task_id, KanbanColumn(target.clone()));
 
             // Check if target column has an agent configured
             if let Some(agent) = columns_config.agent_for_column(&target) {
-                return Some(AutoProgressAction {
+                return Some(AgentCompletionAction::AutoProgress(AutoProgressAction {
                     task_id: task_id.to_string(),
                     target_column: KanbanColumn(target),
                     agent,
-                });
+                }));
             } else {
                 // Target column has no agent — mark task as Complete ("done")
                 state.update_task_agent_status(task_id, AgentStatus::Complete);
@@ -560,6 +741,7 @@ mod tests {
             plan_output: None,
             planning_context: None,
             pending_description: None,
+            queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
             created_at: 1000,
@@ -627,10 +809,14 @@ mod tests {
             .contains(&task_id));
         // Should return an action to start the "do" agent
         assert!(action.is_some());
-        let action = action.unwrap();
-        assert_eq!(action.task_id, task_id);
-        assert_eq!(action.target_column.0, "running");
-        assert_eq!(action.agent, "do");
+        match action.unwrap() {
+            AgentCompletionAction::AutoProgress(a) => {
+                assert_eq!(a.task_id, task_id);
+                assert_eq!(a.target_column.0, "running");
+                assert_eq!(a.agent, "do");
+            }
+            AgentCompletionAction::SendQueuedPrompt { .. } => panic!("Expected AutoProgress"),
+        }
     }
 
     #[test]
@@ -723,12 +909,18 @@ mod tests {
         // First completion: planning → running
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
-        assert_eq!(action.unwrap().agent, "do");
+        match action.unwrap() {
+            AgentCompletionAction::AutoProgress(a) => assert_eq!(a.agent, "do"),
+            AgentCompletionAction::SendQueuedPrompt { .. } => panic!("Expected AutoProgress"),
+        }
 
         // Second completion: running → review
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
         assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
-        assert_eq!(action.unwrap().agent, "reviewer");
+        match action.unwrap() {
+            AgentCompletionAction::AutoProgress(a) => assert_eq!(a.agent, "reviewer"),
+            AgentCompletionAction::SendQueuedPrompt { .. } => panic!("Expected AutoProgress"),
+        }
 
         // Third completion: review stays (no auto_progress_to)
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
@@ -762,9 +954,9 @@ mod tests {
         };
         columns_config.finalize();
 
-        // Set status to Ready (simulating what process_session_idle does
-        // when it sees has_auto_progress=true)
-        state.update_task_agent_status(&task_id, AgentStatus::Ready);
+        // Set status to Complete (simulating what process_session_idle does
+        // when it sees has_auto_progress=true — keeps Complete instead of Ready)
+        state.update_task_agent_status(&task_id, AgentStatus::Complete);
 
         let action = on_agent_completed(&task_id, &mut state, &columns_config);
 
@@ -789,7 +981,10 @@ mod tests {
         assert!(is_retryable(&err), "Non-HTTP code (42) should be retryable");
 
         let err = anyhow::anyhow!("timeout after (999) attempts");
-        assert!(is_retryable(&err), "Non-HTTP code (999) should be retryable");
+        assert!(
+            is_retryable(&err),
+            "Non-HTTP code (999) should be retryable"
+        );
 
         let err = anyhow::anyhow!("error code (0)");
         assert!(is_retryable(&err), "Non-HTTP code (0) should be retryable");

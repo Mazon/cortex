@@ -53,7 +53,8 @@ pub fn render_task_editor(f: &mut Frame, state: &AppState, config: &CortexConfig
     // Header (edit mode indicator)
     if let Some(ref task_id) = editor.task_id {
         if let Some(task) = state.tasks.get(task_id) {
-            let display_title = crate::state::types::derive_title_from_description(&task.description);
+            let display_title =
+                crate::state::types::derive_title_from_description(&task.description);
             let header_text = format!("[Editing #{}] {}", task.number, display_title);
             let header = Paragraph::new(Span::styled(
                 header_text,
@@ -199,21 +200,66 @@ fn render_column_selector(
     x_margin: u16,
 ) {
     let col_focused = editor.focused_field == EditorField::Column;
-    let label = Paragraph::new(Span::styled("Column:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-    f.render_widget(label, Rect { x: area.x + x_margin, y: area.y, width: area.width.saturating_sub(x_margin * 2), height: 1 });
+    let label = Paragraph::new(Span::styled(
+        "Column:",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+    f.render_widget(
+        label,
+        Rect {
+            x: area.x + x_margin,
+            y: area.y,
+            width: area.width.saturating_sub(x_margin * 2),
+            height: 1,
+        },
+    );
     let mut spans: Vec<Span> = Vec::new();
     for (i, col_id) in editor.available_columns.iter().enumerate() {
-        if i > 0 { spans.push(Span::raw(" ")); }
-        let is_selected = Some(i) == editor.column_id.as_ref().and_then(|cid| editor.available_columns.iter().position(|c| c == cid));
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let is_selected = Some(i)
+            == editor
+                .column_id
+                .as_ref()
+                .and_then(|cid| editor.available_columns.iter().position(|c| c == cid));
         let pill = format!(" {} ", config.columns.display_name_for(col_id));
         if is_selected {
-            spans.push(Span::styled(pill, Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                pill,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
         } else {
-            spans.push(Span::styled(pill, Style::default().fg(if col_focused { Color::White } else { Color::DarkGray }).bg(Color::Rgb(60, 64, 80))));
+            spans.push(Span::styled(
+                pill,
+                Style::default()
+                    .fg(if col_focused {
+                        Color::White
+                    } else {
+                        Color::DarkGray
+                    })
+                    .bg(Color::Rgb(60, 64, 80)),
+            ));
         }
     }
     if col_focused && editor.available_columns.len() > 1 {
-        spans.push(Span::styled("  Tab to cycle", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "  Tab to cycle",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), Rect { x: area.x + x_margin, y: area.y + 1, width: area.width.saturating_sub(x_margin * 2), height: 1 });
+    f.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect {
+            x: area.x + x_margin,
+            y: area.y + 1,
+            width: area.width.saturating_sub(x_margin * 2),
+            height: 1,
+        },
+    );
 }

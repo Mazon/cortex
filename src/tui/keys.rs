@@ -18,16 +18,11 @@ pub enum Action {
     NavRight,
     NavUp,
     NavDown,
-    // Kanban horizontal scroll
-    ScrollKanbanLeft,
-    ScrollKanbanRight,
     // Task operations
     CreateTask,
     OpenTaskDetail,
     MoveForward,
     MoveBackward,
-    MoveTaskUp,
-    MoveTaskDown,
     DeleteTask,
     AbortSession,
     RetryTask,
@@ -73,8 +68,6 @@ impl KeyMatcher {
             &config.kanban_move_backward,
             Action::MoveBackward,
         );
-        parse_and_add(&mut bindings, &config.task_move_up, Action::MoveTaskUp);
-        parse_and_add(&mut bindings, &config.task_move_down, Action::MoveTaskDown);
         parse_and_add(&mut bindings, &config.task_delete, Action::DeleteTask);
         parse_and_add(&mut bindings, &config.abort_session, Action::AbortSession);
         parse_and_add(&mut bindings, &config.retry_task, Action::RetryTask);
@@ -83,31 +76,13 @@ impl KeyMatcher {
             &config.drill_down_subagent,
             Action::DrillDownSubagent,
         );
-        parse_and_add(
-            &mut bindings,
-            &config.review_changes,
-            Action::ReviewChanges,
-        );
-        parse_and_add(
-            &mut bindings,
-            &config.scroll_kanban_left,
-            Action::ScrollKanbanLeft,
-        );
-        parse_and_add(
-            &mut bindings,
-            &config.scroll_kanban_right,
-            Action::ScrollKanbanRight,
-        );
+        parse_and_add(&mut bindings, &config.review_changes, Action::ReviewChanges);
         parse_and_add(
             &mut bindings,
             &config.set_working_directory,
             Action::SetWorkingDirectory,
         );
-        parse_and_add(
-            &mut bindings,
-            &config.delete_project,
-            Action::DeleteProject,
-        );
+        parse_and_add(&mut bindings, &config.delete_project, Action::DeleteProject);
 
         Self { bindings }
     }
@@ -136,6 +111,8 @@ pub enum EditorKeyAction {
     CycleField,
     /// Insert a newline in the description field.
     Newline,
+    /// Submit the prompt input in the task detail view.
+    Submit,
 }
 
 /// Matches crossterm KeyEvents to editor-specific actions based on config.
@@ -150,7 +127,11 @@ impl EditorKeyMatcher {
 
         parse_editor_and_add(&mut bindings, &config.save, EditorKeyAction::Save);
         parse_editor_and_add(&mut bindings, &config.cancel, EditorKeyAction::Cancel);
-        parse_editor_and_add(&mut bindings, &config.cycle_field, EditorKeyAction::CycleField);
+        parse_editor_and_add(
+            &mut bindings,
+            &config.cycle_field,
+            EditorKeyAction::CycleField,
+        );
         parse_editor_and_add(&mut bindings, &config.newline, EditorKeyAction::Newline);
 
         Self { bindings }

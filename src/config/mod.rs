@@ -19,7 +19,9 @@ pub fn default_config_path() -> PathBuf {
 /// Returns the XDG config home directory.
 ///
 /// Respects the `XDG_CONFIG_HOME` environment variable, falling back to
-/// `$HOME/.config` when it is not set. As a last resort, returns `/tmp`.
+/// `$HOME/.config` when it is not set. As a last resort, returns `/tmp`
+/// and emits a warning since data stored there is world-readable and
+/// cleared on reboot.
 pub fn xdg_config_home() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -27,6 +29,11 @@ pub fn xdg_config_home() -> PathBuf {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".config"))
                 .unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "Neither $XDG_CONFIG_HOME nor $HOME is set. \
+                         Falling back to /tmp for config directory — \
+                         data will be lost on reboot"
+                    );
                     PathBuf::from("/tmp")
                 })
         })
@@ -35,7 +42,9 @@ pub fn xdg_config_home() -> PathBuf {
 /// Returns the XDG data home directory.
 ///
 /// Respects the `XDG_DATA_HOME` environment variable, falling back to
-/// `$HOME/.local/share` when it is not set. As a last resort, returns `/tmp`.
+/// `$HOME/.local/share` when it is not set. As a last resort, returns `/tmp`
+/// and emits a warning since data stored there is world-readable and
+/// cleared on reboot.
 pub fn xdg_data_home() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -43,6 +52,11 @@ pub fn xdg_data_home() -> PathBuf {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_else(|_| {
+                    tracing::warn!(
+                        "Neither $XDG_DATA_HOME nor $HOME is set. \
+                         Falling back to /tmp for data directory — \
+                         database and logs will be lost on reboot"
+                    );
                     PathBuf::from("/tmp")
                 })
         })
@@ -53,6 +67,15 @@ pub fn xdg_data_home() -> PathBuf {
 /// customize settings without needing to consult documentation.
 /// If the file exists, parse it and apply serde defaults for any missing fields.
 /// Column definitions are replaced entirely, not merged.
+///
+/// # Example
+///
+/// ```no_run
+/// use cortex::config::load_config;
+///
+/// let config = load_config(&default_path)?;
+/// println!("OpenCode port: {}", config.opencode.port);
+/// ```
 pub fn load_config(path: &Path) -> Result<CortexConfig> {
     if !path.exists() {
         let config = CortexConfig::default();
@@ -189,12 +212,20 @@ fn validate_config(config: &CortexConfig) -> Result<()> {
 
     // Warn when column agent references lack config overrides.
     // The agents section provides optional per-agent overrides; the opencode
-    // server is the authority on which agents actually exist.
+    // server is the authority on which agents actually exist. This is a soft
+    // warning, not a hard error, since agents may be discovered at runtime.
     for col in &config.columns.definitions {
         if let Some(ref agent_name) = col.agent {
             if !config.opencode.agents.is_empty()
                 && !config.opencode.agents.contains_key(agent_name)
             {
+                tracing::warn!(
+                    "Column '{}' references agent '{}' which has no config \
+                     override in opencode.agents — the opencode server will \
+                     resolve it at runtime",
+                    col.id,
+                    agent_name
+                );
             }
         }
     }
@@ -647,9 +678,7 @@ mod tests {
         // Test cycles of length 1 through 10
         for cycle_len in 1..=10usize {
             let mut definitions = Vec::new();
-            let names: Vec<String> = (0..cycle_len)
-                .map(|i| format!("col{}", i))
-                .collect();
+            let names: Vec<String> = (0..cycle_len).map(|i| format!("col{}", i)).collect();
 
             // Create columns with a cycle: col0 → col1 → ... → col(n-1) → col0
             for i in 0..cycle_len {
@@ -701,9 +730,7 @@ mod tests {
         // Test linear chains of length 1 through 20
         for chain_len in 1..=20usize {
             let mut definitions = Vec::new();
-            let names: Vec<String> = (0..chain_len)
-                .map(|i| format!("col{}", i))
-                .collect();
+            let names: Vec<String> = (0..chain_len).map(|i| format!("col{}", i)).collect();
 
             // Create columns: col0 → col1 → ... → col(n-1) → (none)
             for i in 0..chain_len {
@@ -747,9 +774,7 @@ mod tests {
     fn test_validate_auto_progress_property_cycle_in_middle() {
         // a → b → c → d → b (cycle starts at b, but a is the entry)
         for cycle_start in 0..5 {
-            let names: Vec<String> = (0..7)
-                .map(|i| format!("col{}", i))
-                .collect();
+            let names: Vec<String> = (0..7).map(|i| format!("col{}", i)).collect();
 
             let mut definitions = Vec::new();
             // col0 → col1 → ... → col6 (linear)

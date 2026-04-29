@@ -1,8 +1,8 @@
 //! Task card component — renders a task as a bordered card within a column.
 
+use super::format_elapsed_time;
 use crate::config::types::ThemeConfig;
 use crate::state::types::{AgentStatus, CortexTask};
-use super::format_elapsed_time;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
@@ -43,7 +43,8 @@ pub fn render_task_card(
     // Line 1: #<number> <first line of description> (truncated)
     let prefix_len = format!("#{} ", task.number).chars().count();
     let max_title_len = inner.width as usize;
-    let display_title = crate::state::types::display_title_for_task(task, max_title_len.saturating_sub(prefix_len));
+    let display_title =
+        crate::state::types::display_title_for_task(task, max_title_len.saturating_sub(prefix_len));
     let title_line = format!("#{} {}", task.number, display_title);
 
     // Line 2: status text — use theme colors
@@ -161,18 +162,13 @@ pub fn render_task_card(
 
     // Add a dim keybinding hint for hung/error tasks to improve discoverability
     if matches!(task.agent_status, AgentStatus::Hung | AgentStatus::Error) {
-        status_spans.push(Span::styled(
-            " [R]",
-            Style::default().fg(Color::DarkGray),
-        ));
+        status_spans.push(Span::styled(" [R]", Style::default().fg(Color::DarkGray)));
     }
 
     if inner.height >= 1 {
         // Line 1 (title) — always render if we have any space
-        let title_para = Paragraph::new(Span::styled(
-            title_line,
-            Style::default().fg(Color::White),
-        ));
+        let title_para =
+            Paragraph::new(Span::styled(title_line, Style::default().fg(Color::White)));
         f.render_widget(
             title_para,
             Rect {

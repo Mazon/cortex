@@ -49,7 +49,11 @@ impl ServerManager {
     ) -> Result<String> {
         // If already running, return the cached URL
         if let Some(ref url) = self.url {
-            let running = self.server.as_mut().map(|s| s.is_running()).unwrap_or(false);
+            let running = self
+                .server
+                .as_mut()
+                .map(|s| s.is_running())
+                .unwrap_or(false);
             if running {
                 return Ok(url.clone());
             }
@@ -105,7 +109,10 @@ impl OpenCodeServer {
                 tokio::time::sleep(RETRY_DELAY).await;
             }
 
-            match self.spawn_server(host, port, &server_config_json, working_dir).await {
+            match self
+                .spawn_server(host, port, &server_config_json, working_dir)
+                .await
+            {
                 Ok(()) => match self.wait_for_healthy().await {
                     Ok(()) => {
                         return Ok(());
@@ -181,7 +188,10 @@ impl OpenCodeServer {
             }
 
             if start.elapsed() > HEALTH_TIMEOUT {
-                anyhow::bail!("Server did not become healthy within {}s", HEALTH_TIMEOUT.as_secs());
+                anyhow::bail!(
+                    "Server did not become healthy within {}s",
+                    HEALTH_TIMEOUT.as_secs()
+                );
             }
 
             match hpx_client.get(&health_url).send().await {
@@ -211,7 +221,9 @@ impl OpenCodeServer {
             }
             match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                 Ok(Ok(_status)) => {}
-                Ok(Err(e)) => { let _ = e; }
+                Ok(Err(e)) => {
+                    let _ = e;
+                }
                 Err(_) => {}
             }
         }

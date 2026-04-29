@@ -156,7 +156,12 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                     };
 
                     crate::tui::task_card::render_task_card(
-                        f, card_area, task, is_task_focused, &config.theme, now,
+                        f,
+                        card_area,
+                        task,
+                        is_task_focused,
+                        &config.theme,
+                        now,
                     );
                     card_y += card_height + 1;
                     rendered_count += 1;
@@ -171,7 +176,12 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                     Paragraph::new(indicator_text).style(Style::default().fg(Color::DarkGray));
                 f.render_widget(
                     indicator,
-                    Rect { x: inner.x, y: indicator_y, width: inner.width, height: 1 },
+                    Rect {
+                        x: inner.x,
+                        y: indicator_y,
+                        width: inner.width,
+                        height: 1,
+                    },
                 );
             }
         } else {
@@ -180,16 +190,40 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                 let line1 = Paragraph::new("No tasks")
                     .style(Style::default().fg(Color::DarkGray))
                     .alignment(Alignment::Center);
-                f.render_widget(line1, Rect { x: inner.x, y: center_y.saturating_sub(1), width: inner.width, height: 1 });
+                f.render_widget(
+                    line1,
+                    Rect {
+                        x: inner.x,
+                        y: center_y.saturating_sub(1),
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
                 let line2 = Paragraph::new("Press n to create one")
                     .style(Style::default().fg(Color::Gray))
                     .alignment(Alignment::Center);
-                f.render_widget(line2, Rect { x: inner.x, y: center_y, width: inner.width, height: 1 });
+                f.render_widget(
+                    line2,
+                    Rect {
+                        x: inner.x,
+                        y: center_y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
             } else {
                 let placeholder = Paragraph::new("No tasks")
                     .style(Style::default().fg(Color::DarkGray))
                     .alignment(Alignment::Center);
-                f.render_widget(placeholder, Rect { x: inner.x, y: center_y, width: inner.width, height: 1 });
+                f.render_widget(
+                    placeholder,
+                    Rect {
+                        x: inner.x,
+                        y: center_y,
+                        width: inner.width,
+                        height: 1,
+                    },
+                );
             }
         }
 

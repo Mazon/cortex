@@ -188,7 +188,10 @@ impl SseDecoder {
 
     /// Emit a complete event from the accumulated fields and reset state.
     fn emit_event(&mut self) -> Option<ServerSentEvent> {
-        if self.current_data.is_empty() && self.current_event_type.is_none() && self.current_id.is_none() {
+        if self.current_data.is_empty()
+            && self.current_event_type.is_none()
+            && self.current_id.is_none()
+        {
             return None;
         }
         let event = ServerSentEvent {
@@ -333,7 +336,9 @@ mod tests {
     /// Helper: build an `SseEventStream` from a multi-chunk byte stream.
     fn stream_from_chunks(chunks: Vec<&'static [u8]>) -> SseEventStream<serde_json::Value> {
         let stream = futures::stream::iter(
-            chunks.into_iter().map(|c| Ok::<_, hpx::Error>(Bytes::from_static(c))),
+            chunks
+                .into_iter()
+                .map(|c| Ok::<_, hpx::Error>(Bytes::from_static(c))),
         );
         SseEventStream::new(stream)
     }
@@ -395,10 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_split_across_chunks() {
-        let chunks: Vec<&[u8]> = vec![
-            b"data: {\"split\":",
-            b"true}\n\n",
-        ];
+        let chunks: Vec<&[u8]> = vec![b"data: {\"split\":", b"true}\n\n"];
         let mut stream = stream_from_chunks(chunks);
         let event = stream.next().await.unwrap().unwrap();
         assert_eq!(event["split"], true);
@@ -431,7 +433,9 @@ mod tests {
     async fn connection_error_formatting() {
         // Verify that SseStreamError::Connection formats correctly,
         // matching the pattern expected by events.rs error detection.
-        let err = SseStreamError::Connection("request or response body error: operation timed out".to_string());
+        let err = SseStreamError::Connection(
+            "request or response body error: operation timed out".to_string(),
+        );
         let msg = err.to_string();
         assert!(msg.contains("Connection error"), "got: {}", msg);
         assert!(msg.contains("timed out"), "got: {}", msg);

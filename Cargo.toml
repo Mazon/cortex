@@ -2,9 +2,13 @@
 name = "cortex"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.80"
 
 [lib]
+name = "cortex"
+path = "src/lib.rs"
+
+[[bin]]
 name = "cortex"
 path = "src/main.rs"
 

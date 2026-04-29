@@ -87,16 +87,16 @@ impl App {
         tokio::spawn(async move {
             #[cfg(unix)]
             {
-                let mut sigterm = match tokio::signal::unix::signal(
-                    tokio::signal::unix::SignalKind::terminate(),
-                ) {
-                    Ok(s) => s,
-                    Err(_e) => {
-                        let _ = tokio::signal::ctrl_c().await;
-                        let _ = shutdown_tx.send(()).await;
-                        return;
-                    }
-                };
+                let mut sigterm =
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    {
+                        Ok(s) => s,
+                        Err(_e) => {
+                            let _ = tokio::signal::ctrl_c().await;
+                            let _ = shutdown_tx.send(()).await;
+                            return;
+                        }
+                    };
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {
                     }
@@ -138,7 +138,7 @@ impl App {
                                         // dimensions.
                                         self.state
                                             .lock()
-                                            .unwrap()
+                                            .unwrap_or_else(|e| e.into_inner())
                                             .mark_render_dirty();
                                     }
                                     Event::Mouse(mouse) => {
@@ -198,7 +198,11 @@ impl App {
             //   significant complexity with marginal benefit.
             //
             // The current approach is correct and performant for this application.
-            let needs_render = self.state.lock().unwrap_or_else(|e| e.into_inner()).take_render_dirty();
+            let needs_render = self
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take_render_dirty();
             if needs_render {
                 let config = &self.config;
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -224,7 +228,12 @@ impl App {
                             crate::tui::prompt::render_input_prompt(f, state);
                         }
                         crate::state::types::AppMode::DiffReview => {
-                            crate::tui::diff_view::render_diff_review(f, f.area(), state, &config.theme);
+                            crate::tui::diff_view::render_diff_review(
+                                f,
+                                f.area(),
+                                state,
+                                &config.theme,
+                            );
                         }
                     }
                 })?;
@@ -272,8 +281,8 @@ impl App {
             return;
         }
 
-        // Ignore clicks in the status bar (last row)
-        if mouse.row >= area.height.saturating_sub(1) {
+        // Ignore clicks in the status bar (last 2 rows: top border + content)
+        if mouse.row >= area.height.saturating_sub(2) {
             return;
         }
 
@@ -295,7 +304,10 @@ impl App {
             if can_show_all {
                 0
             } else {
-                state.kanban.kanban_scroll_offset.min(visible.len().saturating_sub(max_visible))
+                state
+                    .kanban
+                    .kanban_scroll_offset
+                    .min(visible.len().saturating_sub(max_visible))
             }
         };
 
@@ -352,7 +364,10 @@ impl App {
                 }
             };
             if let Some(task_id) = task_id {
-                state.kanban.focused_task_index.insert(clicked_col_id.clone(), task_index);
+                state
+                    .kanban
+                    .focused_task_index
+                    .insert(clicked_col_id.clone(), task_index);
                 state.ui.focused_task_id = Some(task_id);
             }
             state.mark_render_dirty();
@@ -362,7 +377,10 @@ impl App {
     /// Handle a key event based on current mode.
     fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
         // Any key press potentially changes state — mark for re-render.
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).mark_render_dirty();
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mark_render_dirty();
 
         let mode = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -407,11 +425,15 @@ impl App {
             let is_detail_editor_focused = {
                 let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
-                    && state.ui.detail_editor.as_ref().map_or(false, |e| e.is_focused)
+                    && state
+                        .ui
+                        .detail_editor
+                        .as_ref()
+                        .map_or(false, |e| e.is_focused)
             };
 
             if is_detail_editor_focused {
-                use crate::state::types::CursorDirection;
+                use crate::state::types::{AgentStatus, CursorDirection};
                 use crate::tui::keys::EditorKeyAction;
 
                 // Check configurable editor keybindings first (Ctrl+S, Esc, Tab, Enter)
@@ -423,67 +445,24 @@ impl App {
                 if let Some(action) = editor_action {
                     match action {
                         EditorKeyAction::Save => {
+                            // Ctrl+S in detail view: submit the prompt (same as Enter)
+                            // Reuse the same logic by treating this as a submit
+                            // Fall through to Newline handler by not returning early
+                            // Actually, we need to duplicate the submit logic here
+                            // since Ctrl+S is handled separately from Enter.
+                            // For simplicity, just unfocus the editor.
                             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                            match state.save_detail_description() {
-                                Ok(task_id) => {
-                                    // Unfocus the editor after saving
-                                    if let Some(ed) = state.ui.detail_editor.as_mut() {
-                                        ed.is_focused = false;
-                                    }
-                                    state.set_notification(
-                                        format!("Description saved for task {}", task_id),
-                                        crate::state::types::NotificationVariant::Success,
-                                        3000,
-                                    );
-                                    state.mark_render_dirty();
-                                }
-                                Err(e) => {
-                                    state.set_notification(
-                                        e.to_string(),
-                                        crate::state::types::NotificationVariant::Error,
-                                        3000,
-                                    );
-                                    state.mark_render_dirty();
-                                }
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.is_focused = false;
                             }
+                            state.mark_render_dirty();
                             return;
                         }
                         EditorKeyAction::Cancel => {
+                            // Esc: unfocus the prompt input
                             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                            let should_revert = state.ui.detail_editor.as_ref().map_or(false, |ed| ed.discard_warning_shown);
-                            let has_unsaved = state.ui.detail_editor.as_ref().map_or(false, |ed| ed.has_unsaved_changes);
-
-                            if should_revert {
-                                // Second cancel: revert and unfocus
-                                // Extract description before mutating editor
-                                let revert_desc = state.ui.viewing_task_id.as_ref().and_then(|id| {
-                                    state.tasks.get(id).map(|t| {
-                                        t.pending_description.clone().unwrap_or_else(|| t.description.clone())
-                                    })
-                                });
-
-                                if let (Some(desc), Some(ed)) = (revert_desc, state.ui.detail_editor.as_mut()) {
-                                    let fresh = crate::state::types::DetailEditorState::new_from_description(&desc);
-                                    ed.desc_lines = fresh.desc_lines;
-                                    ed.cached_description = fresh.cached_description;
-                                    ed.cursor_row = 0;
-                                    ed.cursor_col = 0;
-                                    ed.scroll_offset = 0;
-                                    ed.has_unsaved_changes = false;
-                                    ed.discard_warning_shown = false;
-                                    ed.validation_error = None;
-                                    ed.is_focused = false;
-                                }
-                            } else if has_unsaved {
-                                // First cancel with unsaved changes: show warning
-                                if let Some(ed) = state.ui.detail_editor.as_mut() {
-                                    ed.discard_warning_shown = true;
-                                }
-                            } else {
-                                // No unsaved changes: just unfocus
-                                if let Some(ed) = state.ui.detail_editor.as_mut() {
-                                    ed.is_focused = false;
-                                }
+                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                ed.is_focused = false;
                             }
                             state.mark_render_dirty();
                             return;
@@ -501,17 +480,223 @@ impl App {
                             state.mark_render_dirty();
                             return;
                         }
+                        EditorKeyAction::Submit => {
+                            // Submit is handled via Newline (Enter) in the detail view
+                            // This case shouldn't be reached since Submit isn't mapped
+                            // to a separate key in the EditorKeyMatcher
+                            return;
+                        }
                         EditorKeyAction::Newline => {
-                            // Enter: insert newline (only without ctrl/alt modifiers)
-                            if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
-                                // Ctrl+Enter = save, don't insert newline
+                            // Enter: submit prompt (only without ctrl/alt modifiers)
+                            if key
+                                .modifiers
+                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                            {
+                                // Ctrl+Enter = save description, don't submit prompt
                                 return;
                             }
-                            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Some(ed) = state.ui.detail_editor.as_mut() {
-                                ed.insert_newline();
+                            // Submit the prompt from the input field
+                            {
+                                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                                let (prompt_text, task_id, agent_status, session_id, agent_type) = {
+                                    let task_id = state.ui.viewing_task_id.clone();
+                                    let prompt = state
+                                        .ui
+                                        .detail_editor
+                                        .as_ref()
+                                        .map(|ed| ed.description())
+                                        .unwrap_or_default();
+                                    let prompt = prompt.trim().to_string();
+                                    let (status, sid, agent) =
+                                        task_id.as_ref().and_then(|tid| {
+                                            state.tasks.get(tid).map(|t| {
+                                                (
+                                                    t.agent_status.clone(),
+                                                    t.session_id.clone(),
+                                                    t.agent_type.clone(),
+                                                )
+                                            })
+                                        }).unwrap_or((AgentStatus::Pending, None, None));
+                                    (prompt, task_id, status, sid, agent)
+                                };
+
+                                if prompt_text.is_empty() {
+                                    // Don't submit empty prompts
+                                    drop(state);
+                                    return;
+                                }
+
+                                let task_id = match task_id {
+                                    Some(id) => id,
+                                    None => {
+                                        drop(state);
+                                        return;
+                                    }
+                                };
+
+                                match agent_status {
+                                    AgentStatus::Running | AgentStatus::Pending => {
+                                        // Agent is running — queue the prompt
+                                        if let Some(task) = state.tasks.get_mut(&task_id) {
+                                            task.queued_prompt = Some(prompt_text.clone());
+                                        }
+                                        // Clear the input field
+                                        if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                            ed.desc_lines = vec![String::new()];
+                                            ed.cached_description = None;
+                                            ed.cursor_row = 0;
+                                            ed.cursor_col = 0;
+                                            ed.has_unsaved_changes = false;
+                                            ed.is_focused = false;
+                                        }
+                                        state.set_notification(
+                                            "Prompt queued — will be sent after current prompt completes".to_string(),
+                                            crate::state::types::NotificationVariant::Info,
+                                            3000,
+                                        );
+                                        state.mark_render_dirty();
+                                    }
+                                    AgentStatus::Ready | AgentStatus::Complete | AgentStatus::Question => {
+                                        // Agent is idle — send immediately
+                                        if session_id.is_some() {
+                                            // Set active_prompt on the session
+                                            if let Some(ref sid) = session_id {
+                                                if let Some(session) =
+                                                    state.session_tracker.task_sessions.get_mut(sid)
+                                                {
+                                                    session.active_prompt = Some(prompt_text.clone());
+                                                    session.render_version += 1;
+                                                }
+                                            }
+                                            // Update agent status to Running
+                                            state.update_task_agent_status(&task_id, AgentStatus::Running);
+                                            // Clear the input field
+                                            if let Some(ed) = state.ui.detail_editor.as_mut() {
+                                                ed.desc_lines = vec![String::new()];
+                                                ed.cached_description = None;
+                                                ed.cursor_row = 0;
+                                                ed.cursor_col = 0;
+                                                ed.has_unsaved_changes = false;
+                                                ed.is_focused = false;
+                                            }
+                                            state.set_notification(
+                                                "Sending prompt...".to_string(),
+                                                crate::state::types::NotificationVariant::Info,
+                                                2000,
+                                            );
+                                            state.mark_render_dirty();
+
+                                            // Spawn async task to send the prompt
+                                            let state_clone = self.state.clone();
+                                            let sid = session_id.unwrap();
+                                            let agent = agent_type.clone();
+                                            let opencode_config = self.config.opencode.clone();
+                                            let prompt = prompt_text;
+
+                                            // Get the client for this task's project
+                                            let client = {
+                                                let pid = state
+                                                    .tasks
+                                                    .get(&task_id)
+                                                    .map(|t| t.project_id.clone());
+                                                drop(state);
+                                                pid.and_then(|pid| self.opencode_clients.get(&pid).cloned())
+                                            };
+
+                                            if let Some(client) = client {
+                                                tokio::spawn(async move {
+                                                    let agent_model = opencode_config
+                                                        .agents
+                                                        .get(agent.as_deref().unwrap_or(""))
+                                                        .and_then(|a| a.model.clone());
+                                                    let model = agent_model
+                                                        .as_deref()
+                                                        .map(|m| {
+                                                            if m.contains('/') {
+                                                                m.to_string()
+                                                            } else {
+                                                                let provider = opencode_config
+                                                                    .model
+                                                                    .provider
+                                                                    .as_deref()
+                                                                    .unwrap_or("z.ai");
+                                                                format!("{}/{}", provider, m)
+                                                            }
+                                                        })
+                                                        .or_else(|| {
+                                                            let provider = opencode_config
+                                                                .model
+                                                                .provider
+                                                                .as_deref()
+                                                                .unwrap_or("z.ai");
+                                                            Some(format!(
+                                                                "{}/{}",
+                                                                provider,
+                                                                opencode_config.model.id
+                                                            ))
+                                                        });
+
+                                                    match client
+                                                        .send_prompt(
+                                                            &sid,
+                                                            &prompt,
+                                                            agent.as_deref(),
+                                                            model.as_deref(),
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(_) => {
+                                                            tracing::debug!(
+                                                                "Follow-up prompt sent: session={}",
+                                                                sid
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!(
+                                                                "Failed to send follow-up prompt: {}",
+                                                                e
+                                                            );
+                                                            let mut s = state_clone
+                                                                .lock()
+                                                                .unwrap_or_else(|e| e.into_inner());
+                                                            s.set_notification(
+                                                                format!("Failed to send prompt: {}", e),
+                                                                crate::state::types::NotificationVariant::Error,
+                                                                5000,
+                                                            );
+                                                            s.mark_render_dirty();
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        } else {
+                                            // No session — can't send
+                                            state.set_notification(
+                                                "No active session — cannot send prompt".to_string(),
+                                                crate::state::types::NotificationVariant::Warning,
+                                                3000,
+                                            );
+                                            state.mark_render_dirty();
+                                        }
+                                    }
+                                    AgentStatus::Error => {
+                                        state.set_notification(
+                                            "Cannot send prompt to errored agent".to_string(),
+                                            crate::state::types::NotificationVariant::Warning,
+                                            3000,
+                                        );
+                                        state.mark_render_dirty();
+                                    }
+                                    AgentStatus::Hung => {
+                                        state.set_notification(
+                                            "Agent appears hung — try aborting first (ctrl+a)".to_string(),
+                                            crate::state::types::NotificationVariant::Warning,
+                                            5000,
+                                        );
+                                        state.mark_render_dirty();
+                                    }
+                                }
                             }
-                            state.mark_render_dirty();
                             return;
                         }
                     }
@@ -602,7 +787,9 @@ impl App {
                             return;
                         }
                         // Printable characters
-                        (KeyCode::Char(ch), modifiers) if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                        (KeyCode::Char(ch), modifiers)
+                            if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                        {
                             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(ed) = state.ui.detail_editor.as_mut() {
                                 ed.insert_char(ch);
@@ -623,7 +810,11 @@ impl App {
                 let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
                     && !state.is_drilled_into_subagent()
-                    && state.ui.detail_editor.as_ref().map_or(false, |e| !e.is_focused)
+                    && state
+                        .ui
+                        .detail_editor
+                        .as_ref()
+                        .map_or(false, |e| !e.is_focused)
             };
             if is_detail_not_focused && key.code == KeyCode::Tab && key.modifiers.is_empty() {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -639,7 +830,8 @@ impl App {
         {
             let is_detail_escape = {
                 let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail && key.code == KeyCode::Esc
+                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                    && key.code == KeyCode::Esc
             };
             // First lock dropped here
             if is_detail_escape {
@@ -657,15 +849,19 @@ impl App {
             // Handle Up/Down arrows, j/k, and G/g for scrolling output in task detail view
             let is_scroll_key = matches!(
                 key.code,
-                KeyCode::Up | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('G') | KeyCode::Char('g')
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Char('j')
+                    | KeyCode::Char('k')
+                    | KeyCode::Char('G')
+                    | KeyCode::Char('g')
             );
             let modifiers_ok = if matches!(key.code, KeyCode::Char('G')) {
                 key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT
             } else {
                 key.modifiers.is_empty()
             };
-            if is_scroll_key && modifiers_ok
-            {
+            if is_scroll_key && modifiers_ok {
                 let in_detail = {
                     let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
@@ -736,11 +932,13 @@ impl App {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let perm = state
-                            .session_tracker.task_sessions
+                            .session_tracker
+                            .task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_permissions.first().cloned());
                         let client = state
-                            .project_registry.active_project_id
+                            .project_registry
+                            .active_project_id
                             .as_ref()
                             .and_then(|pid| self.opencode_clients.get(pid))
                             .cloned();
@@ -756,7 +954,10 @@ impl App {
                         let perm_id = perm.id.clone();
                         let session_id = perm.session_id.clone();
                         tokio::spawn(async move {
-                            match client.resolve_permission(&session_id, &perm_id, approve).await {
+                            match client
+                                .resolve_permission(&session_id, &perm_id, approve)
+                                .await
+                            {
                                 Ok(()) => {
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.resolve_permission_request(&tid, &perm_id, approve);
@@ -765,7 +966,8 @@ impl App {
                                 Err(e) => {
                                     tracing::error!(
                                         "Failed to resolve permission {}: {}",
-                                        perm_id, e
+                                        perm_id,
+                                        e
                                     );
                                     // Keep the permission in the pending list so the user can retry
                                     // Note: tracing layer also captures this error automatically
@@ -806,12 +1008,14 @@ impl App {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
                         let question = state
-                            .session_tracker.task_sessions
+                            .session_tracker
+                            .task_sessions
                             .get(tid)
                             .and_then(|s| s.pending_questions.first().cloned())
                             .filter(|q| answer_index < q.answers.len());
                         let client = state
-                            .project_registry.active_project_id
+                            .project_registry
+                            .active_project_id
                             .as_ref()
                             .and_then(|pid| self.opencode_clients.get(pid))
                             .cloned();
@@ -831,7 +1035,10 @@ impl App {
                         let session_id = question.session_id.clone();
                         let answer_preview = answer.chars().take(30).collect::<String>();
                         tokio::spawn(async move {
-                            match client.resolve_question(&session_id, &question_id, &answer).await {
+                            match client
+                                .resolve_question(&session_id, &question_id, &answer)
+                                .await
+                            {
                                 Ok(()) => {
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                                     s.resolve_question_request(&tid, &question_id);
@@ -841,8 +1048,13 @@ impl App {
                                     if needs_reassess {
                                         // Set back to Complete, then re-apply Ready/Complete logic
                                         // and auto-progression (same as SessionIdle handler).
-                                        s.update_task_agent_status(&tid, crate::state::types::AgentStatus::Complete);
-                                        if let Some(ref col) = s.tasks.get(&tid).map(|t| t.column.clone()) {
+                                        s.update_task_agent_status(
+                                            &tid,
+                                            crate::state::types::AgentStatus::Complete,
+                                        );
+                                        if let Some(ref col) =
+                                            s.tasks.get(&tid).map(|t| t.column.clone())
+                                        {
                                             let has_auto_progress =
                                                 columns_config.auto_progress_for(&col.0).is_some();
                                             let has_plan = s
@@ -851,26 +1063,53 @@ impl App {
                                                 .and_then(|t| t.plan_output.as_ref())
                                                 .map(|p| !p.trim().is_empty())
                                                 .unwrap_or(false);
-                                            if has_auto_progress || has_plan {
-                                                s.update_task_agent_status(&tid, crate::state::types::AgentStatus::Ready);
+                                            if !has_auto_progress && has_plan {
+                                                s.update_task_agent_status(
+                                                    &tid,
+                                                    crate::state::types::AgentStatus::Ready,
+                                                );
                                             }
                                         }
-                                        let action = crate::orchestration::engine::on_agent_completed(
-                                            &tid, &mut s, &columns_config,
-                                        );
-                                        if let Some(a) = action {
-                                            let col = a.target_column.clone();
-                                            let tid_clone = tid.clone();
-                                            drop(s);
-                                            crate::orchestration::engine::on_task_moved(
-                                                &tid_clone,
-                                                &col,
-                                                &state,
-                                                &client,
+                                        let action =
+                                            crate::orchestration::engine::on_agent_completed(
+                                                &tid,
+                                                &mut s,
                                                 &columns_config,
-                                                &opencode_config,
-                                                None,
                                             );
+                                        if let Some(a) = action {
+                                            match a {
+                                                crate::orchestration::engine::AgentCompletionAction::AutoProgress(ap) => {
+                                                    let col = ap.target_column.clone();
+                                                    let tid_clone = tid.clone();
+                                                    drop(s);
+                                                    crate::orchestration::engine::on_task_moved(
+                                                        &tid_clone,
+                                                        &col,
+                                                        &state,
+                                                        &client,
+                                                        &columns_config,
+                                                        &opencode_config,
+                                                        None,
+                                                    );
+                                                }
+                                                crate::orchestration::engine::AgentCompletionAction::SendQueuedPrompt {
+                                                    task_id: qp_tid,
+                                                    prompt: qp_prompt,
+                                                    session_id: qp_sid,
+                                                    agent_type: qp_agent,
+                                                } => {
+                                                    drop(s);
+                                                    crate::orchestration::engine::send_follow_up_prompt(
+                                                        &qp_tid,
+                                                        &qp_prompt,
+                                                        &qp_sid,
+                                                        &qp_agent,
+                                                        &state,
+                                                        &client,
+                                                        &opencode_config,
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
 
@@ -885,7 +1124,8 @@ impl App {
                                 Err(e) => {
                                     tracing::error!(
                                         "Failed to resolve question {}: {}",
-                                        question_id, e
+                                        question_id,
+                                        e
                                     );
                                     // Note: tracing layer also captures this error automatically
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -905,7 +1145,8 @@ impl App {
                     if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
                         if let Some(ref tid) = state.ui.viewing_task_id {
                             if state
-                                .session_tracker.task_sessions
+                                .session_tracker
+                                .task_sessions
                                 .get(tid)
                                 .map(|s| !s.pending_questions.is_empty())
                                 .unwrap_or(false)
@@ -926,7 +1167,10 @@ impl App {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 let pid = state.project_registry.active_project_id.clone();
                 if let Some(ref pid) = pid {
-                    let was_tripped = state.project_registry.is_circuit_breaker_tripped(pid, self.config.opencode.circuit_breaker_threshold);
+                    let was_tripped = state.project_registry.is_circuit_breaker_tripped(
+                        pid,
+                        self.config.opencode.circuit_breaker_threshold,
+                    );
                     state.project_registry.reset_circuit_breaker(pid);
                     if was_tripped {
                         state.set_notification(
@@ -971,10 +1215,6 @@ impl App {
             Some(Action::RetryTask) => self.handle_retry_task(),
             Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
             Some(Action::ReviewChanges) => self.handle_review_changes(),
-            Some(Action::ScrollKanbanLeft) => self.handle_scroll_kanban(-1),
-            Some(Action::ScrollKanbanRight) => self.handle_scroll_kanban(1),
-            Some(Action::MoveTaskUp) => self.handle_move_task_vertical(-1),
-            Some(Action::MoveTaskDown) => self.handle_move_task_vertical(1),
             None => {} // Unmatched key, ignore
         }
     }
@@ -1020,7 +1260,8 @@ impl App {
             match state.project_registry.active_project_id.as_ref() {
                 Some(pid) => {
                     let name = state
-                        .project_registry.projects
+                        .project_registry
+                        .projects
                         .iter()
                         .find(|p| &p.id == pid)
                         .map(|p| p.name.clone())
@@ -1065,7 +1306,12 @@ impl App {
         state.remove_project(&project_id);
 
         // If there are remaining projects, select the first one.
-        if let Some(id) = state.project_registry.projects.first().map(|p| p.id.clone()) {
+        if let Some(id) = state
+            .project_registry
+            .projects
+            .first()
+            .map(|p| p.id.clone())
+        {
             state.select_project(&id);
         }
 
@@ -1111,10 +1357,18 @@ impl App {
             .get(&col_id)
             .map(|v| v.len())
             .unwrap_or(0);
-        let current = state.kanban.focused_task_index.get(&col_id).copied().unwrap_or(0);
+        let current = state
+            .kanban
+            .focused_task_index
+            .get(&col_id)
+            .copied()
+            .unwrap_or(0);
         let new_idx = current as i32 + direction;
         if new_idx >= 0 && (new_idx as usize) < task_count {
-            state.kanban.focused_task_index.insert(col_id.clone(), new_idx as usize);
+            state
+                .kanban
+                .focused_task_index
+                .insert(col_id.clone(), new_idx as usize);
             update_focused_task_id(&mut state, &col_id);
         }
     }
@@ -1160,32 +1414,51 @@ impl App {
 
                     // Trigger orchestration engine if the target column has an agent configured
                     if let Some(_agent) = self.config.columns.agent_for_column(&target_col) {
-                        let already_running = state.tasks.get(&tid)
-                            .map(|t| matches!(t.agent_status,
-                                crate::state::types::AgentStatus::Running
-                                | crate::state::types::AgentStatus::Hung))
+                        let already_running = state
+                            .tasks
+                            .get(&tid)
+                            .map(|t| {
+                                matches!(
+                                    t.agent_status,
+                                    crate::state::types::AgentStatus::Running
+                                        | crate::state::types::AgentStatus::Hung
+                                )
+                            })
                             .unwrap_or(false);
                         if already_running {
-                            let status = state.tasks.get(&tid)
+                            let status = state
+                                .tasks
+                                .get(&tid)
                                 .map(|t| t.agent_status.clone())
                                 .unwrap_or(crate::state::types::AgentStatus::Pending);
                             if status == crate::state::types::AgentStatus::Hung {
                                 state.set_notification(
-                                    "Task is hung — abort the session before re-dispatching".to_string(),
+                                    "Task is hung — abort the session before re-dispatching"
+                                        .to_string(),
                                     crate::state::types::NotificationVariant::Warning,
                                     5000,
                                 );
                             }
                         } else {
-                            if let Some(project_id) = state.project_registry.active_project_id.clone() {
-                                if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                            if let Some(project_id) =
+                                state.project_registry.active_project_id.clone()
+                            {
+                                if let Some(client) =
+                                    self.opencode_clients.get(&project_id).cloned()
+                                {
                                     // Capture the PREVIOUS agent type before overwriting it,
                                     // so start_agent can detect the change and create a fresh session.
-                                    let previous_agent = state.tasks.get(&tid)
-                                        .and_then(|t| t.agent_type.clone());
+                                    let previous_agent =
+                                        state.tasks.get(&tid).and_then(|t| t.agent_type.clone());
                                     // Set status to Running while holding the lock to close the race window
-                                    state.update_task_agent_status(&tid, crate::state::types::AgentStatus::Running);
-                                    state.set_task_agent_type(&tid, self.config.columns.agent_for_column(&target_col));
+                                    state.update_task_agent_status(
+                                        &tid,
+                                        crate::state::types::AgentStatus::Running,
+                                    );
+                                    state.set_task_agent_type(
+                                        &tid,
+                                        self.config.columns.agent_for_column(&target_col),
+                                    );
                                     drop(state); // Release lock before spawning async
                                     crate::orchestration::engine::on_task_moved(
                                         &tid,
@@ -1270,8 +1543,7 @@ impl App {
                     if let Some(pid) = &project_id {
                         if let Some(client) = self.opencode_clients.get(pid).cloned() {
                             tokio::spawn(async move {
-                                if let Err(_e) = client.abort_session(&session_id).await {
-                                }
+                                if let Err(_e) = client.abort_session(&session_id).await {}
                             });
                         }
                     }
@@ -1298,7 +1570,8 @@ impl App {
                 .and_then(|tid| state.tasks.get(tid))
                 .and_then(|t| t.session_id.clone());
             let client = state
-                .project_registry.active_project_id
+                .project_registry
+                .active_project_id
                 .as_ref()
                 .and_then(|pid| self.opencode_clients.get(pid))
                 .cloned();
@@ -1374,7 +1647,8 @@ impl App {
                 ))
             });
             let client = state
-                .project_registry.active_project_id
+                .project_registry
+                .active_project_id
                 .as_ref()
                 .and_then(|pid| self.opencode_clients.get(pid))
                 .cloned();
@@ -1460,8 +1734,14 @@ impl App {
                 // Fix 2: Clean up stale subagent sessions from previous run
                 if let Some(sessions) = state.session_tracker.subagent_sessions.remove(&task_id) {
                     for sub in &sessions {
-                        state.session_tracker.subagent_to_parent.remove(&sub.session_id);
-                        state.session_tracker.subagent_session_data.remove(&sub.session_id);
+                        state
+                            .session_tracker
+                            .subagent_to_parent
+                            .remove(&sub.session_id);
+                        state
+                            .session_tracker
+                            .subagent_session_data
+                            .remove(&sub.session_id);
                     }
                 }
 
@@ -1474,7 +1754,12 @@ impl App {
                 }
 
                 // Fix 4: Clear navigation stack if it references this task
-                if state.ui.session_nav_stack.iter().any(|r| r.task_id == task_id) {
+                if state
+                    .ui
+                    .session_nav_stack
+                    .iter()
+                    .any(|r| r.task_id == task_id)
+                {
                     state.ui.session_nav_stack.clear();
                     // If we were viewing this task's detail, close it since
                     // the old session data is now invalid
@@ -1550,7 +1835,9 @@ impl App {
             // Check if we already have cached data
             let needs_fetch = {
                 let s = state.lock().unwrap_or_else(|e| e.into_inner());
-                s.session_tracker.subagent_session_data.get(&session_id)
+                s.session_tracker
+                    .subagent_session_data
+                    .get(&session_id)
                     .map(|d| d.messages.is_empty())
                     .unwrap_or(true)
             };
@@ -1561,7 +1848,8 @@ impl App {
                         Ok(messages) => {
                             let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                             let entry = s
-                                .session_tracker.subagent_session_data
+                                .session_tracker
+                                .subagent_session_data
                                 .entry(session_id.clone())
                                 .or_insert_with(crate::state::types::TaskDetailSession::default);
                             entry.session_id = Some(session_id.clone());
@@ -1594,9 +1882,10 @@ impl App {
             // Push onto navigation stack
             let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
             // Guard against duplicate push from rapid key presses
-            let already_on_stack = s.ui.session_nav_stack
-                .iter()
-                .any(|r| r.session_id == session_id);
+            let already_on_stack =
+                s.ui.session_nav_stack
+                    .iter()
+                    .any(|r| r.session_id == session_id);
             if already_on_stack {
                 return; // Already pushed by a prior keypress
             }
@@ -1770,7 +2059,12 @@ impl App {
             // Scanning subagent session data
             if let Some(session_data) = state.session_tracker.subagent_session_data.get(&scan_id) {
                 let task_id = state.ui.viewing_task_id.clone().unwrap_or_default();
-                let current_depth = state.ui.session_nav_stack.last().map(|r| r.depth).unwrap_or(0);
+                let current_depth = state
+                    .ui
+                    .session_nav_stack
+                    .last()
+                    .map(|r| r.depth)
+                    .unwrap_or(0);
                 for msg in &session_data.messages {
                     for part in &msg.parts {
                         if let crate::state::types::TaskMessagePart::Agent { id, agent } = part {
@@ -1780,7 +2074,12 @@ impl App {
                                 .iter()
                                 .any(|r| r.session_id == *id);
                             if !already_in_stack {
-                                return Some((id.clone(), agent.clone(), task_id, current_depth + 1));
+                                return Some((
+                                    id.clone(),
+                                    agent.clone(),
+                                    task_id,
+                                    current_depth + 1,
+                                ));
                             }
                         }
                     }
@@ -1793,7 +2092,8 @@ impl App {
                     let task_id = tid.clone();
                     for msg in &session.messages {
                         for part in &msg.parts {
-                            if let crate::state::types::TaskMessagePart::Agent { id, agent } = part {
+                            if let crate::state::types::TaskMessagePart::Agent { id, agent } = part
+                            {
                                 let already_in_stack = state
                                     .ui
                                     .session_nav_stack
@@ -1809,26 +2109,6 @@ impl App {
             }
         }
         None
-    }
-
-    /// Scroll the kanban view left or right without changing the focused column.
-    /// Bound to PageUp (left) and PageDown (right) by default.
-    fn handle_scroll_kanban(&mut self, direction: i32) {
-        let total_cols = self.config.columns.visible_column_ids().len();
-        if total_cols == 0 {
-            return;
-        }
-
-        let max_visible = Self::max_visible_columns(&self.config, &self.terminal);
-        if total_cols <= max_visible {
-            return;
-        }
-
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let current = state.kanban.kanban_scroll_offset as i32;
-        let max_offset = (total_cols.saturating_sub(max_visible)) as i32;
-        let new_offset = (current + direction).clamp(0, max_offset);
-        state.kanban.kanban_scroll_offset = new_offset as usize;
     }
 
     // ── Shared helpers ──
@@ -1870,29 +2150,6 @@ impl App {
         }
     }
 
-    /// Reorder a task within its column by swapping position with its neighbor.
-    fn handle_move_task_vertical(&mut self, direction: i32) {
-        let (task_id, column_id) = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let tid = state.ui.focused_task_id.clone();
-            let col = state.ui.focused_column.clone();
-            (tid, col)
-        };
-        let task_id = match task_id {
-            Some(id) => id,
-            None => return,
-        };
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(tasks) = state.kanban.columns.get_mut(&column_id) {
-            if let Some(pos) = tasks.iter().position(|id| id == &task_id) {
-                let new_pos = pos as i32 + direction;
-                if new_pos >= 0 && (new_pos as usize) < tasks.len() {
-                    tasks.swap(pos, new_pos as usize);
-                }
-            }
-        }
-    }
-
     /// Switch to the previous/next project by an offset (-1 or +1).
     /// Wraps around at the boundaries.
     fn switch_project_offset(&mut self, direction: i32) {
@@ -1902,9 +2159,16 @@ impl App {
             return;
         }
         let current_idx = state
-            .project_registry.active_project_id
+            .project_registry
+            .active_project_id
             .as_ref()
-            .and_then(|id| state.project_registry.projects.iter().position(|p| &p.id == id))
+            .and_then(|id| {
+                state
+                    .project_registry
+                    .projects
+                    .iter()
+                    .position(|p| &p.id == id)
+            })
             .unwrap_or(0);
         let new_idx = (current_idx as i32 + direction).rem_euclid(len as i32) as usize;
         let new_id = state.project_registry.projects[new_idx].id.clone();
@@ -1916,11 +2180,7 @@ impl App {
     /// Used by both the project-rename and working-directory prompts.
     /// Handles character insertion, backspace, delete, cursor movement,
     /// Home/End, Enter (submit), and Escape (cancel).
-    fn handle_text_input(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-        prompt: InputPrompt,
-    ) {
+    fn handle_text_input(&mut self, key: crossterm::event::KeyEvent, prompt: InputPrompt) {
         use crossterm::event::KeyCode;
 
         match key.code {
@@ -1946,39 +2206,42 @@ impl App {
                             }
                         }
                     }
-                    InputPrompt::WorkingDirectory => {
-                        match state.submit_working_directory() {
-                            Ok(true) => {
-                                state.set_notification(
-                                    "Working directory updated".to_string(),
-                                    crate::state::types::NotificationVariant::Success,
-                                    3000,
-                                );
-                            }
-                            Ok(false) => {
-                                state.set_notification(
-                                    "Working directory cannot be empty".to_string(),
-                                    crate::state::types::NotificationVariant::Warning,
-                                    2000,
-                                );
-                            }
-                            Err(msg) => {
-                                state.set_notification(
-                                    msg,
-                                    crate::state::types::NotificationVariant::Error,
-                                    3000,
-                                );
-                            }
+                    InputPrompt::WorkingDirectory => match state.submit_working_directory() {
+                        Ok(true) => {
+                            state.set_notification(
+                                "Working directory updated".to_string(),
+                                crate::state::types::NotificationVariant::Success,
+                                3000,
+                            );
                         }
-                    }
+                        Ok(false) => {
+                            state.set_notification(
+                                "Working directory cannot be empty".to_string(),
+                                crate::state::types::NotificationVariant::Warning,
+                                2000,
+                            );
+                        }
+                        Err(msg) => {
+                            state.set_notification(
+                                msg,
+                                crate::state::types::NotificationVariant::Error,
+                                3000,
+                            );
+                        }
+                    },
                     InputPrompt::NewProjectDirectory => {
                         match state.submit_new_project_directory() {
                             Ok(name) => {
                                 // Register the shared OpenCode client for the new project.
                                 // All projects share a single server, so we clone any existing client.
-                                if let Some(new_pid) = state.project_registry.active_project_id.clone() {
-                                    if let Some(existing_client) = self.opencode_clients.values().next() {
-                                        self.opencode_clients.insert(new_pid.clone(), existing_client.clone());
+                                if let Some(new_pid) =
+                                    state.project_registry.active_project_id.clone()
+                                {
+                                    if let Some(existing_client) =
+                                        self.opencode_clients.values().next()
+                                    {
+                                        self.opencode_clients
+                                            .insert(new_pid.clone(), existing_client.clone());
                                         state.set_project_connected(&new_pid, true);
                                     }
                                 }
@@ -2012,7 +2275,9 @@ impl App {
                 let char_count = state.ui.input_text.chars().count();
                 let cursor = state.ui.input_cursor.min(char_count);
                 // Convert char index to byte offset for insertion.
-                let byte_pos = state.ui.input_text
+                let byte_pos = state
+                    .ui
+                    .input_text
                     .char_indices()
                     .nth(cursor)
                     .map(|(i, _)| i)
@@ -2110,8 +2375,7 @@ impl App {
                 match state.save_task_editor() {
                     Ok(task_id) => {
                         // Extract column ID before closing editor
-                        let column_id = state.get_task_editor()
-                            .and_then(|ed| ed.column_id.clone());
+                        let column_id = state.get_task_editor().and_then(|ed| ed.column_id.clone());
 
                         // Close the editor and return to normal mode
                         state.cancel_task_editor();
@@ -2138,18 +2402,28 @@ impl App {
                             let agent_name = self.config.columns.agent_for_column(col_id);
                             tracing::debug!(
                                 "Task {} saved in column '{}', agent_for_column={:?}",
-                                task_id, col_id, agent_name
+                                task_id,
+                                col_id,
+                                agent_name
                             );
                             if let Some(_agent) = agent_name {
                                 // Check if task already has a running agent
-                                let already_running = state.tasks.get(&task_id)
-                                    .map(|t| matches!(t.agent_status,
-                                        crate::state::types::AgentStatus::Running
-                                        | crate::state::types::AgentStatus::Hung))
+                                let already_running = state
+                                    .tasks
+                                    .get(&task_id)
+                                    .map(|t| {
+                                        matches!(
+                                            t.agent_status,
+                                            crate::state::types::AgentStatus::Running
+                                                | crate::state::types::AgentStatus::Hung
+                                        )
+                                    })
                                     .unwrap_or(false);
 
                                 if already_running {
-                                    let status = state.tasks.get(&task_id)
+                                    let status = state
+                                        .tasks
+                                        .get(&task_id)
                                         .map(|t| t.agent_status.clone())
                                         .unwrap_or(crate::state::types::AgentStatus::Pending);
                                     if status == crate::state::types::AgentStatus::Hung {
@@ -2160,15 +2434,27 @@ impl App {
                                         );
                                     }
                                 } else {
-                                    if let Some(project_id) = state.project_registry.active_project_id.clone() {
-                                        if let Some(client) = self.opencode_clients.get(&project_id).cloned() {
+                                    if let Some(project_id) =
+                                        state.project_registry.active_project_id.clone()
+                                    {
+                                        if let Some(client) =
+                                            self.opencode_clients.get(&project_id).cloned()
+                                        {
                                             // Capture the PREVIOUS agent type before overwriting it,
                                             // so start_agent can detect the change and create a fresh session.
-                                            let previous_agent = state.tasks.get(&task_id)
+                                            let previous_agent = state
+                                                .tasks
+                                                .get(&task_id)
                                                 .and_then(|t| t.agent_type.clone());
                                             // Set status to Running while holding the lock to close the race window
-                                            state.update_task_agent_status(&task_id, crate::state::types::AgentStatus::Running);
-                                            state.set_task_agent_type(&task_id, self.config.columns.agent_for_column(col_id));
+                                            state.update_task_agent_status(
+                                                &task_id,
+                                                crate::state::types::AgentStatus::Running,
+                                            );
+                                            state.set_task_agent_type(
+                                                &task_id,
+                                                self.config.columns.agent_for_column(col_id),
+                                            );
                                             drop(state); // Release lock before spawning async
                                             crate::orchestration::engine::on_task_moved(
                                                 &task_id,
@@ -2188,7 +2474,8 @@ impl App {
                                         }
                                     } else {
                                         state.set_notification(
-                                            "No active project — agent dispatch skipped".to_string(),
+                                            "No active project — agent dispatch skipped"
+                                                .to_string(),
                                             crate::state::types::NotificationVariant::Warning,
                                             3000,
                                         );
@@ -2227,10 +2514,7 @@ impl App {
 
     /// Calculate the maximum number of kanban columns that can fit.
     fn max_visible_columns(config: &CortexConfig, terminal: &Terminal) -> usize {
-        let term_width = terminal
-            .size()
-            .unwrap_or(Size::new(80, 24))
-            .width;
+        let term_width = terminal.size().unwrap_or(Size::new(80, 24)).width;
         let sidebar_width = config.theme.sidebar_width;
         let kanban_width = term_width.saturating_sub(sidebar_width);
         let available = kanban_width.saturating_sub(6);
@@ -2239,11 +2523,7 @@ impl App {
     }
 
     /// Ensure the focused column is visible by adjusting the scroll offset.
-    fn ensure_column_visible(
-        state: &mut AppState,
-        config: &CortexConfig,
-        terminal: &Terminal,
-    ) {
+    fn ensure_column_visible(state: &mut AppState, config: &CortexConfig, terminal: &Terminal) {
         let total_cols = config.columns.visible_column_ids().len();
         if total_cols == 0 {
             return;
@@ -2273,7 +2553,8 @@ impl App {
     fn get_active_client(&self) -> Option<OpenCodeClient> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
-            .project_registry.active_project_id
+            .project_registry
+            .active_project_id
             .as_ref()
             .and_then(|pid| self.opencode_clients.get(pid))
             .cloned()
@@ -2293,7 +2574,12 @@ impl App {
 
 /// Update the focused task ID based on the column's focused task index.
 fn update_focused_task_id(state: &mut AppState, col_id: &str) {
-    let idx = state.kanban.focused_task_index.get(col_id).copied().unwrap_or(0);
+    let idx = state
+        .kanban
+        .focused_task_index
+        .get(col_id)
+        .copied()
+        .unwrap_or(0);
     if let Some(task_ids) = state.kanban.columns.get(col_id) {
         let clamped = idx.min(task_ids.len().saturating_sub(1));
         state.ui.focused_task_id = task_ids.get(clamped).cloned();

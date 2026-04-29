@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 /// Render the project sidebar in the given area.
 pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &CortexConfig) {
     let block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP | Borders::RIGHT | Borders::LEFT)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             " Projects ",
@@ -34,7 +34,8 @@ pub fn render_sidebar(f: &mut Frame, area: Rect, state: &AppState, _config: &Cor
             break;
         }
 
-        let is_active = state.project_registry.active_project_id.as_deref() == Some(project.id.as_str());
+        let is_active =
+            state.project_registry.active_project_id.as_deref() == Some(project.id.as_str());
         let icon = project.status.icon();
 
         let name_style = if is_active {

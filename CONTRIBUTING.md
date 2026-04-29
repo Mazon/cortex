@@ -101,6 +101,40 @@ Before submitting a pull request, ensure:
 - [ ] `Cargo.lock` is committed (Cortex is a binary application — lock file ensures reproducible builds)
 - [ ] Commit messages follow [conventional commits](https://www.conventionalcommits.org/) (e.g., `feat: add scroll indicators`)
 
+## CI Pipeline & Branch Protection
+
+All pull requests to `main` must pass the following CI checks before merge:
+
+### Required Checks
+
+| Job | Description | Command |
+|-----|-------------|---------|
+| **Build** | Type-check all targets | `cargo check --all-targets` |
+| **Test** | Run all unit and integration tests | `cargo test --all-targets` |
+| **Clippy** | Lint with warnings as errors | `cargo clippy --all-targets -- -D warnings` |
+| **Format** | Verify code formatting | `cargo fmt --check` |
+| **Docs** | Build docs with no broken links | `cargo doc --no-deps --document-private-items` |
+| **Security** | Audit dependencies for vulnerabilities | `cargo audit` |
+| **MSRV** | Verify minimum supported Rust version | `cargo check` (Rust 1.80) |
+
+### Optional Checks (Informational)
+
+| Job | Description | Notes |
+|-----|-------------|-------|
+| **Semver** | Check semver compatibility | Runs on PRs only; requires published release baseline |
+| **Outdated** | Check for outdated dependencies | Informational only; does not block merge |
+
+### Branch Protection Recommendations
+
+For repository administrators, the following branch protection rules are recommended:
+
+1. **Require status checks to pass before merging:** Enable all "Required" jobs above.
+2. **Require branches to be up to date:** Prevents merge conflicts.
+3. **Require linear history:** Use rebase merges (not squash) to preserve conventional commit messages.
+4. **Restrict who can push to main:** Only allow merge commits via PRs.
+
+These settings can be configured in **Settings → Branches → main → Branch protection rules** on GitHub.
+
 ## Architecture Overview
 
 ```

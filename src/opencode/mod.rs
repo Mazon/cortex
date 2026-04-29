@@ -9,6 +9,6 @@
 //!   stream and dispatches events into [`AppState`](crate::state::types::AppState).
 
 pub mod client;
-pub mod server;
 pub mod events;
+pub mod server;
 pub mod sse;

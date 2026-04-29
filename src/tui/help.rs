@@ -91,11 +91,7 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         format_combo(&kb.kanban_down)
     );
     let _ = writeln!(s, "   {:<16} Create new task", format_combo(&kb.todo_new));
-    let _ = writeln!(
-        s,
-        "   {:<16} Open task detail",
-        format_combo(&kb.task_open)
-    );
+    let _ = writeln!(s, "   {:<16} Open task detail", format_combo(&kb.task_open));
     let _ = writeln!(
         s,
         "   {:<16} Move task forward (→ column)",
@@ -136,39 +132,11 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Drill down into subagent",
         format_combo(&kb.drill_down_subagent)
     );
-    let _ = writeln!(
-        s,
-        "   {:<16} Move task up",
-        format_combo(&kb.task_move_up)
-    );
-    let _ = writeln!(
-        s,
-        "   {:<16} Move task down",
-        format_combo(&kb.task_move_down)
-    );
-    let _ = writeln!(
-        s,
-        "   {:<16} Scroll columns left",
-        format_combo(&kb.scroll_kanban_left)
-    );
-    let _ = writeln!(
-        s,
-        "   {:<16} Scroll columns right",
-        format_combo(&kb.scroll_kanban_right)
-    );
     let _ = writeln!(s);
     let _ = writeln!(s, " Task Editor Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
-    let _ = writeln!(
-        s,
-        "   {:<16} Save task",
-        format_combo(&ek.save)
-    );
-    let _ = writeln!(
-        s,
-        "   {:<16} Cancel and discard",
-        format_combo(&ek.cancel)
-    );
+    let _ = writeln!(s, "   {:<16} Save task", format_combo(&ek.save));
+    let _ = writeln!(s, "   {:<16} Cancel and discard", format_combo(&ek.cancel));
     let _ = writeln!(
         s,
         "   {:<16} Cycle field focus",

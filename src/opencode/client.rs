@@ -5,8 +5,7 @@ use opencode_sdk_rs::resources::app::App;
 use opencode_sdk_rs::resources::event::EventListResponse;
 use opencode_sdk_rs::resources::session::{
     Message, Part, PartInput, Session, SessionChatModel, SessionChatParams, SessionListResponse,
-    SessionMessagesResponse, SessionMessagesResponseItem, TextPartInput,
-    ToolState as SdkToolState,
+    SessionMessagesResponse, SessionMessagesResponseItem, TextPartInput, ToolState as SdkToolState,
 };
 use opencode_sdk_rs::resources::shared::SessionError as SdkSessionError;
 use std::time::Duration;
@@ -35,6 +34,15 @@ impl OpenCodeClient {
     /// Create a new `OpenCodeClient` connected to the given base URL.
     ///
     /// Prefer [`from_config_with_url`] when a config is available.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cortex::opencode::client::OpenCodeClient;
+    ///
+    /// let client = OpenCodeClient::new("http://localhost:11643")?;
+    /// let sessions = client.list_sessions()?;
+    /// ```
     pub fn new(base_url: &str) -> Result<Self> {
         let sdk = opencode_sdk_rs::Opencode::builder()
             .base_url(base_url)
@@ -90,7 +98,10 @@ impl OpenCodeClient {
     ) -> Result<SessionMessagesResponseItem> {
         tracing::debug!(
             "send_prompt: session={}, agent={:?}, model={:?}, text_len={}",
-            session_id, agent, model, text.len()
+            session_id,
+            agent,
+            model,
+            text.len()
         );
         let text_input = TextPartInput {
             text: text.to_string(),
@@ -153,13 +164,13 @@ impl OpenCodeClient {
     /// This is used for lazy-loading subagent output when the user drills
     /// down into a subagent via `ctrl+x`.
     pub async fn fetch_subagent_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
-        let response = self.get_messages(session_id)
-            .await
-            .with_context(|| format!("Failed to fetch messages for subagent session {}", session_id))?;
-        let messages: Vec<TaskMessage> = response
-            .iter()
-            .map(convert_sdk_message)
-            .collect();
+        let response = self.get_messages(session_id).await.with_context(|| {
+            format!(
+                "Failed to fetch messages for subagent session {}",
+                session_id
+            )
+        })?;
+        let messages: Vec<TaskMessage> = response.iter().map(convert_sdk_message).collect();
         Ok(messages)
     }
 
@@ -168,13 +179,11 @@ impl OpenCodeClient {
     /// Used after a session completes to persist the full message history
     /// into `session.messages`, replacing the transient `streaming_text`.
     pub async fn fetch_session_messages(&self, session_id: &str) -> Result<Vec<TaskMessage>> {
-        let response = self.get_messages(session_id)
+        let response = self
+            .get_messages(session_id)
             .await
             .with_context(|| format!("Failed to fetch messages for session {}", session_id))?;
-        let messages: Vec<TaskMessage> = response
-            .iter()
-            .map(convert_sdk_message)
-            .collect();
+        let messages: Vec<TaskMessage> = response.iter().map(convert_sdk_message).collect();
         Ok(messages)
     }
 
@@ -266,13 +275,13 @@ impl OpenCodeClient {
             .build();
 
         let hpx_client = hpx::Client::builder()
-            .timeout(Duration::from_secs(30)) // TCP connect + HTTP headers
+            .connect_timeout(Duration::from_secs(30)) // TCP connect only — NOT response body
             // No read_timeout — rely on TCP keepalive (15s default) to detect
             // dead servers. A read_timeout would kill idle SSE streams since
             // the server doesn't send periodic heartbeats.
-            .tcp_keepalive(Duration::from_secs(15))          // Start probing after 15s idle
+            .tcp_keepalive(Duration::from_secs(15)) // Start probing after 15s idle
             .tcp_keepalive_interval(Duration::from_secs(15)) // Probe every 15s
-            .tcp_keepalive_retries(3)                        // 3 retries → dead in ~60s
+            .tcp_keepalive_retries(3) // 3 retries → dead in ~60s
             .http2_options(http2_opts)
             .build()
             .context("Failed to build hpx client for SSE")?;
@@ -373,46 +382,72 @@ pub fn convert_sdk_message(item: &SessionMessagesResponseItem) -> TaskMessage {
         ),
     };
     let parts: Vec<TaskMessagePart> = item.parts.iter().map(convert_sdk_part).collect();
-    TaskMessage { id, role, parts, created_at }
+    TaskMessage {
+        id,
+        role,
+        parts,
+        created_at,
+    }
 }
 
 /// Convert a single SDK `Part` variant into a Cortex `TaskMessagePart`.
 pub fn convert_sdk_part(part: &Part) -> TaskMessagePart {
     match part {
-        Part::Text(text_part) => TaskMessagePart::Text { text: text_part.text.clone() },
+        Part::Text(text_part) => TaskMessagePart::Text {
+            text: text_part.text.clone(),
+        },
         Part::Tool(tool_part) => {
             let cortex_state = convert_tool_state(&tool_part.state);
             let (input, output, error) = match &tool_part.state {
                 SdkToolState::Pending(_) => (None, None, None),
                 SdkToolState::Running(running) => (
-                    running.input.as_ref().map(|v| serde_json::to_string_pretty(v).unwrap_or_default()),
-                    None, None,
+                    running
+                        .input
+                        .as_ref()
+                        .map(|v| serde_json::to_string_pretty(v).unwrap_or_default()),
+                    None,
+                    None,
                 ),
                 SdkToolState::Completed(completed) => (
                     Some(serde_json::to_string_pretty(&completed.input).unwrap_or_default()),
-                    Some(completed.output.clone()), None,
+                    Some(completed.output.clone()),
+                    None,
                 ),
                 SdkToolState::Error(error_state) => (
                     Some(serde_json::to_string_pretty(&error_state.input).unwrap_or_default()),
-                    None, Some(error_state.error.clone()),
+                    None,
+                    Some(error_state.error.clone()),
                 ),
             };
-            let cached_summary = input.as_ref().map(|i| {
-                crate::state::types::extract_tool_summary(&tool_part.tool, i)
-            });
+            let cached_summary = input
+                .as_ref()
+                .map(|i| crate::state::types::extract_tool_summary(&tool_part.tool, i));
             TaskMessagePart::Tool {
                 id: tool_part.id.clone(),
                 tool: tool_part.tool.clone(),
                 state: cortex_state,
-                input, output, error,
+                input,
+                output,
+                error,
                 cached_summary,
             }
         }
         Part::StepStart(s) => TaskMessagePart::StepStart { id: s.id.clone() },
         Part::StepFinish(s) => TaskMessagePart::StepFinish { id: s.id.clone() },
-        Part::Agent(a) => TaskMessagePart::Agent { id: a.id.clone(), agent: a.name.clone() },
-        Part::Reasoning(r) => TaskMessagePart::Reasoning { text: r.text.clone() },
-        _ => TaskMessagePart::Unknown,
+        Part::Agent(a) => TaskMessagePart::Agent {
+            id: a.id.clone(),
+            agent: a.name.clone(),
+        },
+        Part::Reasoning(r) => TaskMessagePart::Reasoning {
+            text: r.text.clone(),
+        },
+        _ => {
+            tracing::debug!(
+                "Unknown message part type encountered, ignoring — \
+                 the SDK may have added new part types not yet handled"
+            );
+            TaskMessagePart::Unknown
+        }
     }
 }
 
@@ -429,16 +464,28 @@ pub fn convert_tool_state(state: &SdkToolState) -> ToolState {
 /// Convert an SDK `SessionError` to a human-readable error string.
 pub fn convert_session_error(error: &SdkSessionError) -> String {
     match error {
-        SdkSessionError::MessageAbortedError { data } => data.message.clone().unwrap_or_else(|| "Message aborted".to_string()),
-        SdkSessionError::ProviderAuthError { data } => format!("Provider auth error: {} (provider: {})", data.message, data.provider_id),
+        SdkSessionError::MessageAbortedError { data } => data
+            .message
+            .clone()
+            .unwrap_or_else(|| "Message aborted".to_string()),
+        SdkSessionError::ProviderAuthError { data } => format!(
+            "Provider auth error: {} (provider: {})",
+            data.message, data.provider_id
+        ),
         SdkSessionError::UnknownError { data } => data.message.clone(),
         SdkSessionError::ContextOverflowError { data } => data.message.clone(),
         SdkSessionError::APIError { data } => {
-            let status = data.status_code.map(|s| format!(" (status: {})", s)).unwrap_or_default();
+            let status = data
+                .status_code
+                .map(|s| format!(" (status: {})", s))
+                .unwrap_or_default();
             format!("API error: {}{}", data.message, status)
         }
         SdkSessionError::MessageOutputLengthError { .. } => "Message output too long".to_string(),
-        SdkSessionError::StructuredOutputError { data } => format!("Structured output error: {} (retries: {})", data.message, data.retries),
+        SdkSessionError::StructuredOutputError { data } => format!(
+            "Structured output error: {} (retries: {})",
+            data.message, data.retries
+        ),
     }
 }
 
@@ -448,9 +495,22 @@ pub fn extract_permission_fields(
 ) -> Option<(String, String, String, String, Option<String>)> {
     let id = properties.get("id")?.as_str()?.to_string();
     let session_id = properties.get("sessionID")?.as_str()?.to_string();
-    let tool_name = properties.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-    let description = properties.get("title").or_else(|| properties.get("description")).and_then(|v| v.as_str()).unwrap_or("Permission request").to_string();
-    let details = properties.get("details").or_else(|| properties.get("input")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let tool_name = properties
+        .get("tool")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let description = properties
+        .get("title")
+        .or_else(|| properties.get("description"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Permission request")
+        .to_string();
+    let details = properties
+        .get("details")
+        .or_else(|| properties.get("input"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     Some((id, session_id, tool_name, description, details))
 }
 
@@ -582,7 +642,12 @@ mod tests {
         let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
         let events = collect_events(&client).await;
 
-        assert_eq!(events.len(), 1, "expected exactly 1 event, got {}", events.len());
+        assert_eq!(
+            events.len(),
+            1,
+            "expected exactly 1 event, got {}",
+            events.len()
+        );
         match &events[0] {
             Ok(EventListResponse::SessionStatus { properties }) => {
                 assert_eq!(properties.session_id, "sess_001");
@@ -749,13 +814,18 @@ mod tests {
     /// cleanly (return `None`) rather than erroring.
     #[tokio::test]
     async fn sse_stream_ends_on_connection_close() {
-        let payload = "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s_end\"}}\n\n";
+        let payload =
+            "data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"s_end\"}}\n\n";
         let addr = spawn_sse_server(payload).await;
 
         let client = OpenCodeClient::new(&format!("http://{addr}")).unwrap();
         let mut stream = client.subscribe_to_events().await.unwrap();
 
-        let e = stream.next().await.expect("expected event").expect("event should be Ok");
+        let e = stream
+            .next()
+            .await
+            .expect("expected event")
+            .expect("event should be Ok");
         match &e {
             EventListResponse::SessionIdle { properties } => {
                 assert_eq!(properties.session_id, "s_end");
