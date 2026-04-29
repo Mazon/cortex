@@ -275,7 +275,7 @@ impl OpenCodeClient {
             .build();
 
         let hpx_client = hpx::Client::builder()
-            .connect_timeout(Duration::from_secs(30)) // TCP connect only — NOT response body
+            .connect_timeout(Duration::from_secs(10)) // TCP connect only — NOT response body
             // No read_timeout — rely on TCP keepalive (15s default) to detect
             // dead servers. A read_timeout would kill idle SSE streams since
             // the server doesn't send periodic heartbeats.
