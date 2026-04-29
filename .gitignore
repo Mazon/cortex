@@ -1,6 +1,7 @@
 /target
 debug.log
 .opencode/
+.opencode/plans
 .DS_Store
 *.swp
 *.swo
