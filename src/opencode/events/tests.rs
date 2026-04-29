@@ -680,10 +680,11 @@
     // ── Ready status from plan_output ────────────────────────────────────
 
     #[test]
-    fn terminal_column_with_plan_output_gets_ready() {
-        // A task in a terminal column (no auto_progress_to) should get Ready
-        // ("ready") when it has a non-empty plan_output — the plan signals
-        // there's more work to do.
+    fn terminal_column_with_plan_output_gets_complete() {
+        // A task in a terminal column (no auto_progress_to) should get Complete
+        // ("done") even when it has a non-empty plan_output. The plan_output
+        // heuristic was unreliable since all agent text gets captured, so tasks
+        // that finish should always be Complete.
         let (mut state, task_id, session_id) = make_test_state();
         let client = OpenCodeClient::new("http://127.0.0.1").unwrap();
 
@@ -702,10 +703,10 @@
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
-        // Should get Ready — plan_output triggers Ready even in terminal columns.
+        // Should get Complete — plan_output no longer triggers Ready.
         assert_eq!(
             state.tasks.get(&task_id).unwrap().agent_status,
-            AgentStatus::Ready
+            AgentStatus::Complete
         );
     }
 
@@ -790,6 +791,40 @@
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
 
         // Should stay Complete — auto_progress takes priority, keeping "done" status.
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().agent_status,
+            AgentStatus::Complete
+        );
+    }
+
+    #[test]
+    fn running_column_with_plan_output_and_no_auto_progress_gets_complete() {
+        // Regression test for #118: A task in "running" column (no auto_progress_to)
+        // that finishes with plan_output (agent text) should get Complete ("done"),
+        // NOT Ready. The old heuristic used plan_output to detect "more work to do",
+        // but plan_output captures all agent text, making it unreliable.
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config without auto-progression for "running"
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[2].auto_progress_to = None;
+
+        // Move task to "running" column
+        state.move_task(&task_id, KanbanColumn("running".to_string()));
+
+        // Pre-set plan_output (simulating agent having produced output text)
+        state.tasks.get_mut(&task_id).unwrap().plan_output =
+            Some("Done! Implemented the feature successfully.".to_string());
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Should be Complete ("done"), not Ready
         assert_eq!(
             state.tasks.get(&task_id).unwrap().agent_status,
             AgentStatus::Complete

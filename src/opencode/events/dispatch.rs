@@ -84,25 +84,8 @@ pub(crate) fn process_event(
                         if has_questions {
                             state.update_task_agent_status(tid, AgentStatus::Question);
                             None
-                        } else if let Some(ref col) = state.tasks.get(tid).map(|t| t.column.clone())
+                        } else if let Some(ref _col) = state.tasks.get(tid).map(|t| t.column.clone())
                         {
-                            let has_auto_progress =
-                                columns_config.auto_progress_for(&col.0).is_some();
-                            let has_plan = state
-                                .tasks
-                                .get(tid)
-                                .and_then(|t| t.plan_output.as_ref())
-                                .map(|p| !p.trim().is_empty())
-                                .unwrap_or(false);
-                            if !has_auto_progress && has_plan {
-                                // Only set Ready when there is a plan but no
-                                // auto-progress configured — the task has more
-                                // work to do but nowhere to go automatically.
-                                // When auto-progress is configured, keep Complete
-                                // ("done") so the user sees "done" briefly before
-                                // the task moves to the next column.
-                                state.update_task_agent_status(tid, AgentStatus::Ready);
-                            }
                             on_agent_completed(tid, state, columns_config)
                         } else {
                             None
@@ -138,23 +121,7 @@ pub(crate) fn process_event(
                 if has_questions {
                     state.update_task_agent_status(&task_id, AgentStatus::Question);
                     None
-                } else if let Some(ref col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
-                    // process_session_idle sets Complete by default — override to Ready
-                    // only when the task has a non-empty plan_output but NO auto_progress
-                    // configured (meaning the agent produced a plan but there's nowhere
-                    // for it to go automatically). When auto-progress is configured,
-                    // keep Complete ("done") so the user sees "done" before the task
-                    // moves to the next column.
-                    let has_auto_progress = columns_config.auto_progress_for(&col.0).is_some();
-                    let has_plan = state
-                        .tasks
-                        .get(&task_id)
-                        .and_then(|t| t.plan_output.as_ref())
-                        .map(|p| !p.trim().is_empty())
-                        .unwrap_or(false);
-                    if !has_auto_progress && has_plan {
-                        state.update_task_agent_status(&task_id, AgentStatus::Ready);
-                    }
+                } else if let Some(ref _col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
                     // Trigger auto-progression if configured for this column
                     on_agent_completed(&task_id, state, columns_config)
                 } else {
