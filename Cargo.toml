@@ -38,7 +38,7 @@ opencode-sdk-rs = "0.2"
 # hpx — HTTP client used directly for SSE event streaming with per-chunk
 # read_timeout. The SDK uses hpx internally but doesn't expose read_timeout,
 # so we build SSE connections directly for correct long-lived stream handling.
-hpx = "1.4"
+hpx = "2.4"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
