@@ -8,9 +8,9 @@ use crate::config::serialization::build_opencode_config_json;
 use crate::config::types::OpenCodeConfig;
 
 const INITIAL_WAIT: Duration = Duration::from_secs(2);
-const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_START_RETRIES: u32 = 3;
+const MAX_START_RETRIES: u32 = 1;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// Timeout for individual health-check HTTP requests.

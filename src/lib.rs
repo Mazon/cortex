@@ -228,14 +228,52 @@ pub fn run() -> Result<()> {
             spinner_idx = tui::loading::advance_spinner(spinner_idx);
             tui::loading::render_loading_frame(
                 &mut loading_terminal,
-                "Cortex",
+                "Starting server...",
                 spinner_idx,
             )?;
 
-            match server_manager
-                .start_shared(&config.opencode, working_dir)
-                .await
-            {
+            // Pin the server-start future so we can poll it via tokio::select!
+            // while concurrently animating the loading spinner.
+            let server_fut = server_manager.start_shared(&config.opencode, working_dir);
+            tokio::pin!(server_fut);
+
+            const STARTUP_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(15);
+            let start_time = std::time::Instant::now();
+            let mut spinner_ticker =
+                tokio::time::interval(std::time::Duration::from_millis(150));
+
+            let result = loop {
+                tokio::select! {
+                    result = &mut server_fut => {
+                        break result;
+                    }
+                    _ = spinner_ticker.tick() => {
+                        spinner_idx = tui::loading::advance_spinner(spinner_idx);
+                        let elapsed = start_time.elapsed();
+                        let msg = if elapsed < std::time::Duration::from_secs(5) {
+                            "Starting server..."
+                        } else {
+                            "Starting server (still waiting)..."
+                        };
+                        let _ = tui::loading::render_loading_frame(
+                            &mut loading_terminal,
+                            msg,
+                            spinner_idx,
+                        );
+                    }
+                }
+
+                // Hard timeout — bail out if the server still hasn't started.
+                if start_time.elapsed() > STARTUP_TIMEOUT {
+                    break Err(anyhow::anyhow!(
+                        "Server startup timed out after {}s",
+                        STARTUP_TIMEOUT.as_secs()
+                    ));
+                }
+            };
+
+            match result {
                 Ok(url) => {
                     // Create a single shared client using config values (timeouts)
                     // but connected to the actual server URL (which may use a
