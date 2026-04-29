@@ -235,6 +235,14 @@ impl App {
                                 &config.theme,
                             );
                         }
+                        crate::state::types::AppMode::Reports => {
+                            crate::tui::reports::render_reports(
+                                f,
+                                f.area(),
+                                state,
+                                &config.theme,
+                            );
+                        }
                     }
                 })?;
             }
@@ -407,6 +415,9 @@ impl App {
             }
             crate::state::types::AppMode::DiffReview => {
                 self.handle_diff_review_key(key);
+            }
+            crate::state::types::AppMode::Reports => {
+                self.handle_reports_key(key);
             }
         }
     }
@@ -818,11 +829,83 @@ impl App {
             };
             if is_detail_not_focused && key.code == KeyCode::Tab && key.modifiers.is_empty() {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(ed) = state.ui.detail_editor.as_mut() {
-                    ed.is_focused = true;
+                // Cycle focus: output scroll → changed files (if available) → prompt input
+                let has_changed_files = state
+                    .ui
+                    .changed_files
+                    .as_ref()
+                    .map_or(false, |f| !f.is_empty());
+                if has_changed_files && !state.ui.changed_files_focused {
+                    state.ui.changed_files_focused = true;
+                } else {
+                    state.ui.changed_files_focused = false;
+                    if let Some(ed) = state.ui.detail_editor.as_mut() {
+                        ed.is_focused = true;
+                    }
                 }
                 state.mark_render_dirty();
                 return;
+            }
+        }
+
+        // Handle changed-files sidebar focus: intercept keys when it's focused
+        {
+            let is_changed_files_focused = {
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                    && state.ui.changed_files_focused
+                    && !state
+                        .ui
+                        .detail_editor
+                        .as_ref()
+                        .map_or(false, |e| e.is_focused)
+            };
+            if is_changed_files_focused {
+                use crossterm::event::KeyCode;
+                match (key.code, key.modifiers) {
+                    (KeyCode::Up, KeyModifiers::NONE)
+                    | (KeyCode::Char('k'), KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if state.ui.selected_changed_file_index > 0 {
+                            state.ui.selected_changed_file_index -= 1;
+                        }
+                        state.mark_render_dirty();
+                        return;
+                    }
+                    (KeyCode::Down, KeyModifiers::NONE)
+                    | (KeyCode::Char('j'), KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        let max = state
+                            .ui
+                            .changed_files
+                            .as_ref()
+                            .map_or(0, |f| f.len().saturating_sub(1));
+                        if state.ui.selected_changed_file_index < max {
+                            state.ui.selected_changed_file_index += 1;
+                        }
+                        state.mark_render_dirty();
+                        return;
+                    }
+                    (KeyCode::Enter, KeyModifiers::NONE) => {
+                        // Open diff review for the selected file
+                        self.handle_open_file_diff();
+                        return;
+                    }
+                    (KeyCode::Tab, KeyModifiers::NONE) | (KeyCode::Esc, KeyModifiers::NONE) => {
+                        // Unfocus changed files → focus prompt input
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.changed_files_focused = false;
+                        if let Some(ed) = state.ui.detail_editor.as_mut() {
+                            ed.is_focused = true;
+                        }
+                        state.mark_render_dirty();
+                        return;
+                    }
+                    _ => {
+                        // Consume other keys while focused on changed files
+                        return;
+                    }
+                }
             }
         }
 
@@ -1215,6 +1298,9 @@ impl App {
             Some(Action::RetryTask) => self.handle_retry_task(),
             Some(Action::DrillDownSubagent) => self.handle_drill_down_subagent(),
             Some(Action::ReviewChanges) => self.handle_review_changes(),
+            Some(Action::AcceptReview) => self.handle_accept_review(),
+            Some(Action::RejectReview) => self.handle_reject_review(),
+            Some(Action::Reports) => self.handle_reports_toggle(),
             None => {} // Unmatched key, ignore
         }
     }
@@ -1380,18 +1466,142 @@ impl App {
     }
 
     fn handle_open_task_detail(&mut self) {
-        let task_id = {
+        use crate::state::types::FocusedPanel;
+
+        let (task_id, is_reviewable, working_dir) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.ui.focused_task_id.clone()
+            let tid = state.ui.focused_task_id.clone();
+
+            let (reviewable, wd) = tid.as_ref().and_then(|id| {
+                let task = state.tasks.get(id)?;
+                let reviewable = matches!(
+                    task.agent_status,
+                    crate::state::types::AgentStatus::Complete
+                        | crate::state::types::AgentStatus::Ready
+                );
+                let project = state
+                    .project_registry
+                    .projects
+                    .iter()
+                    .find(|p| p.id == task.project_id);
+                let wd = project
+                    .filter(|p| !p.working_directory.is_empty())
+                    .map(|p| p.working_directory.clone());
+                Some((reviewable, wd))
+            }).unwrap_or((false, None));
+
+            (tid, reviewable, wd)
         };
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        match task_id {
-            Some(id) => state.open_task_detail(&id),
-            None => state.set_notification(
-                "No task selected".to_string(),
-                crate::state::types::NotificationVariant::Info,
-                2000,
-            ),
+
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            match task_id {
+                Some(ref id) => {
+                    state.open_task_detail(id);
+                    // Set diff review source so Esc returns to task detail
+                    state.ui.diff_review_source = Some(FocusedPanel::TaskDetail);
+                }
+                None => state.set_notification(
+                    "No task selected".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    2000,
+                ),
+            }
+        }
+
+        // Async load changed files for reviewable tasks
+        if is_reviewable {
+            if let (Some(tid), Some(wd)) = (task_id, working_dir) {
+                let state = self.state.clone();
+                tokio::task::spawn_blocking(move || {
+                    let numstat = std::process::Command::new("git")
+                        .args(["diff", "--numstat", "HEAD"])
+                        .current_dir(&wd)
+                        .output();
+                    let name_status = std::process::Command::new("git")
+                        .args(["diff", "--name-status", "HEAD"])
+                        .current_dir(&wd)
+                        .output();
+
+                    let mut files = Vec::new();
+
+                    if let (Ok(ns_out), Ok(ns_stat)) = (numstat, name_status) {
+                        if ns_out.status.success() && ns_stat.status.success() {
+                            use crate::state::types::{ChangedFileInfo, FileChangeStatus};
+
+                            // Parse name-status into a map: path -> status + old_path
+                            let mut status_map: std::collections::HashMap<String, (FileChangeStatus, Option<String>)> =
+                                std::collections::HashMap::new();
+                            for line in String::from_utf8_lossy(&ns_stat.stdout).lines() {
+                                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                if parts.len() >= 2 {
+                                    let status = match parts[0] {
+                                        "A" => FileChangeStatus::Added,
+                                        "M" => FileChangeStatus::Modified,
+                                        "D" => FileChangeStatus::Deleted,
+                                        "R" => FileChangeStatus::Renamed,
+                                        "C" => FileChangeStatus::Copied,
+                                        _ => FileChangeStatus::Modified,
+                                    };
+                                    let old_path = if (status == FileChangeStatus::Renamed
+                                        || status == FileChangeStatus::Copied)
+                                        && parts.len() >= 3
+                                    {
+                                        Some(parts[1].to_string())
+                                    } else {
+                                        None
+                                    };
+                                    let path = if old_path.is_some() {
+                                        parts.get(2).unwrap_or(&parts[1]).to_string()
+                                    } else {
+                                        parts[1].to_string()
+                                    };
+                                    status_map.insert(path, (status, old_path));
+                                }
+                            }
+
+                            // Parse numstat into counts
+                            let mut count_map: std::collections::HashMap<String, (u32, u32)> =
+                                std::collections::HashMap::new();
+                            for line in String::from_utf8_lossy(&ns_out.stdout).lines() {
+                                let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                if parts.len() >= 3 {
+                                    let adds: u32 = parts[0].parse().unwrap_or(0);
+                                    let dels: u32 = parts[1].parse().unwrap_or(0);
+                                    // Binary files show "-\t-\tpath"
+                                    let real_adds = if parts[0] == "-" { 0 } else { adds };
+                                    let real_dels = if parts[1] == "-" { 0 } else { dels };
+                                    count_map.insert(parts[2].to_string(), (real_adds, real_dels));
+                                }
+                            }
+
+                            // Merge: use status_map as the source of truth for paths
+                            for (path, (status, old_path)) in &status_map {
+                                let (additions, deletions) =
+                                    count_map.get(path).copied().unwrap_or((0, 0));
+                                files.push(ChangedFileInfo {
+                                    path: path.clone(),
+                                    old_path: old_path.clone(),
+                                    status: status.clone(),
+                                    additions,
+                                    deletions,
+                                });
+                            }
+                        }
+                    }
+
+                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                    if state.ui.viewing_task_id.as_deref() == Some(&tid) {
+                        state.ui.changed_files = if files.is_empty() {
+                            None
+                        } else {
+                            Some(files)
+                        };
+                        state.ui.selected_changed_file_index = 0;
+                        state.mark_render_dirty();
+                    }
+                });
+            }
         }
     }
 
@@ -1912,19 +2122,132 @@ impl App {
         });
     }
 
+    /// Open the diff review view focused on a specific file from the changed-files sidebar.
+    ///
+    /// Runs `git diff HEAD -- <path>` in the project's working directory, parses the
+    /// output, and switches to `AppMode::DiffReview` with the selected file pre-loaded.
+    fn handle_open_file_diff(&mut self) {
+        use crate::state::types::{AppMode, DiffReviewState, FocusedPanel};
+
+        let (working_dir, file_path, task_number) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let files = match &state.ui.changed_files {
+                Some(f) if !f.is_empty() => f.clone(),
+                _ => return,
+            };
+            let idx = state.ui.selected_changed_file_index.min(files.len() - 1);
+            let file = &files[idx];
+            let path = file.path.clone();
+
+            let task_id = match &state.ui.viewing_task_id {
+                Some(id) => id.clone(),
+                None => return,
+            };
+
+            let task = match state.tasks.get(&task_id) {
+                Some(t) => t,
+                None => return,
+            };
+
+            let project_id = task.project_id.clone();
+            let task_number = task.number;
+
+            let project = state
+                .project_registry
+                .projects
+                .iter()
+                .find(|p| p.id == project_id);
+
+            let wd = match project {
+                Some(p) if !p.working_directory.is_empty() => p.working_directory.clone(),
+                _ => return,
+            };
+
+            (wd, path, task_number)
+        };
+
+        // Spawn git diff for the specific file on a blocking thread
+        let state = self.state.clone();
+        let target_file_path = file_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new("git")
+                .args(["diff", "HEAD", "--", &target_file_path])
+                .current_dir(&working_dir)
+                .output();
+
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+
+            match output {
+                Ok(out) if out.status.success() => {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    let files = crate::tui::diff_view::parse_git_diff(&raw);
+
+                    // Select the file matching the target path
+                    let selected_idx = files
+                        .iter()
+                        .position(|f| f.path == target_file_path)
+                        .unwrap_or(0);
+
+                    state.ui.diff_review = Some(DiffReviewState {
+                        files,
+                        selected_file_index: selected_idx,
+                        scroll_offset: 0,
+                        error: None,
+                        task_number,
+                        files_list_focused: false,
+                    });
+                    state.ui.diff_review_source = Some(FocusedPanel::TaskDetail);
+                    state.ui.mode = AppMode::DiffReview;
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    state.ui.diff_review = Some(DiffReviewState {
+                        files: Vec::new(),
+                        selected_file_index: 0,
+                        scroll_offset: 0,
+                        error: Some(stderr.to_string()),
+                        task_number,
+                        files_list_focused: false,
+                    });
+                    state.ui.diff_review_source = Some(FocusedPanel::TaskDetail);
+                    state.ui.mode = AppMode::DiffReview;
+                }
+                Err(e) => {
+                    state.set_notification(
+                        format!("Failed to run git diff: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        3000,
+                    );
+                }
+            }
+        });
+    }
+
     /// Open the diff review view for the focused task.
     ///
     /// Runs `git diff HEAD` in the project's working directory, parses the
     /// output, and switches to `AppMode::DiffReview`.  The git command runs
     /// on a background thread so the UI stays responsive.
     fn handle_review_changes(&mut self) {
-        use crate::state::types::{AgentStatus, AppMode, DiffReviewState};
+        use crate::state::types::{AgentStatus, AppMode, DiffReviewState, FocusedPanel};
 
         // Batch-read everything we need while holding the lock once.
         let (working_dir, task_number) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
-            let tid = match state.ui.focused_task_id.as_ref() {
+            // When viewing the task detail panel, prefer viewing_task_id (the task
+            // whose detail page is open) over focused_task_id (the kanban cursor).
+            let tid = if state.ui.focused_panel == FocusedPanel::TaskDetail {
+                state
+                    .ui
+                    .viewing_task_id
+                    .as_ref()
+                    .or(state.ui.focused_task_id.as_ref())
+            } else {
+                state.ui.focused_task_id.as_ref()
+            };
+
+            let tid = match tid {
                 Some(id) => id.clone(),
                 None => {
                     drop(state);
@@ -1989,6 +2312,12 @@ impl App {
             (wd, task_number)
         };
 
+        // Remember where we came from so Esc can return correctly
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ui.diff_review_source = Some(state.ui.focused_panel.clone());
+        }
+
         // Spawn git diff on a blocking thread so we don't freeze the UI.
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || {
@@ -2019,6 +2348,7 @@ impl App {
                         scroll_offset: 0,
                         error: None,
                         task_number,
+                        files_list_focused: false,
                     });
                     state.ui.mode = AppMode::DiffReview;
                 }
@@ -2030,6 +2360,7 @@ impl App {
                         scroll_offset: 0,
                         error: Some(stderr.to_string()),
                         task_number,
+                        files_list_focused: false,
                     });
                     state.ui.mode = AppMode::DiffReview;
                 }
@@ -2042,6 +2373,344 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Accept a reviewed task — run `git add -A && git commit` natively,
+    /// then move the task to the "done" column.
+    fn handle_accept_review(&mut self) {
+        use crate::state::types::{AgentStatus, ReviewStatus};
+
+        // Batch-read: extract task info and working directory in one lock hold.
+        let (task_info, working_dir) = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+
+            // Prefer viewing_task_id (task detail panel) over focused_task_id (kanban cursor).
+            let tid = if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
+                state
+                    .ui
+                    .viewing_task_id
+                    .as_ref()
+                    .or(state.ui.focused_task_id.as_ref())
+                    .cloned()
+            } else {
+                state.ui.focused_task_id.clone()
+            };
+
+            let tid = match tid {
+                Some(id) => id,
+                None => {
+                    drop(state);
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_notification(
+                        "No task selected".to_string(),
+                        crate::state::types::NotificationVariant::Info,
+                        2000,
+                    );
+                    return;
+                }
+            };
+
+            let task = match state.tasks.get(&tid) {
+                Some(t) => t,
+                None => return,
+            };
+
+            // Validate: must be in review column with AwaitingDecision status
+            if task.column.0 != "review" || task.review_status != ReviewStatus::AwaitingDecision {
+                drop(state);
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.set_notification(
+                    "Cannot accept — task is not awaiting review".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    3000,
+                );
+                return;
+            }
+
+            let project_id = task.project_id.clone();
+            let task_number = task.number;
+            let description = task.description.clone();
+            let task_id = tid;
+
+            let project = state
+                .project_registry
+                .projects
+                .iter()
+                .find(|p| p.id == project_id);
+            let wd = match project {
+                Some(p) if !p.working_directory.is_empty() => p.working_directory.clone(),
+                _ => {
+                    drop(state);
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_notification(
+                        "No working directory configured".to_string(),
+                        crate::state::types::NotificationVariant::Warning,
+                        3000,
+                    );
+                    return;
+                }
+            };
+
+            // Mark as Approved + Running so the user sees activity
+            if let Some(task) = state.tasks.get_mut(&task_id) {
+                task.review_status = ReviewStatus::Approved;
+            }
+            state.update_task_agent_status(&task_id, AgentStatus::Running);
+
+            ((task_id, task_number, description, project_id), wd)
+        };
+
+        let (task_id, task_number, description, project_id) = task_info;
+
+        // Derive a commit message from the task title
+        let commit_msg = {
+            let title = crate::state::types::derive_title_from_description(&description);
+            if title.is_empty() {
+                format!("feat: task #{}", task_number)
+            } else {
+                // Capitalize first letter
+                let mut msg = title;
+                if let Some(first) = msg.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                format!("feat: {}", msg)
+            }
+        };
+
+        let state = self.state.clone();
+        let columns_config = self.config.columns.clone();
+        let opencode_config = self.config.opencode.clone();
+
+        // Spawn git add + commit on a blocking thread
+        tokio::task::spawn_blocking(move || {
+            // 1. git add -A
+            let add_result = std::process::Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(&working_dir)
+                .output();
+
+            match add_result {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("git add failed: {}", e);
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!("git add failed: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        5000,
+                    );
+                    // Revert review status
+                    if let Some(task) = s.tasks.get_mut(&task_id) {
+                        task.review_status = ReviewStatus::AwaitingDecision;
+                        task.agent_status = AgentStatus::Complete;
+                    }
+                    s.mark_render_dirty();
+                    return;
+                }
+            }
+
+            // 2. Check if there are changes to commit
+            let status_result = std::process::Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&working_dir)
+                .output();
+
+            let has_changes = match &status_result {
+                Ok(out) => !out.stdout.is_empty(),
+                Err(_) => true, // Assume there are changes if we can't check
+            };
+
+            if !has_changes {
+                let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                s.set_notification(
+                    "No changes to commit — moving to done".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    3000,
+                );
+                // Move to done anyway
+                s.move_task(&task_id, crate::state::types::KanbanColumn("done".to_string()));
+                s.update_task_agent_status(&task_id, AgentStatus::Complete);
+                s.mark_render_dirty();
+                return;
+            }
+
+            // 3. git commit
+            let commit_result = std::process::Command::new("git")
+                .args(["commit", "-m", &commit_msg])
+                .current_dir(&working_dir)
+                .output();
+
+            match commit_result {
+                Ok(out) if out.status.success() => {
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.move_task(&task_id, crate::state::types::KanbanColumn("done".to_string()));
+                    s.update_task_agent_status(&task_id, AgentStatus::Complete);
+                    s.set_notification(
+                        format!("Task #{} committed and moved to done", task_number),
+                        crate::state::types::NotificationVariant::Success,
+                        3000,
+                    );
+                    s.mark_render_dirty();
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!("git commit failed: {}", stderr.trim()),
+                        crate::state::types::NotificationVariant::Error,
+                        5000,
+                    );
+                    // Revert review status
+                    if let Some(task) = s.tasks.get_mut(&task_id) {
+                        task.review_status = ReviewStatus::AwaitingDecision;
+                        task.agent_status = AgentStatus::Complete;
+                    }
+                    s.mark_render_dirty();
+                }
+                Err(e) => {
+                    tracing::error!("git commit failed: {}", e);
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!("git commit failed: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        5000,
+                    );
+                    // Revert review status
+                    if let Some(task) = s.tasks.get_mut(&task_id) {
+                        task.review_status = ReviewStatus::AwaitingDecision;
+                        task.agent_status = AgentStatus::Complete;
+                    }
+                    s.mark_render_dirty();
+                }
+            }
+
+            // Drop unused variables to suppress warnings
+            let _ = (columns_config, opencode_config, project_id);
+        });
+    }
+
+    /// Reject a reviewed task — move it back to the "running" column for re-work.
+    fn handle_reject_review(&mut self) {
+        use crate::state::types::ReviewStatus;
+
+        // Batch-read: extract task info in one lock hold.
+        let task_info = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+
+            let tid = if state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail {
+                state
+                    .ui
+                    .viewing_task_id
+                    .as_ref()
+                    .or(state.ui.focused_task_id.as_ref())
+                    .cloned()
+            } else {
+                state.ui.focused_task_id.clone()
+            };
+
+            let tid = match tid {
+                Some(id) => id,
+                None => {
+                    drop(state);
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_notification(
+                        "No task selected".to_string(),
+                        crate::state::types::NotificationVariant::Info,
+                        2000,
+                    );
+                    return;
+                }
+            };
+
+            let task = match state.tasks.get(&tid) {
+                Some(t) => t,
+                None => return,
+            };
+
+            // Validate: must be in review column with AwaitingDecision status
+            if task.column.0 != "review" || task.review_status != ReviewStatus::AwaitingDecision {
+                drop(state);
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.set_notification(
+                    "Cannot reject — task is not awaiting review".to_string(),
+                    crate::state::types::NotificationVariant::Info,
+                    3000,
+                );
+                return;
+            }
+
+            let task_id = tid;
+            let task_number = task.number;
+            let session_id = task.session_id.clone();
+            let previous_agent = task.agent_type.clone();
+            let project_id = task.project_id.clone();
+
+            (task_id, task_number, session_id, previous_agent, project_id)
+        };
+
+        let (task_id, task_number, session_id, previous_agent, project_id) = task_info;
+
+        // Get the OpenCode client for this project
+        let client = {
+            let _state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            self.opencode_clients.get(&project_id).cloned()
+        };
+
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Mark as Rejected
+        if let Some(task) = state.tasks.get_mut(&task_id) {
+            task.review_status = ReviewStatus::Rejected;
+        }
+
+        // Clear review agent session data so a fresh review runs next time
+        state.clear_session_data(&task_id);
+        // Also clear the session ID so the do agent gets a fresh session
+        state.set_task_session_id(&task_id, None);
+
+        // Move back to "running" column
+        state.move_task(&task_id, crate::state::types::KanbanColumn("running".to_string()));
+
+        // Reset review_status to Pending for the re-work cycle
+        if let Some(task) = state.tasks.get_mut(&task_id) {
+            task.review_status = ReviewStatus::Pending;
+        }
+
+        state.set_notification(
+            format!("Task #{} rejected — sent back for re-work", task_number),
+            crate::state::types::NotificationVariant::Info,
+            3000,
+        );
+        state.mark_render_dirty();
+
+        // Trigger orchestration: start the do agent for the running column
+        if let Some(client) = client {
+            state.update_task_agent_status(&task_id, crate::state::types::AgentStatus::Running);
+            state.set_task_agent_type(
+                &task_id,
+                self.config.columns.agent_for_column("running"),
+            );
+            drop(state);
+
+            crate::orchestration::engine::on_task_moved(
+                &task_id,
+                &crate::state::types::KanbanColumn("running".to_string()),
+                &self.state,
+                &client,
+                &self.config.columns,
+                &self.config.opencode,
+                previous_agent,
+            );
+        } else {
+            state.set_notification(
+                "No OpenCode client — agent dispatch skipped".to_string(),
+                crate::state::types::NotificationVariant::Warning,
+                3000,
+            );
+        }
+
+        // Suppress unused variable warning
+        let _ = session_id;
     }
 
     /// Scan the current view for a drillable subagent `Agent` part.
@@ -2116,34 +2785,128 @@ impl App {
     /// Handle key events in DiffReview mode.
     fn handle_diff_review_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let source = state.ui.diff_review_source.take();
                 state.ui.mode = crate::state::types::AppMode::Normal;
                 state.ui.diff_review = None;
+                // If we came from task detail, restore that focus
+                if source == Some(crate::state::types::FocusedPanel::TaskDetail) {
+                    state.ui.focused_panel = crate::state::types::FocusedPanel::TaskDetail;
+                    // viewing_task_id should still be set
+                }
+            }
+            KeyCode::Tab => {
+                // Toggle focus between file list and diff content
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    review.files_list_focused = !review.files_list_focused;
+                }
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut review) = state.ui.diff_review {
-                    crate::tui::diff_view::scroll_diff(review, 1);
+                    if review.files_list_focused {
+                        // Navigate files in the list
+                        let max = review.files.len().saturating_sub(1);
+                        if review.selected_file_index < max {
+                            review.selected_file_index += 1;
+                            review.scroll_offset = 0;
+                        }
+                    } else {
+                        crate::tui::diff_view::scroll_diff(review, 1);
+                    }
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut review) = state.ui.diff_review {
-                    crate::tui::diff_view::scroll_diff(review, -1);
+                    if review.files_list_focused {
+                        // Navigate files in the list
+                        if review.selected_file_index > 0 {
+                            review.selected_file_index -= 1;
+                            review.scroll_offset = 0;
+                        }
+                    } else {
+                        crate::tui::diff_view::scroll_diff(review, -1);
+                    }
                 }
             }
             KeyCode::Char('l') | KeyCode::Right => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut review) = state.ui.diff_review {
-                    crate::tui::diff_view::next_file(review);
+                    if review.files_list_focused {
+                        // Switch focus to diff content
+                        review.files_list_focused = false;
+                    } else {
+                        crate::tui::diff_view::next_file(review);
+                    }
                 }
             }
             KeyCode::Char('h') | KeyCode::Left => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut review) = state.ui.diff_review {
+                    if !review.files_list_focused {
+                        // Switch focus to file list
+                        review.files_list_focused = true;
+                    } else {
+                        crate::tui::diff_view::prev_file(review);
+                    }
+                }
+            }
+            // Keep existing bracket navigation
+            KeyCode::Char(']') => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
+                    crate::tui::diff_view::next_file(review);
+                }
+            }
+            KeyCode::Char('[') | KeyCode::Backspace => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut review) = state.ui.diff_review {
                     crate::tui::diff_view::prev_file(review);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle the reports view on/off.
+    fn handle_reports_toggle(&mut self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.ui.mode == crate::state::types::AppMode::Reports {
+            // Already in reports — close it
+            state.ui.mode = crate::state::types::AppMode::Normal;
+            state.ui.reports = None;
+        } else {
+            // Enter reports mode
+            state.ui.mode = crate::state::types::AppMode::Reports;
+            drop(state);
+            crate::tui::reports::load_reports_data(&self.state);
+        }
+    }
+
+    /// Handle key events in Reports mode.
+    fn handle_reports_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.mode = crate::state::types::AppMode::Normal;
+                state.ui.reports = None;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut reports) = state.ui.reports {
+                    crate::tui::reports::scroll_reports(reports, 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut reports) = state.ui.reports {
+                    crate::tui::reports::scroll_reports(reports, -1);
                 }
             }
             _ => {}

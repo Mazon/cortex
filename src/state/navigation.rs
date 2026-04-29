@@ -84,6 +84,7 @@ impl AppState {
         self.ui.user_scroll_offset = None;
         self.ui.session_nav_stack.clear();
         self.ui.detail_editor = None;
+        self.ui.clear_changed_files();
     }
 
     /// Save the description from the inline detail editor.

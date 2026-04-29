@@ -60,6 +60,18 @@ pub struct UIState {
     /// State for the diff review view. When `Some`, the user is reviewing
     /// git diff changes for a completed "do" task.
     pub diff_review: Option<DiffReviewState>,
+    /// Changed files list for the currently-viewed reviewable task.
+    /// Populated asynchronously when entering task detail for a Ready/Complete task.
+    pub changed_files: Option<Vec<ChangedFileInfo>>,
+    /// Index of the selected file in the changed-files sidebar.
+    pub selected_changed_file_index: usize,
+    /// Whether the changed-files sidebar is focused (for key routing).
+    pub changed_files_focused: bool,
+    /// Track whether we entered DiffReview from TaskDetail (so Esc returns correctly).
+    pub diff_review_source: Option<FocusedPanel>,
+    /// State for the reports view. When `Some`, the user is viewing
+    /// project statistics and recent git commits.
+    pub reports: Option<ReportsState>,
 }
 
 impl Default for UIState {
@@ -80,7 +92,21 @@ impl Default for UIState {
             user_scroll_offset: None,
             session_nav_stack: Vec::new(),
             diff_review: None,
+            changed_files: None,
+            selected_changed_file_index: 0,
+            changed_files_focused: false,
+            diff_review_source: None,
+            reports: None,
         }
+    }
+}
+
+impl UIState {
+    /// Clear changed-files state (called when switching tasks or closing detail).
+    pub fn clear_changed_files(&mut self) {
+        self.changed_files = None;
+        self.selected_changed_file_index = 0;
+        self.changed_files_focused = false;
     }
 }
 
@@ -692,6 +718,41 @@ impl DetailEditorState {
     }
 }
 
+// ─── Changed Files Sidebar ─────────────────────────────────────────────
+
+/// Status of a file in the git diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileChangeStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    Binary,
+}
+
+/// Summary of a single changed file (lightweight — no diff content).
+#[derive(Debug, Clone)]
+pub struct ChangedFileInfo {
+    /// File path.
+    pub path: String,
+    /// Old path for renames/copies.
+    pub old_path: Option<String>,
+    /// Change status (added, modified, deleted, etc.).
+    pub status: FileChangeStatus,
+    /// Number of addition lines.
+    pub additions: u32,
+    /// Number of deletion lines.
+    pub deletions: u32,
+}
+
+impl ChangedFileInfo {
+    /// Returns `true` if this file was renamed.
+    pub fn is_renamed(&self) -> bool {
+        matches!(self.status, FileChangeStatus::Renamed) && self.old_path.is_some()
+    }
+}
+
 // ─── Diff Review Types ───────────────────────────────────────────────────
 
 /// State for the diff review view, stored on `UIState`.
@@ -707,6 +768,8 @@ pub struct DiffReviewState {
     pub error: Option<String>,
     /// Task number for the header display.
     pub task_number: u32,
+    /// Whether the file list sidebar is focused (vs diff content).
+    pub files_list_focused: bool,
 }
 
 /// A single changed file in the diff.
@@ -743,6 +806,59 @@ pub struct DiffLine {
     pub old_line_no: Option<u32>,
     /// Line number in the new file (for context/addition lines).
     pub new_line_no: Option<u32>,
+}
+
+// ─── Reports Types ────────────────────────────────────────────────────────
+
+/// State for the reports view, stored on `UIState`.
+#[derive(Debug, Clone)]
+pub struct ReportsState {
+    /// Parsed git log entries (last 30 commits).
+    pub commits: Vec<GitCommit>,
+    /// Computed task statistics.
+    pub stats: TaskStats,
+    /// Which commit is currently highlighted.
+    pub selected_index: usize,
+    /// Scroll offset for the commit list.
+    pub scroll_offset: usize,
+    /// Error message if git log or stats computation failed.
+    pub error: Option<String>,
+}
+
+/// A single git commit entry from `git log`.
+#[derive(Debug, Clone)]
+pub struct GitCommit {
+    /// Abbreviated commit hash (7 chars).
+    pub hash: String,
+    /// First line of the commit message.
+    pub message: String,
+    /// Author name.
+    pub author: String,
+    /// Relative date string (e.g., "2 hours ago").
+    pub date: String,
+    /// Unix timestamp for sorting.
+    pub timestamp: i64,
+}
+
+/// Computed task statistics for the reports view.
+#[derive(Debug, Clone, Default)]
+pub struct TaskStats {
+    /// Total number of tasks.
+    pub total_tasks: usize,
+    /// Number of completed tasks (in "done" column or Complete status).
+    pub completed_tasks: usize,
+    /// Number of failed/error tasks.
+    pub failed_tasks: usize,
+    /// Number of currently running tasks.
+    pub running_tasks: usize,
+    /// Average task duration in seconds (created_at → entered done column).
+    pub avg_time_secs: f64,
+    /// Longest task duration in seconds.
+    pub max_time_secs: f64,
+    /// Shortest task duration in seconds.
+    pub min_time_secs: f64,
+    /// Task completion rate as a percentage (0.0–100.0).
+    pub completion_rate: f64,
 }
 
 // ─── Session Tracker ─────────────────────────────────────────────────────
@@ -1481,6 +1597,7 @@ mod tests {
             queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
+            review_status: ReviewStatus::Pending,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
@@ -1519,6 +1636,7 @@ mod tests {
             queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
+            review_status: ReviewStatus::Pending,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),

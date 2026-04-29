@@ -2,7 +2,7 @@
 
 use super::format_elapsed_time;
 use crate::config::types::ThemeConfig;
-use crate::state::types::{AgentStatus, CortexTask};
+use crate::state::types::{AgentStatus, CortexTask, ReviewStatus};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
@@ -17,6 +17,9 @@ pub fn render_task_card(
 ) {
     let border_color = if is_selected {
         Color::Cyan
+    } else if task.review_status == ReviewStatus::AwaitingDecision {
+        // Tasks awaiting review decision get a yellow/amber border
+        Color::Rgb(200, 170, 50)
     } else if task.agent_status == AgentStatus::Running {
         // Running tasks get a colored border using the theme working color
         // for a subtle visual indicator that distinguishes them from idle tasks.
@@ -163,6 +166,11 @@ pub fn render_task_card(
     // Add a dim keybinding hint for hung/error tasks to improve discoverability
     if matches!(task.agent_status, AgentStatus::Hung | AgentStatus::Error) {
         status_spans.push(Span::styled(" [R]", Style::default().fg(Color::DarkGray)));
+    }
+
+    // Add review-pending indicator for tasks awaiting human decision
+    if task.review_status == ReviewStatus::AwaitingDecision {
+        status_spans.push(Span::styled(" [review]", Style::default().fg(Color::Rgb(200, 170, 50))));
     }
 
     if inner.height >= 1 {

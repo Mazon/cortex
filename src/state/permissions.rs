@@ -130,6 +130,7 @@ mod tests {
             queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: question_count,
+            review_status: ReviewStatus::Pending,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),

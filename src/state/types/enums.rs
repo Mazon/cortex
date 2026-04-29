@@ -116,6 +116,19 @@ pub enum ToolState {
     Error,
 }
 
+/// Review decision for tasks in the review column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReviewStatus {
+    /// Review not yet started or still in progress.
+    Pending,
+    /// Reviewer agent has completed; awaiting human decision.
+    AwaitingDecision,
+    /// User approved the changes.
+    Approved,
+    /// User rejected the changes.
+    Rejected,
+}
+
 /// Application mode — determines rendering and key routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
@@ -128,6 +141,8 @@ pub enum AppMode {
     ProjectRename,
     /// Diff review mode — view git diff for a completed "do" task.
     DiffReview,
+    /// Reports mode — view project statistics and recent git commits.
+    Reports,
 }
 
 /// Which field is focused in the task editor.

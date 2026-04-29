@@ -30,6 +30,11 @@ pub enum Action {
     DrillDownSubagent,
     // Review changes (git diff)
     ReviewChanges,
+    // Review approve/reject
+    AcceptReview,
+    RejectReview,
+    // Reports view
+    Reports,
     // Project operations
     SetWorkingDirectory,
     DeleteProject,
@@ -77,6 +82,9 @@ impl KeyMatcher {
             Action::DrillDownSubagent,
         );
         parse_and_add(&mut bindings, &config.review_changes, Action::ReviewChanges);
+        parse_and_add(&mut bindings, &config.accept_review, Action::AcceptReview);
+        parse_and_add(&mut bindings, &config.reject_review, Action::RejectReview);
+        parse_and_add(&mut bindings, &config.reports, Action::Reports);
         parse_and_add(
             &mut bindings,
             &config.set_working_directory,

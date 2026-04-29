@@ -8,6 +8,7 @@ pub mod kanban;
 pub mod keys;
 pub mod loading;
 pub mod prompt;
+pub mod reports;
 pub mod sidebar;
 pub mod status_bar;
 pub mod task_card;
@@ -24,6 +25,11 @@ use ratatui::widgets::Paragraph;
 /// layout, preventing garbled output from overlapping widgets.
 const MIN_TERM_WIDTH: u16 = 60;
 const MIN_TERM_HEIGHT: u16 = 10;
+
+/// Width of the changed-files sidebar panel in the task detail view.
+const CHANGED_FILES_PANEL_WIDTH: u16 = 28;
+/// Minimum width required for the task detail panel when the changed-files sidebar is shown.
+const MIN_TASK_DETAIL_WIDTH: u16 = 40;
 
 /// Format elapsed time since the given timestamp.
 pub(crate) fn format_elapsed_time(entered_at: i64, now: i64) -> String {
@@ -87,11 +93,28 @@ pub fn render_normal(
         .constraints(v_constraints)
         .split(area);
 
-    // Horizontal layout for content area: sidebar | kanban
-    let h_constraints = [
-        Constraint::Length(sidebar_width),
-        Constraint::Min(0), // Kanban takes remaining space
-    ];
+    // Horizontal layout for content area: sidebar | kanban (or sidebar | task_detail | changed_files)
+    let show_changed_files = matches!(state.ui.focused_panel, FocusedPanel::TaskDetail)
+        && state
+            .ui
+            .changed_files
+            .as_ref()
+            .map_or(false, |f| !f.is_empty())
+        && area.width
+            >= sidebar_width + CHANGED_FILES_PANEL_WIDTH + MIN_TASK_DETAIL_WIDTH;
+
+    let h_constraints: Vec<Constraint> = if show_changed_files {
+        vec![
+            Constraint::Length(sidebar_width),
+            Constraint::Min(MIN_TASK_DETAIL_WIDTH),
+            Constraint::Length(CHANGED_FILES_PANEL_WIDTH),
+        ]
+    } else {
+        vec![
+            Constraint::Length(sidebar_width),
+            Constraint::Min(0),
+        ]
+    };
     let h_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(h_constraints)
@@ -116,6 +139,11 @@ pub fn render_normal(
                 kanban::render_kanban(f, h_layout[1], state, config, now);
             }
         }
+    }
+
+    // Render the changed-files sidebar if visible
+    if show_changed_files {
+        task_detail::render_changed_files_panel(f, h_layout[2], state, &config.theme);
     }
     let status_area = v_layout[1].inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
     status_bar::render_status_bar(f, status_area, state, &config.theme);

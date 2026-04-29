@@ -163,7 +163,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         &config.theme,
                         now,
                     );
-                    card_y += card_height + 1;
+                    card_y += card_height;
                     rendered_count += 1;
                 }
             }

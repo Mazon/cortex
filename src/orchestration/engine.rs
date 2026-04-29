@@ -9,7 +9,7 @@ use tokio::sync::Semaphore;
 use crate::config::types::{ColumnsConfig, OpenCodeConfig};
 use crate::error::AppError;
 use crate::opencode::client::OpenCodeClient;
-use crate::state::types::{AgentStatus, AppState, KanbanColumn};
+use crate::state::types::{AgentStatus, AppState, KanbanColumn, ReviewStatus};
 
 /// Maximum backoff delay cap (30 seconds).
 const MAX_BACKOFF_DELAY: Duration = Duration::from_secs(30);
@@ -700,6 +700,14 @@ pub fn on_agent_completed(
                 // Target column has no agent — mark task as Complete ("done")
                 state.update_task_agent_status(task_id, AgentStatus::Complete);
             }
+        } else {
+            // No auto-progression — task stays in this column.
+            // If this is the review column, mark the task as awaiting human decision.
+            if col.0 == "review" {
+                if let Some(task) = state.tasks.get_mut(task_id) {
+                    task.review_status = ReviewStatus::AwaitingDecision;
+                }
+            }
         }
     }
     None
@@ -744,6 +752,7 @@ mod tests {
             queued_prompt: None,
             pending_permission_count: 0,
             pending_question_count: 0,
+            review_status: crate::state::types::ReviewStatus::Pending,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
@@ -968,6 +977,77 @@ mod tests {
         assert_eq!(
             state.tasks.get(&task_id).unwrap().agent_status,
             AgentStatus::Complete
+        );
+    }
+
+    // ── Review status on agent completion ────────────────────────────────
+
+    #[test]
+    fn review_agent_completion_sets_awaiting_decision() {
+        let (mut state, task_id) = make_state_with_task_in_column("review");
+
+        // Config: review column has an agent but no auto-progression
+        let mut columns_config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig {
+                    id: "running".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("do".to_string()),
+                    auto_progress_to: Some("review".to_string()),
+                },
+                ColumnConfig {
+                    id: "review".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("reviewer-alpha".to_string()),
+                    auto_progress_to: None, // Terminal column — no auto-progress
+                },
+            ],
+            visible_ids: Vec::new(),
+        };
+        columns_config.finalize();
+
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
+
+        // Task should stay in "review" column
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        // No auto-progress action
+        assert!(action.is_none());
+        // Review status should be AwaitingDecision
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().review_status,
+            ReviewStatus::AwaitingDecision
+        );
+    }
+
+    #[test]
+    fn non_review_terminal_column_does_not_set_awaiting_decision() {
+        let (mut state, task_id) = make_state_with_task_in_column("running");
+
+        // Config: running has agent but no auto-progression
+        let mut columns_config = ColumnsConfig {
+            definitions: vec![ColumnConfig {
+                id: "running".to_string(),
+                display_name: None,
+                visible: true,
+                agent: Some("do".to_string()),
+                auto_progress_to: None,
+            }],
+            visible_ids: Vec::new(),
+        };
+        columns_config.finalize();
+
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
+
+        // Task should stay in "running" column
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+        // No action
+        assert!(action.is_none());
+        // Review status should still be Pending (not in review column)
+        assert_eq!(
+            state.tasks.get(&task_id).unwrap().review_status,
+            ReviewStatus::Pending
         );
     }
 

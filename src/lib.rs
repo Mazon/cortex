@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use futures::stream::{FuturesUnordered, StreamExt};
 use persistence::db::Db;
 use state::types::{AgentStatus, AppState};
 use tracing_subscriber::prelude::*;
@@ -223,11 +224,11 @@ pub fn run() -> Result<()> {
             .map(|p| (p.id.clone(), p.name.clone(), p.working_directory.clone()))
             .collect();
 
-        if let Some((_, project_name, working_dir)) = projects_snapshot.first() {
+        if let Some((_, _, working_dir)) = projects_snapshot.first() {
             spinner_idx = tui::loading::advance_spinner(spinner_idx);
             tui::loading::render_loading_frame(
                 &mut loading_terminal,
-                &format!("Starting shared server ({}...)...", project_name),
+                "Cortex",
                 spinner_idx,
             )?;
 
@@ -378,18 +379,28 @@ pub fn run() -> Result<()> {
                     count = rehydrate_tasks.len(),
                     "Rehydrating sessions for active tasks after restart"
                 );
-            }
 
-            for (task_id, session_id) in &rehydrate_tasks {
-                if let Some(client) = opencode_clients.values().next() {
-                    match client.fetch_session_messages(session_id).await {
+                let client = opencode_clients.values().next().unwrap().clone();
+                let mut futures = FuturesUnordered::new();
+
+                for (task_id, session_id) in &rehydrate_tasks {
+                    let client = client.clone();
+                    let task_id = task_id.clone();
+                    let session_id = session_id.clone();
+                    futures.push(async move {
+                        let result = client.fetch_session_messages(&session_id).await;
+                        (task_id, session_id, result)
+                    });
+                }
+
+                while let Some((task_id, session_id, result)) = futures.next().await {
+                    match result {
                         Ok(messages) => {
                             let mut state = state.lock().unwrap_or_else(|e| {
                                 tracing::error!("AppState mutex poisoned, recovering: {}", e);
                                 e.into_inner()
                             });
-                            state.rehydrate_task_session(task_id, messages.clone());
-
+                            state.rehydrate_task_session(&task_id, messages.clone());
                             tracing::info!(
                                 task_id = %task_id,
                                 session_id = %session_id,
@@ -408,7 +419,7 @@ pub fn run() -> Result<()> {
                                 tracing::error!("AppState mutex poisoned, recovering: {}", e);
                                 e.into_inner()
                             });
-                            state.mark_orphaned_running_task(task_id);
+                            state.mark_orphaned_running_task(&task_id);
                         }
                     }
                 }

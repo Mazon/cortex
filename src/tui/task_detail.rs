@@ -12,7 +12,8 @@
 
 use super::format_elapsed_time;
 use crate::state::types::{
-    AgentStatus, AppState, CortexTask, MessageRole, TaskDetailSession, TaskMessagePart, ToolState,
+    AgentStatus, AppState, CortexTask, MessageRole, ReviewStatus, TaskDetailSession, TaskMessagePart,
+    ToolState,
 };
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -104,6 +105,14 @@ pub fn render_task_detail(
         .as_ref()
         .map_or(false, |e| e.discard_warning_shown);
 
+    // Whether the task's changes can be reviewed (Ready or Complete)
+    let is_reviewable =
+        matches!(task.agent_status, AgentStatus::Ready | AgentStatus::Complete);
+
+    // Whether the task is awaiting review decision (review summary block)
+    let is_awaiting_review = task.column.0 == "review"
+        && task.review_status == ReviewStatus::AwaitingDecision;
+
     // Clone data needed after mutable borrow of state (for description editor)
 
     // Subagent summary
@@ -130,12 +139,15 @@ pub fn render_task_detail(
     let prompt_input_height: u16 = 3;
     // Permissions: bordered block needs 3 rows
     let permission_rows: u16 = if has_permissions { 3 } else { 0 };
+    // Review summary: bordered block needs 3 rows
+    let review_summary_rows: u16 = if is_awaiting_review { 3 } else { 0 };
 
     // Calculate available space for streaming
     let fixed_total = metadata_height
         + separator_height
         + breadcrumb_rows
         + subagent_block_rows
+        + review_summary_rows
         + permission_rows
         + prompt_input_height
         + footer_height;
@@ -149,9 +161,10 @@ pub fn render_task_detail(
     //   [2] breadcrumb (0 or 1)
     //   [3] subagent summary (0 or variable)
     //   [4] streaming (Min(0) — fills remaining)
-    //   [5] permissions (0 or 3)
-    //   [6] prompt input (3 rows fixed)
-    //   [7] footer (1 row)
+    //   [5] review summary (0 or 3)
+    //   [6] permissions (0 or 3)
+    //   [7] prompt input (3 rows fixed)
+    //   [8] footer (1 row)
 
     let v_constraints: Vec<Constraint> = vec![
         Constraint::Length(metadata_height),     // [0] Metadata header
@@ -159,9 +172,10 @@ pub fn render_task_detail(
         Constraint::Length(breadcrumb_rows),     // [2] Breadcrumb
         Constraint::Length(subagent_block_rows), // [3] Subagent summary
         Constraint::Min(available),              // [4] Streaming block
-        Constraint::Length(permission_rows),     // [5] Permissions
-        Constraint::Length(prompt_input_height), // [6] Prompt input
-        Constraint::Length(footer_height),       // [7] Footer
+        Constraint::Length(review_summary_rows), // [5] Review summary
+        Constraint::Length(permission_rows),     // [6] Permissions
+        Constraint::Length(prompt_input_height), // [7] Prompt input
+        Constraint::Length(footer_height),       // [8] Footer
     ];
 
     let v_layout = Layout::default()
@@ -172,7 +186,7 @@ pub fn render_task_detail(
     // ── Render sections ────────────────────────────────────────────────
 
     // 1. Metadata header (two rows)
-    render_metadata_header(f, v_layout[0], task, theme, now);
+    render_metadata_header(f, v_layout[0], task, theme, now, &state.ui.changed_files);
 
     // 2. Separator line
     render_separator(f, v_layout[1]);
@@ -194,25 +208,30 @@ pub fn render_task_detail(
         render_streaming_block(f, v_layout[4], state, task_id, now);
     }
 
-    // 6. Pending permissions / questions
+    // 6. Review summary (only when task is awaiting review decision)
+    if is_awaiting_review {
+        render_review_summary(f, v_layout[5], state, task_id);
+    }
+
+    // 7. Pending permissions / questions
     if has_permissions {
         if is_drilled {
             if let Some(ref sid) = drilled_session_id {
                 if let Some(session) = state.session_tracker.subagent_session_data.get(sid) {
-                    render_permissions(f, v_layout[5], session);
+                    render_permissions(f, v_layout[6], session);
                 }
             }
         } else if let Some(session) = state.session_tracker.task_sessions.get(task_id) {
-            render_permissions(f, v_layout[5], session);
+            render_permissions(f, v_layout[6], session);
         }
     }
 
-    // 7. Prompt input (always editable, single-line)
+    // 8. Prompt input (always editable, single-line)
     if !is_drilled {
-        render_prompt_input_block(f, v_layout[6], task_id, state);
+        render_prompt_input_block(f, v_layout[7], task_id, state);
     }
 
-    // 8. Footer key hints
+    // 9. Footer key hints
     let has_scrollable_output = if is_drilled {
         drilled_session_id
             .as_ref()
@@ -227,13 +246,24 @@ pub fn render_task_detail(
             .map(|(_, lines)| lines.len() > v_layout[4].height as usize)
             .unwrap_or(false)
     };
+    let has_changed_files = state
+        .ui
+        .changed_files
+        .as_ref()
+        .map_or(false, |f| !f.is_empty());
+    let changed_files_focused = state.ui.changed_files_focused;
+
     render_footer(
         f,
-        v_layout[7],
+        v_layout[8],
         has_scrollable_output,
         is_drilled,
         editor_is_focused,
         editor_discard_warning,
+        is_reviewable,
+        is_awaiting_review,
+        has_changed_files,
+        changed_files_focused,
     );
 }
 
@@ -256,13 +286,14 @@ fn render_separator(f: &mut Frame, area: Rect) {
 /// Render the two-row metadata header.
 ///
 /// Row 1: Task number badge + Title + status pill (right-aligned)
-/// Row 2: Agent type icon + Column name + Timer + Permission indicators
+/// Row 2: Agent type icon + Column name + Timer + Permission indicators + Changed files summary
 fn render_metadata_header(
     f: &mut Frame,
     area: Rect,
     task: &CortexTask,
     theme: &crate::config::types::ThemeConfig,
     now: i64,
+    changed_files: &Option<Vec<crate::state::types::ChangedFileInfo>>,
 ) {
     if area.height < 2 || area.width == 0 {
         return;
@@ -368,6 +399,27 @@ fn render_metadata_header(
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
+    }
+
+    // Changed files summary indicator
+    if let Some(files) = changed_files {
+        if !files.is_empty() {
+            let total_additions: u32 = files.iter().map(|f| f.additions).sum();
+            let total_deletions: u32 = files.iter().map(|f| f.deletions).sum();
+            row2_spans.push(Span::raw("  "));
+            row2_spans.push(Span::styled(
+                format!("{} files ", files.len()),
+                Style::default().fg(Color::Rgb(100, 104, 120)),
+            ));
+            row2_spans.push(Span::styled(
+                format!("+{} ", total_additions),
+                Style::default().fg(theme.done_color()),
+            ));
+            row2_spans.push(Span::styled(
+                format!("-{}", total_deletions),
+                Style::default().fg(theme.error_color()),
+            ));
+        }
     }
 
     let row2_area = Rect::new(area.x, area.y + 1, area.width, 1);
@@ -1380,6 +1432,106 @@ fn render_subagent_streaming_block(f: &mut Frame, area: Rect, state: &mut AppSta
     }
 }
 
+/// Render the review summary block for tasks awaiting human decision.
+///
+/// Shows the review verdict and approve/reject key hints.
+fn render_review_summary(f: &mut Frame, area: Rect, state: &AppState, task_id: &str) {
+    if area.height < 3 || area.width == 0 {
+        return;
+    }
+
+    // Extract the last assistant message text from the session as the review summary
+    let last_assistant_text = state
+        .session_tracker
+        .task_sessions
+        .get(task_id)
+        .and_then(|session| {
+            session
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == MessageRole::Assistant)
+        })
+        .and_then(|msg| {
+            msg.parts.iter().find_map(|p| {
+                if let TaskMessagePart::Text { text } = p {
+                    let first_line = text.lines().next().unwrap_or("");
+                    let truncated: String = first_line.chars().take(80).collect();
+                    if truncated.is_empty() {
+                        None
+                    } else {
+                        Some(truncated)
+                    }
+                } else {
+                    None
+                }
+            })
+        });
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(200, 170, 50)))
+        .title(Span::styled(
+            " Review — Awaiting Decision ",
+            Style::default()
+                .fg(Color::Rgb(200, 170, 50))
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let mut spans: Vec<Span<'_>> = Vec::new();
+
+    if let Some(summary) = last_assistant_text {
+        spans.push(Span::styled(" 🔍 ", Style::default().fg(Color::White)));
+        spans.push(Span::styled(
+            summary,
+            Style::default().fg(Color::Rgb(200, 200, 210)),
+        ));
+    } else {
+        spans.push(Span::styled(
+            " Review complete — review the output above and decide",
+            Style::default().fg(Color::Rgb(160, 160, 180)),
+        ));
+    }
+
+    // Key hints on the same line
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled("[", Style::default().fg(Color::Rgb(80, 84, 100))));
+    spans.push(Span::styled(
+        "a",
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(":accept", Style::default().fg(Color::Rgb(80, 84, 100))));
+    spans.push(Span::styled(" / ", Style::default().fg(Color::Rgb(60, 64, 80))));
+    spans.push(Span::styled(
+        "Shift+R",
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(":reject", Style::default().fg(Color::Rgb(80, 84, 100))));
+    spans.push(Span::styled(" / ", Style::default().fg(Color::Rgb(60, 64, 80))));
+    spans.push(Span::styled(
+        "Shift+D",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(":diff", Style::default().fg(Color::Rgb(80, 84, 100))));
+    spans.push(Span::styled("]", Style::default().fg(Color::Rgb(80, 84, 100))));
+
+    let para = Paragraph::new(Line::from(spans));
+    f.render_widget(para, inner);
+}
+
 /// Render pending permissions and questions in a bordered block.
 ///
 /// Shows permission details with tool name, description, and action hints.
@@ -1534,6 +1686,10 @@ fn render_footer(
     is_drilled: bool,
     editor_focused: bool,
     _editor_discard_warning: bool,
+    is_reviewable: bool,
+    is_awaiting_review: bool,
+    has_changed_files: bool,
+    changed_files_focused: bool,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -1575,10 +1731,30 @@ fn render_footer(
 
         // Focus prompt input group (only when not drilled into subagent)
         if !is_drilled {
-            groups.push(vec![
-                Span::styled("Tab", key),
-                Span::styled(" focus prompt", desc),
-            ]);
+            if has_changed_files {
+                if changed_files_focused {
+                    groups.push(vec![
+                        Span::styled("↑↓", key),
+                        Span::styled("/", pipe),
+                        Span::styled("j/k", key),
+                        Span::styled(" navigate  ", desc),
+                        Span::styled("Enter", key),
+                        Span::styled(" open diff  ", desc),
+                        Span::styled("Tab", key),
+                        Span::styled(" focus prompt", desc),
+                    ]);
+                } else {
+                    groups.push(vec![
+                        Span::styled("Tab", key),
+                        Span::styled(" focus files", desc),
+                    ]);
+                }
+            } else {
+                groups.push(vec![
+                    Span::styled("Tab", key),
+                    Span::styled(" focus prompt", desc),
+                ]);
+            }
         }
 
         // Actions group
@@ -1593,13 +1769,35 @@ fn render_footer(
             Span::styled(drill_label, desc),
         ]);
 
-        // Approve/reject group
-        groups.push(vec![
-            Span::styled("y", key),
-            Span::styled(" approve  ", desc),
-            Span::styled("n", key),
-            Span::styled(" reject", desc),
-        ]);
+        // Approve/reject group (only when NOT in review-awaiting state)
+        if !is_awaiting_review {
+            groups.push(vec![
+                Span::styled("y", key),
+                Span::styled(" approve  ", desc),
+                Span::styled("n", key),
+                Span::styled(" reject", desc),
+            ]);
+        }
+
+        // Review-specific group (only when awaiting review decision)
+        if is_awaiting_review {
+            groups.push(vec![
+                Span::styled("a", key),
+                Span::styled(" accept  ", desc),
+                Span::styled("Shift+R", key),
+                Span::styled(" reject  ", desc),
+                Span::styled("Shift+D", key),
+                Span::styled(" diff", desc),
+            ]);
+        }
+
+        // Review changes (diff) group — only when task is reviewable
+        if is_reviewable && !is_drilled {
+            groups.push(vec![
+                Span::styled("Shift+D", key),
+                Span::styled(" diff", desc),
+            ]);
+        }
 
         // General group
         groups.push(vec![Span::styled("Esc", key), Span::styled(" back", desc)]);
@@ -1616,4 +1814,189 @@ fn render_footer(
 
     let para = Paragraph::new(Line::from(spans));
     f.render_widget(para, area);
+}
+
+// ─── Changed Files Sidebar ─────────────────────────────────────────────
+
+/// Render the changed-files sidebar panel on the right side of the task detail view.
+///
+/// Shows a list of changed files with status icons (A/M/D/R), file paths,
+/// and addition/deletion counts. The selected file is highlighted.
+pub fn render_changed_files_panel(
+    f: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+    theme: &crate::config::types::ThemeConfig,
+) {
+    let files = match &state.ui.changed_files {
+        Some(f) if !f.is_empty() => f,
+        _ => return,
+    };
+
+    let title = format!(" Files ({}) ", files.len());
+    let border_color = if state.ui.changed_files_focused {
+        Color::Cyan
+    } else {
+        Color::Rgb(60, 64, 80)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Rgb(140, 144, 170))
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    // Reserve 1 row at the bottom for the total summary
+    let list_height = inner.height.saturating_sub(1) as usize;
+    let selected = state.ui.selected_changed_file_index.min(files.len().saturating_sub(1));
+
+    // Calculate scroll offset to keep the selected item visible
+    let scroll_offset = if selected >= list_height {
+        selected - list_height + 1
+    } else {
+        0
+    };
+
+    // Build visible file entries
+    let total_additions: u32 = files.iter().map(|f| f.additions).sum();
+    let total_deletions: u32 = files.iter().map(|f| f.deletions).sum();
+
+    let visible_files: Vec<Line<'_>> = files
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(list_height)
+        .map(|(i, file)| {
+            let is_selected = i == selected;
+
+            let bg = if is_selected {
+                Color::Rgb(45, 48, 62)
+            } else {
+                Color::Rgb(30, 34, 50)
+            };
+
+            let status_icon = match file.status {
+                crate::state::types::FileChangeStatus::Added => ("A", theme.done_color()),
+                crate::state::types::FileChangeStatus::Modified => ("M", Color::Yellow),
+                crate::state::types::FileChangeStatus::Deleted => ("D", theme.error_color()),
+                crate::state::types::FileChangeStatus::Renamed => ("R", Color::Rgb(100, 149, 237)),
+                crate::state::types::FileChangeStatus::Copied => ("C", Color::Rgb(100, 149, 237)),
+                crate::state::types::FileChangeStatus::Binary => ("B", Color::DarkGray),
+            };
+
+            // Truncate file path to fit
+            let max_path_len = (inner.width as usize).saturating_sub(10); // "A " + " +99-99 "
+            let display_path = if file.is_renamed() {
+                if let Some(ref old) = file.old_path {
+                    format!(
+                        "{} → {}",
+                        truncate_path(old, max_path_len / 2),
+                        truncate_path(&file.path, max_path_len / 2)
+                    )
+                } else {
+                    truncate_path(&file.path, max_path_len)
+                }
+            } else {
+                truncate_path(&file.path, max_path_len)
+            };
+
+            let add_del = if file.additions > 0 || file.deletions > 0 {
+                format!("+{} -{}", file.additions, file.deletions)
+            } else {
+                String::new()
+            };
+
+            Line::from(vec![
+                Span::styled(
+                    format!("{} ", status_icon.0),
+                    Style::default().fg(status_icon.1).bg(bg),
+                ),
+                Span::styled(
+                    display_path,
+                    Style::default()
+                        .fg(if is_selected {
+                            Color::White
+                        } else {
+                            Color::Rgb(160, 164, 180)
+                        })
+                        .bg(bg),
+                ),
+                Span::styled(
+                    format!(" {}", add_del),
+                    Style::default().fg(Color::Rgb(100, 104, 120)).bg(bg),
+                ),
+            ])
+        })
+        .collect();
+
+    // Render the file list
+    if !visible_files.is_empty() {
+        let list_para = Paragraph::new(visible_files);
+        f.render_widget(
+            list_para,
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: inner.width,
+                height: list_height as u16,
+            },
+        );
+    }
+
+    // Render the total summary at the bottom
+    let summary_y = inner.y + list_height as u16;
+    let summary = Line::from(vec![
+        Span::styled(
+            format!(" +{} ", total_additions),
+            Style::default().fg(theme.done_color()),
+        ),
+        Span::styled(
+            format!("-{} ", total_deletions),
+            Style::default().fg(theme.error_color()),
+        ),
+    ]);
+    let summary_para = Paragraph::new(summary);
+    f.render_widget(
+        summary_para,
+        Rect {
+            x: inner.x,
+            y: summary_y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+}
+
+/// Truncate a file path with "…" in the middle if it exceeds max_len chars.
+fn truncate_path(path: &str, max_len: usize) -> String {
+    let len = path.chars().count();
+    if len <= max_len {
+        return path.to_string();
+    }
+    if max_len < 5 {
+        return path.chars().take(max_len).collect();
+    }
+    let half = (max_len - 1) / 2;
+    let chars: Vec<char> = path.chars().collect();
+    let start: String = chars.iter().take(half).collect();
+    let end: String = chars
+        .iter()
+        .rev()
+        .take(max_len - half - 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{}…{}", start, end)
 }

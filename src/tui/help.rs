@@ -129,8 +129,32 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
     );
     let _ = writeln!(
         s,
+        "   {:<16} Reports view",
+        format_combo(&kb.reports)
+    );
+    let _ = writeln!(
+        s,
         "   {:<16} Drill down into subagent",
         format_combo(&kb.drill_down_subagent)
+    );
+
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Review Keys");
+    let _ = writeln!(s, " ──────────────────────────────────────");
+    let _ = writeln!(
+        s,
+        "   {:<16} Accept reviewed task (commit + done)",
+        format_combo(&kb.accept_review)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} Reject reviewed task (back to running)",
+        format_combo(&kb.reject_review)
+    );
+    let _ = writeln!(
+        s,
+        "   {:<16} View git diff for changes",
+        format_combo(&kb.review_changes)
     );
     let _ = writeln!(s);
     let _ = writeln!(s, " Task Editor Keys");

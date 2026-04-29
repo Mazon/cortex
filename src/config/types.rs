@@ -433,6 +433,12 @@ pub struct KeybindingConfig {
     pub quit: String,
     #[serde(default = "default_review_changes")]
     pub review_changes: String,
+    #[serde(default = "default_accept_review")]
+    pub accept_review: String,
+    #[serde(default = "default_reject_review")]
+    pub reject_review: String,
+    #[serde(default = "default_reports")]
+    pub reports: String,
     /// Editor-specific keybindings (task editor mode).
     #[serde(default)]
     pub editor: EditorKeybindingConfig,
@@ -506,6 +512,15 @@ fn default_quit() -> String {
 fn default_review_changes() -> String {
     "shift+d".to_string()
 }
+fn default_accept_review() -> String {
+    "a".to_string()
+}
+fn default_reject_review() -> String {
+    "shift+r".to_string()
+}
+fn default_reports() -> String {
+    "shift+p".to_string()
+}
 
 impl Default for KeybindingConfig {
     fn default() -> Self {
@@ -532,6 +547,9 @@ impl Default for KeybindingConfig {
             help_toggle: default_help_toggle(),
             quit: default_quit(),
             review_changes: default_review_changes(),
+            accept_review: default_accept_review(),
+            reject_review: default_reject_review(),
+            reports: default_reports(),
             editor: EditorKeybindingConfig::default(),
         }
     }

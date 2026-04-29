@@ -12,6 +12,11 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 /// Maximum diff output size (1 MB). Output exceeding this is truncated.
 const MAX_DIFF_SIZE: usize = 1_048_576;
 
+/// Width of the file list sidebar in the diff review view.
+const FILE_LIST_WIDTH: u16 = 25;
+/// Minimum width for the diff content area when file list is shown.
+const MIN_DIFF_CONTENT_WIDTH: u16 = 40;
+
 /// Render the diff review view in the given area.
 ///
 /// Shows one file at a time with navigation controls. The header displays
@@ -72,6 +77,9 @@ pub fn render_diff_review(f: &mut Frame, area: Rect, state: &mut AppState, theme
         return;
     }
 
+    // Determine whether to show the file list sidebar
+    let show_file_list = area.width >= FILE_LIST_WIDTH + MIN_DIFF_CONTENT_WIDTH + 2; // +2 for borders
+
     // Layout: title bar (1 row) | diff content | footer (1 row)
     let v_constraints = [
         Constraint::Length(1), // Title bar
@@ -82,6 +90,21 @@ pub fn render_diff_review(f: &mut Frame, area: Rect, state: &mut AppState, theme
         .direction(Direction::Vertical)
         .constraints(v_constraints)
         .split(area);
+
+    // If showing file list, split the content area horizontally
+    let (file_list_area, diff_content_area) = if show_file_list {
+        let h_constraints = [
+            Constraint::Length(FILE_LIST_WIDTH),
+            Constraint::Min(MIN_DIFF_CONTENT_WIDTH),
+        ];
+        let h_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(h_constraints)
+            .split(v_layout[1]);
+        (Some(h_layout[0]), h_layout[1])
+    } else {
+        (None, v_layout[1])
+    };
 
     // ── Title bar ─────────────────────────────────────────────────────────
     let file_idx = review
@@ -165,17 +188,21 @@ pub fn render_diff_review(f: &mut Frame, area: Rect, state: &mut AppState, theme
         Paragraph::new(Line::from(title_spans)).style(Style::default().bg(Color::Rgb(30, 34, 50)));
     f.render_widget(title_para, v_layout[0]);
 
+    // ── File list sidebar ────────────────────────────────────────────────
+    if let Some(fl_area) = file_list_area {
+        render_file_list_sidebar(f, fl_area, review, theme);
+    }
+
     // ── Diff content ──────────────────────────────────────────────────────
-    let content_area = v_layout[1];
     if file.is_binary {
         let binary_msg = Paragraph::new(Span::styled(
             "Binary file — cannot display diff",
             Style::default().fg(Color::Rgb(140, 144, 170)),
         ))
         .alignment(Alignment::Center);
-        f.render_widget(binary_msg, content_area);
+        f.render_widget(binary_msg, diff_content_area);
     } else {
-        render_diff_content(f, content_area, file, review.scroll_offset);
+        render_diff_content(f, diff_content_area, file, review.scroll_offset);
     }
 
     // ── Footer ────────────────────────────────────────────────────────────
@@ -185,26 +212,164 @@ pub fn render_diff_review(f: &mut Frame, area: Rect, state: &mut AppState, theme
     let desc = Style::default().fg(Color::Rgb(90, 94, 110));
     let pipe = Style::default().fg(Color::Rgb(45, 48, 62));
 
-    let footer_spans: Vec<Span<'_>> = vec![
-        Span::styled("Tab", key),
-        Span::styled("/", pipe),
-        Span::styled("]", key),
-        Span::styled(" next file  ", desc),
-        Span::styled("Shift+Tab", key),
-        Span::styled("/", pipe),
-        Span::styled("[", key),
-        Span::styled(" prev file  ", desc),
-        Span::styled("↑↓", key),
-        Span::styled("/", pipe),
-        Span::styled("j/k", key),
-        Span::styled(" scroll  ", desc),
-        Span::styled("Esc", key),
-        Span::styled(" back", desc),
-    ];
+    let footer_spans: Vec<Span<'_>> = if show_file_list {
+        vec![
+            Span::styled("Tab", key),
+            Span::styled(" toggle panel  ", desc),
+            Span::styled("↑↓", key),
+            Span::styled("/", pipe),
+            Span::styled("j/k", key),
+            Span::styled(if review.files_list_focused { " navigate files  " } else { " scroll  " }, desc),
+            Span::styled("Esc", key),
+            Span::styled(" back", desc),
+        ]
+    } else {
+        vec![
+            Span::styled("Tab", key),
+            Span::styled("/", pipe),
+            Span::styled("]", key),
+            Span::styled(" next file  ", desc),
+            Span::styled("Shift+Tab", key),
+            Span::styled("/", pipe),
+            Span::styled("[", key),
+            Span::styled(" prev file  ", desc),
+            Span::styled("↑↓", key),
+            Span::styled("/", pipe),
+            Span::styled("j/k", key),
+            Span::styled(" scroll  ", desc),
+            Span::styled("Esc", key),
+            Span::styled(" back", desc),
+        ]
+    };
 
     let footer_para =
         Paragraph::new(Line::from(footer_spans)).style(Style::default().bg(Color::Rgb(30, 34, 50)));
     f.render_widget(footer_para, v_layout[2]);
+}
+
+/// Render the file list sidebar in the diff review view.
+fn render_file_list_sidebar(f: &mut Frame, area: Rect, review: &DiffReviewState, theme: &ThemeConfig) {
+    let border_color = if review.files_list_focused {
+        Color::Cyan
+    } else {
+        Color::Rgb(60, 64, 80)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            format!(" Files ({}) ", review.files.len()),
+            Style::default()
+                .fg(Color::Rgb(140, 144, 170))
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let selected = review
+        .selected_file_index
+        .min(review.files.len().saturating_sub(1));
+    let list_height = inner.height as usize;
+
+    // Calculate scroll offset to keep the selected item visible
+    let scroll_offset = if selected >= list_height {
+        selected - list_height + 1
+    } else {
+        0
+    };
+
+    let visible_files: Vec<Line<'_>> = review
+        .files
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(list_height)
+        .map(|(i, file)| {
+            let is_selected = i == selected;
+
+            let bg = if is_selected {
+                Color::Rgb(45, 48, 62)
+            } else {
+                Color::Rgb(30, 34, 50)
+            };
+
+            // Truncate path to fit
+            let max_path_len = (inner.width as usize).saturating_sub(4); // "> " prefix + space
+            let path_str = if file.is_renamed {
+                if let Some(ref old) = file.old_path {
+                    format!("{} → {}", truncate_str(old, max_path_len / 2), truncate_str(&file.path, max_path_len / 2))
+                } else {
+                    truncate_str(&file.path, max_path_len)
+                }
+            } else {
+                truncate_str(&file.path, max_path_len)
+            };
+
+            let indicator = if is_selected { ">" } else { " " };
+
+            // Status color
+            let status_color = if file.is_new {
+                theme.done_color()
+            } else if file.is_deleted {
+                theme.error_color()
+            } else if file.is_renamed {
+                Color::Rgb(100, 149, 237)
+            } else {
+                Color::Rgb(160, 164, 180)
+            };
+
+            // Additions/deletions summary
+            let add_del = if file.additions > 0 || file.deletions > 0 {
+                format!(" +{}-{}", file.additions, file.deletions)
+            } else {
+                String::new()
+            };
+
+            Line::from(vec![
+                Span::styled(
+                    format!("{} ", indicator),
+                    Style::default()
+                        .fg(if is_selected { Color::Cyan } else { Color::Rgb(60, 64, 80) })
+                        .bg(bg),
+                ),
+                Span::styled(
+                    path_str,
+                    Style::default()
+                        .fg(if is_selected { Color::White } else { status_color })
+                        .bg(bg),
+                ),
+                Span::styled(
+                    add_del,
+                    Style::default().fg(Color::Rgb(100, 104, 120)).bg(bg),
+                ),
+            ])
+        })
+        .collect();
+
+    if !visible_files.is_empty() {
+        let list_para = Paragraph::new(visible_files);
+        f.render_widget(list_para, inner);
+    }
+}
+
+/// Truncate a string to max_len characters, appending "…" if truncated.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    let len = s.chars().count();
+    if len <= max_len {
+        return s.to_string();
+    }
+    if max_len < 3 {
+        return s.chars().take(max_len).collect();
+    }
+    let mut result: String = s.chars().take(max_len - 1).collect();
+    result.push('…');
+    result
 }
 
 /// Render the diff lines for a single file within the given area.
@@ -827,6 +992,7 @@ diff --git a/file2.rs b/file2.rs
             scroll_offset: 5,
             error: None,
             task_number: 1,
+            files_list_focused: false,
         };
         next_file(&mut state);
         assert_eq!(state.selected_file_index, 0);
@@ -864,6 +1030,7 @@ diff --git a/file2.rs b/file2.rs
             scroll_offset: 5,
             error: None,
             task_number: 1,
+            files_list_focused: false,
         };
         prev_file(&mut state);
         assert_eq!(state.selected_file_index, 1);
@@ -901,6 +1068,7 @@ diff --git a/file2.rs b/file2.rs
             scroll_offset: 0,
             error: None,
             task_number: 1,
+            files_list_focused: false,
         };
 
         // Scroll down past the end — should clamp to max

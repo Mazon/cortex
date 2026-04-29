@@ -3,7 +3,7 @@
 
 use crate::config::types::ThemeConfig;
 use crate::state::types::{
-    AgentStatus, AppState, NotificationVariant, MAX_NOTIFICATIONS,
+    AppState, NotificationVariant, MAX_NOTIFICATIONS,
 };
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -15,8 +15,8 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
     let status_block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(Color::DarkGray));
+    f.render_widget(&status_block, area);
     let area = status_block.inner(area);
-    f.render_widget(status_block, area);
     // Count pending permissions and questions across all tasks for the active project
     let (total_permissions, total_questions) = state
         .tasks
@@ -86,8 +86,8 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
         ("○ disconnected".to_string(), theme.disconnected_color())
     };
 
-    // Active project name and task count as separate fields
-    let (project_name, task_label) = state
+    // Active project name
+    let project_name = state
         .project_registry
         .active_project_id
         .as_ref()
@@ -97,21 +97,7 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
                 .projects
                 .iter()
                 .find(|p| &p.id == pid)
-                .map(|p| {
-                    let task_count = state
-                        .tasks
-                        .values()
-                        .filter(|t| {
-                            t.project_id == *pid && matches!(t.agent_status, AgentStatus::Running)
-                        })
-                        .count();
-                    let label = if task_count == 1 {
-                        "1 task".to_string()
-                    } else {
-                        format!("{} tasks", task_count)
-                    };
-                    (p.name.clone(), label)
-                })
+                .map(|p| p.name.clone())
         })
         .unwrap_or_default();
 
@@ -150,12 +136,11 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
     // Project info width (hide on narrow terminals)
     let has_project = !project_name.is_empty();
     let show_project = has_project && total_width >= 70;
-    // Width for: "│ project_name │ task_label │"
+    // Width for: "│ project_name │"
     let proj_name_len = project_name.chars().count();
-    let task_label_len = task_label.chars().count();
     let proj_width = if show_project {
-        // "│ " + name + " │ " + label + " │"
-        (2 + proj_name_len + 3 + task_label_len + 2) as u16
+        // "│ " + name + " │"
+        (2 + proj_name_len + 2) as u16
     } else {
         0
     };
@@ -186,14 +171,13 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
 
     let hints_width = hints.chars().count() as u16;
 
-    // Layout: connection (fixed) | project name (fixed) | task count (fixed) | notification (flex) | hints (fixed)
+    // Layout: connection (fixed) | project name (fixed) | notification (flex) | hints (fixed)
     let mut constraints: Vec<Constraint> = vec![
         Constraint::Length(conn_width), // Connection status (left, fixed)
     ];
     if show_project {
-        // "│ " + name + " │ " + label + " │" as separate slots for even spacing
-        constraints.push(Constraint::Length((2 + proj_name_len) as u16)); // "│ name"
-        constraints.push(Constraint::Length((3 + task_label_len) as u16)); // " │ label │"
+        // "│ name │" as a single slot
+        constraints.push(Constraint::Length(proj_width));
     }
     constraints.push(Constraint::Min(0)); // Attention / Notification (center, flexible)
     constraints.push(Constraint::Length(hints_width)); // Key hints (right)
@@ -210,20 +194,13 @@ pub fn render_status_bar(f: &mut Frame, area: Rect, state: &AppState, theme: &Th
     f.render_widget(left, h_layout[slot]);
     slot += 1;
 
-    // Project name and task count with │ separators
+    // Project name with │ separators
     if show_project {
         let name_widget = Paragraph::new(Span::styled(
-            format!("│ {}", project_name),
+            format!("│ {} │", project_name),
             Style::default().fg(Color::Cyan),
         ));
         f.render_widget(name_widget, h_layout[slot]);
-        slot += 1;
-
-        let count_widget = Paragraph::new(Span::styled(
-            format!(" │ {} │", task_label),
-            Style::default().fg(Color::Cyan),
-        ));
-        f.render_widget(count_widget, h_layout[slot]);
         slot += 1;
     }
 

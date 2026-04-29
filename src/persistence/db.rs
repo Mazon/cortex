@@ -1,6 +1,6 @@
 //! SQLite database operations for persistence.
 
-use crate::state::types::{AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus};
+use crate::state::types::{AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, ReviewStatus};
 use anyhow::Result;
 use rusqlite::{params, Connection, Transaction};
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ pub struct Db {
 
 /// Current schema version. Increment this and add a new migration function
 /// in `run_migrations()` when modifying the database schema.
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 impl Db {
     /// Open a database connection and run migrations.
@@ -46,8 +46,8 @@ impl Db {
 
     pub fn save_task(&self, task: &CortexTask) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description, review_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 task.id,
                 task.number,
@@ -67,6 +67,7 @@ impl Db {
                 task.entered_column_at,
                 task.last_activity_at,
                 task.pending_description,
+                review_status_to_str(&task.review_status),
             ],
         )?;
         Ok(())
@@ -74,7 +75,7 @@ impl Db {
 
     pub fn load_tasks(&self, project_id: &str) -> Result<Vec<CortexTask>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description FROM tasks WHERE project_id = ?1 ORDER BY number",
+            "SELECT id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description, review_status FROM tasks WHERE project_id = ?1 ORDER BY number",
         )?;
 
         let tasks = stmt
@@ -100,6 +101,7 @@ impl Db {
                     last_activity_at: row.get(16)?,
                     pending_description: row.get(17)?,
                     queued_prompt: None, // Transient — not persisted
+                    review_status: parse_review_status(&row.get::<_, String>(18)?),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -254,8 +256,8 @@ impl Db {
 
     pub fn save_task_with_conn(&self, task: &CortexTask, tx: &Transaction) -> Result<()> {
         tx.execute(
-            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT OR REPLACE INTO tasks (id, number, title, description, column_id, session_id, agent_type, agent_status, error_message, plan_output, pending_permission_count, pending_question_count, project_id, created_at, updated_at, entered_column_at, last_activity_at, pending_description, review_status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 task.id,
                 task.number,
@@ -275,6 +277,7 @@ impl Db {
                 task.entered_column_at,
                 task.last_activity_at,
                 task.pending_description,
+                review_status_to_str(&task.review_status),
             ],
         )?;
         Ok(())
@@ -454,8 +457,11 @@ fn detect_schema_version(conn: &Connection) -> Result<u32> {
 
     let has_last_activity = columns.iter().any(|c| c == "last_activity_at");
     let has_pending_description = columns.iter().any(|c| c == "pending_description");
+    let has_review_status = columns.iter().any(|c| c == "review_status");
 
-    if has_pending_description {
+    if has_review_status {
+        Ok(3)
+    } else if has_pending_description {
         Ok(2)
     } else if has_last_activity {
         Ok(1)
@@ -490,6 +496,12 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     if current < 2 {
         migrate_v1_to_v2(conn)?;
+        current = 2;
+        set_schema_version(conn, current)?;
+    }
+
+    if current < 3 {
+        migrate_v2_to_v3(conn)?;
         current = CURRENT_SCHEMA_VERSION;
         set_schema_version(conn, current)?;
     }
@@ -529,6 +541,24 @@ fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
 
     if !has_column {
         conn.execute("ALTER TABLE tasks ADD COLUMN pending_description TEXT", [])?;
+    }
+    Ok(())
+}
+
+/// Migration v2 → v3: Add `review_status` column to `tasks` table.
+/// Includes an idempotency guard.
+fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
+    let has_column: bool = conn
+        .prepare("PRAGMA table_info(tasks)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|c| c == "review_status");
+
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -582,6 +612,30 @@ fn project_status_to_str(s: &ProjectStatus) -> &'static str {
         ProjectStatus::Done => "done",
         ProjectStatus::Error => "error",
         ProjectStatus::Hung => "hung",
+    }
+}
+
+fn review_status_to_str(s: &ReviewStatus) -> &'static str {
+    match s {
+        ReviewStatus::Pending => "pending",
+        ReviewStatus::AwaitingDecision => "awaiting_decision",
+        ReviewStatus::Approved => "approved",
+        ReviewStatus::Rejected => "rejected",
+    }
+}
+
+fn parse_review_status(s: &str) -> ReviewStatus {
+    match s {
+        "awaiting_decision" => ReviewStatus::AwaitingDecision,
+        "approved" => ReviewStatus::Approved,
+        "rejected" => ReviewStatus::Rejected,
+        _ => {
+            tracing::warn!(
+                "Unknown review_status value in database: {:?}, defaulting to Pending",
+                s
+            );
+            ReviewStatus::Pending
+        }
     }
 }
 
