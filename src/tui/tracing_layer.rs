@@ -34,7 +34,7 @@ impl TuiNotificationLayer {
         let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(weak) = guard.as_ref() {
             if let Some(state_arc) = weak.upgrade() {
-                if let Ok(mut state) = state_arc.lock() {
+                if let Ok(mut state) = state_arc.try_lock() {
                     let truncated = if message.chars().count() > self.max_message_len {
                         format!(
                             "{}...",
