@@ -68,8 +68,6 @@ pub struct UIState {
     pub selected_changed_file_index: usize,
     /// Whether the changed-files sidebar is focused (for key routing).
     pub changed_files_focused: bool,
-    /// Currently active tab in the help overlay.
-    pub help_tab: HelpTab,
     /// Track whether we entered DiffReview from TaskDetail (so Esc returns correctly).
     pub diff_review_source: Option<FocusedPanel>,
     /// State for the reports view. When `Some`, the user is viewing
@@ -109,7 +107,6 @@ impl Default for UIState {
             changed_files: None,
             selected_changed_file_index: 0,
             changed_files_focused: false,
-            help_tab: HelpTab::Global,
             diff_review_source: None,
             reports: None,
             highlighted_task_id: None,

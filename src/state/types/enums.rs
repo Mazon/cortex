@@ -178,53 +178,13 @@ pub enum NotificationVariant {
 /// Maximum number of notifications that can be queued simultaneously.
 pub const MAX_NOTIFICATIONS: usize = 3;
 
-/// Which tab is active in the help overlay.
+/// Help overlay section identifiers (kept for potential future use).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpTab {
     Global,
     Kanban,
     Review,
     Editor,
-}
-
-impl HelpTab {
-    /// All tabs in display order.
-    pub const ALL: [HelpTab; 4] = [
-        HelpTab::Global,
-        HelpTab::Kanban,
-        HelpTab::Review,
-        HelpTab::Editor,
-    ];
-
-    /// Display label for this tab.
-    pub fn label(self) -> &'static str {
-        match self {
-            HelpTab::Global => "Global",
-            HelpTab::Kanban => "Kanban",
-            HelpTab::Review => "Review",
-            HelpTab::Editor => "Editor",
-        }
-    }
-
-    /// Return the next tab (wraps around).
-    pub fn next(self) -> Self {
-        match self {
-            HelpTab::Global => HelpTab::Kanban,
-            HelpTab::Kanban => HelpTab::Review,
-            HelpTab::Review => HelpTab::Editor,
-            HelpTab::Editor => HelpTab::Global,
-        }
-    }
-
-    /// Return the previous tab (wraps around).
-    pub fn prev(self) -> Self {
-        match self {
-            HelpTab::Global => HelpTab::Editor,
-            HelpTab::Kanban => HelpTab::Global,
-            HelpTab::Review => HelpTab::Kanban,
-            HelpTab::Editor => HelpTab::Review,
-        }
-    }
 }
 
 /// Cursor direction for movement in the editor.
