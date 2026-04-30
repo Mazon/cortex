@@ -1,77 +1,50 @@
-//! Help overlay — tabbed keybinding reference overlay.
+//! Help overlay — keybinding reference overlay.
 
 use crate::config::types::{EditorKeybindingConfig, KeybindingConfig};
-use crate::state::types::HelpTab;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-/// Render a centered help overlay with tabs on top of the current view.
+/// Render a centered help overlay showing all keybindings at once.
 /// The keybindings displayed are pulled from the actual config, so custom
 /// bindings are shown instead of a hardcoded default list.
-pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig, active_tab: HelpTab) {
-    let area = centered_rect(60, 70, f.area());
+pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
+    let area = centered_rect(70, 90, f.area());
 
     // Clear the area behind the overlay
     f.render_widget(Clear, area);
-
-    // Build tab bar as the title
-    let tabs_spans: Vec<Span> = HelpTab::ALL
-        .iter()
-        .map(|tab| {
-            if *tab == active_tab {
-                Span::styled(
-                    format!(" {} ", tab.label()),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled(
-                    format!(" {} ", tab.label()),
-                    Style::default().fg(Color::DarkGray),
-                )
-            }
-        })
-        .collect();
-    let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
-    let title: Line = {
-        let mut spans: Vec<Span> = Vec::new();
-        for (i, s) in tabs_spans.iter().enumerate() {
-            if i > 0 {
-                spans.push(separator.clone());
-            }
-            spans.push(s.clone());
-        }
-        Line::from(spans)
-    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(title)
+        .title(Span::styled(
+            " Help — Keybindings ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ))
         .style(Style::default().bg(Color::Rgb(36, 40, 56)));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_text = build_tab_help_text(active_tab, kb, &kb.editor);
+    let help_text = build_all_help_text(kb, &kb.editor);
     let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
     f.render_widget(help_para, inner);
 }
 
-/// Build the help text for the currently active tab.
-fn build_tab_help_text(
-    tab: HelpTab,
-    kb: &KeybindingConfig,
-    ek: &EditorKeybindingConfig,
-) -> String {
-    match tab {
-        HelpTab::Global => build_global_text(kb),
-        HelpTab::Kanban => build_kanban_text(kb),
-        HelpTab::Review => build_review_text(kb),
-        HelpTab::Editor => build_editor_text(ek),
-    }
+/// Build the help text for all sections concatenated into one page.
+fn build_all_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String {
+    let mut s = String::new();
+    s.push_str(&build_global_text(kb));
+    s.push_str(&build_kanban_text(kb));
+    s.push_str(&build_review_text(kb));
+    s.push_str(&build_editor_text(ek));
+    // Footer
+    use std::fmt::Write;
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Press any key to close");
+    s
 }
 
 /// Build the Global keybindings tab.
@@ -105,8 +78,6 @@ fn build_global_text(kb: &KeybindingConfig) -> String {
     );
     let _ = writeln!(s, "   {:<16} Reset circuit breaker", "Ctrl+r");
     let _ = writeln!(s);
-    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
-    let _ = writeln!(s, " ");
     s
 }
 
@@ -185,8 +156,6 @@ fn build_kanban_text(kb: &KeybindingConfig) -> String {
         format_combo(&kb.drill_down_subagent)
     );
     let _ = writeln!(s);
-    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
-    let _ = writeln!(s, " ");
     s
 }
 
@@ -213,8 +182,6 @@ fn build_review_text(kb: &KeybindingConfig) -> String {
         format_combo(&kb.review_changes)
     );
     let _ = writeln!(s);
-    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
-    let _ = writeln!(s, " ");
     s
 }
 
@@ -243,8 +210,6 @@ fn build_editor_text(ek: &EditorKeybindingConfig) -> String {
     let _ = writeln!(s, "   Backspace     Delete character before cursor");
     let _ = writeln!(s, "   Delete        Delete character at cursor");
     let _ = writeln!(s);
-    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
-    let _ = writeln!(s, " ");
     s
 }
 
@@ -404,29 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn test_help_tab_navigation() {
-        assert_eq!(HelpTab::Global.next(), HelpTab::Kanban);
-        assert_eq!(HelpTab::Kanban.next(), HelpTab::Review);
-        assert_eq!(HelpTab::Review.next(), HelpTab::Editor);
-        assert_eq!(HelpTab::Editor.next(), HelpTab::Global);
-
-        assert_eq!(HelpTab::Global.prev(), HelpTab::Editor);
-        assert_eq!(HelpTab::Kanban.prev(), HelpTab::Global);
-        assert_eq!(HelpTab::Review.prev(), HelpTab::Kanban);
-        assert_eq!(HelpTab::Editor.prev(), HelpTab::Review);
-    }
-
-    #[test]
-    fn test_build_tab_help_text_all_tabs() {
+    fn test_build_all_help_text_contains_all_sections() {
         let kb = KeybindingConfig::default();
-        for tab in HelpTab::ALL {
-            let text = build_tab_help_text(tab, &kb, &kb.editor);
-            assert!(!text.is_empty(), "Tab {:?} should produce text", tab);
-            assert!(
-                text.contains("Tab/←/→ switch tab"),
-                "Tab {:?} should contain footer hint",
-                tab
-            );
-        }
+        let text = build_all_help_text(&kb, &kb.editor);
+        assert!(!text.is_empty(), "All-section help text should not be empty");
+        assert!(text.contains("Global Keys"));
+        assert!(text.contains("Kanban Keys"));
+        assert!(text.contains("Review Keys"));
+        assert!(text.contains("Task Editor Keys"));
+        assert!(text.contains("Press any key to close"));
     }
 }
