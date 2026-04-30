@@ -418,51 +418,67 @@ pub fn run() -> Result<()> {
             };
 
             if !rehydrate_tasks.is_empty() {
-                tracing::info!(
-                    count = rehydrate_tasks.len(),
-                    "Rehydrating sessions for active tasks after restart"
-                );
-
-                let client = opencode_clients.values().next().unwrap().clone();
-                let mut futures = FuturesUnordered::new();
-
-                for (task_id, session_id) in &rehydrate_tasks {
-                    let client = client.clone();
-                    let task_id = task_id.clone();
-                    let session_id = session_id.clone();
-                    futures.push(async move {
-                        let result = client.fetch_session_messages(&session_id).await;
-                        (task_id, session_id, result)
+                if opencode_clients.is_empty() {
+                    tracing::warn!(
+                        count = rehydrate_tasks.len(),
+                        "Cannot rehydrate {} task(s) — no OpenCode server connection",
+                        rehydrate_tasks.len()
+                    );
+                    // Mark orphaned tasks as error since we can't rehydrate
+                    let mut state = state.lock().unwrap_or_else(|e| {
+                        tracing::error!("AppState mutex poisoned, recovering: {}", e);
+                        e.into_inner()
                     });
-                }
+                    for (task_id, _) in &rehydrate_tasks {
+                        state.mark_orphaned_running_task(task_id);
+                    }
+                } else {
+                    tracing::info!(
+                        count = rehydrate_tasks.len(),
+                        "Rehydrating sessions for active tasks after restart"
+                    );
 
-                while let Some((task_id, session_id, result)) = futures.next().await {
-                    match result {
-                        Ok(messages) => {
-                            let mut state = state.lock().unwrap_or_else(|e| {
-                                tracing::error!("AppState mutex poisoned, recovering: {}", e);
-                                e.into_inner()
-                            });
-                            state.rehydrate_task_session(&task_id, messages.clone());
-                            tracing::info!(
-                                task_id = %task_id,
-                                session_id = %session_id,
-                                msg_count = messages.len(),
-                                "Rehydrated session for active task"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                task_id = %task_id,
-                                session_id = %session_id,
-                                error = %e,
-                                "Session not found after restart — marking task as Error"
-                            );
-                            let mut state = state.lock().unwrap_or_else(|e| {
-                                tracing::error!("AppState mutex poisoned, recovering: {}", e);
-                                e.into_inner()
-                            });
-                            state.mark_orphaned_running_task(&task_id);
+                    let client = opencode_clients.values().next().unwrap().clone();
+                    let mut futures = FuturesUnordered::new();
+
+                    for (task_id, session_id) in &rehydrate_tasks {
+                        let client = client.clone();
+                        let task_id = task_id.clone();
+                        let session_id = session_id.clone();
+                        futures.push(async move {
+                            let result = client.fetch_session_messages(&session_id).await;
+                            (task_id, session_id, result)
+                        });
+                    }
+
+                    while let Some((task_id, session_id, result)) = futures.next().await {
+                        match result {
+                            Ok(messages) => {
+                                let mut state = state.lock().unwrap_or_else(|e| {
+                                    tracing::error!("AppState mutex poisoned, recovering: {}", e);
+                                    e.into_inner()
+                                });
+                                state.rehydrate_task_session(&task_id, messages.clone());
+                                tracing::info!(
+                                    task_id = %task_id,
+                                    session_id = %session_id,
+                                    msg_count = messages.len(),
+                                    "Rehydrated session for active task"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    task_id = %task_id,
+                                    session_id = %session_id,
+                                    error = %e,
+                                    "Session not found after restart — marking task as Error"
+                                );
+                                let mut state = state.lock().unwrap_or_else(|e| {
+                                    tracing::error!("AppState mutex poisoned, recovering: {}", e);
+                                    e.into_inner()
+                                });
+                                state.mark_orphaned_running_task(&task_id);
+                            }
                         }
                     }
                 }
