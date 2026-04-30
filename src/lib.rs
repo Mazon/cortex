@@ -319,9 +319,14 @@ pub fn run() -> Result<()> {
 
         // Show "connected" status after all servers have been started
         spinner_idx = tui::loading::advance_spinner(spinner_idx);
+        let loading_msg = if opencode_clients.is_empty() {
+            "Starting without server..."
+        } else {
+            "Connected. Loading..."
+        };
         tui::loading::render_loading_frame(
             &mut loading_terminal,
-            "Connected. Loading...",
+            loading_msg,
             spinner_idx,
         )?;
 
