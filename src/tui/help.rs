@@ -7,18 +7,37 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 /// Render a centered help overlay on top of the current view.
 /// The keybindings displayed are pulled from the actual config, so custom
 /// bindings are shown instead of a hardcoded default list.
-pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
+pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig, scroll_offset: u16) {
     let area = centered_rect(60, 70, f.area());
 
     // Clear the area behind the overlay
     f.render_widget(Clear, area);
+
+    let help_text = build_help_text(kb, &kb.editor);
+    let total_lines = help_text.lines().count() as u16;
+
+    // Clamp scroll offset to valid range
+    let visible_height = area.height.saturating_sub(2); // minus top/bottom border
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll_offset = scroll_offset.min(max_scroll);
+
+    // Build scroll indicator for the title
+    let scroll_indicator = if total_lines <= visible_height {
+        String::new()
+    } else if scroll_offset == 0 {
+        " [↓]".to_string()
+    } else if scroll_offset >= max_scroll {
+        " [↑]".to_string()
+    } else {
+        " [↑↓]".to_string()
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
         .title(Span::styled(
-            " Help — Keybindings ",
+            format!(" Help — Keybindings{scroll_indicator} "),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -28,9 +47,9 @@ pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_text = build_help_text(kb, &kb.editor);
-
-    let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
+    let help_para = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::White))
+        .scroll((scroll_offset, 0));
     f.render_widget(help_para, inner);
 }
 
@@ -178,7 +197,7 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
     let _ = writeln!(s, "   Delete        Delete character at cursor");
 
     let _ = writeln!(s);
-    let _ = writeln!(s, " Press any key to close this overlay.");
+    let _ = writeln!(s, " ↑/↓/j/k scroll · any other key to close");
     let _ = writeln!(s, " ");
 
     s

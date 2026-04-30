@@ -217,7 +217,8 @@ impl App {
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
-                            crate::tui::help::render_help_overlay(f, &config.keybindings);
+                            let help_scroll = state.ui.help_scroll_offset as u16;
+                            crate::tui::help::render_help_overlay(f, &config.keybindings, help_scroll);
                         }
                         crate::state::types::AppMode::ProjectRename => {
                             crate::tui::render_normal(f, state, config);
@@ -403,9 +404,38 @@ impl App {
                 self.handle_editor_key(key);
             }
             crate::state::types::AppMode::Help => {
-                // Any key dismisses help
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.ui.mode = crate::state::types::AppMode::Normal;
+                use crossterm::event::{KeyCode, KeyModifiers};
+                match (key.code, key.modifiers) {
+                    (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_sub(1);
+                    }
+                    (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_add(1);
+                    }
+                    (KeyCode::PageUp, KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_sub(20);
+                    }
+                    (KeyCode::PageDown, KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_add(20);
+                    }
+                    (KeyCode::Home, KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = 0;
+                    }
+                    (KeyCode::End, KeyModifiers::NONE) => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.help_scroll_offset = usize::MAX; // clamped in render
+                    }
+                    _ => {
+                        // Any other key dismisses help
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.mode = crate::state::types::AppMode::Normal;
+                    }
+                }
             }
             crate::state::types::AppMode::ProjectRename => {
                 self.handle_rename_key(key);
@@ -1313,6 +1343,7 @@ impl App {
 
     fn handle_help_toggle(&mut self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.ui.help_scroll_offset = 0;
         state.ui.mode = crate::state::types::AppMode::Help;
     }
 
@@ -2891,22 +2922,199 @@ impl App {
     /// Handle key events in Reports mode.
     fn handle_reports_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
+        use crate::state::types::FocusedPanel;
+        use crate::state::types::ReportsFocusedPane;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.ui.mode = crate::state::types::AppMode::Normal;
                 state.ui.reports = None;
             }
+            KeyCode::Tab => {
+                // Toggle focused_pane between Tasks and Commits
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut reports) = state.ui.reports {
+                    reports.focused_pane = match reports.focused_pane {
+                        ReportsFocusedPane::Tasks => ReportsFocusedPane::Commits,
+                        ReportsFocusedPane::Commits => ReportsFocusedPane::Tasks,
+                    };
+                }
+            }
+            KeyCode::Enter => {
+                // Open task detail for the selected task (only when tasks pane is focused)
+                let result: Option<(String, bool, Option<String>)> = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref reports) = state.ui.reports {
+                        if reports.focused_pane == ReportsFocusedPane::Tasks {
+                            if let Some(tid) = reports.task_ids.get(reports.selected_task_index) {
+                                let tid = tid.clone();
+                                let (reviewable, wd) = {
+                                    let task = state.tasks.get(&tid);
+                                    let reviewable = task.map(|t| {
+                                        matches!(
+                                            t.agent_status,
+                                            crate::state::types::AgentStatus::Complete
+                                                | crate::state::types::AgentStatus::Ready
+                                        )
+                                    }).unwrap_or(false);
+                                    let wd = task.and_then(|t| {
+                                        state
+                                            .project_registry
+                                            .projects
+                                            .iter()
+                                            .find(|p| p.id == t.project_id)
+                                            .filter(|p| !p.working_directory.is_empty())
+                                            .map(|p| p.working_directory.clone())
+                                    });
+                                    (reviewable, wd)
+                                };
+                                // Exit reports mode
+                                state.ui.mode = crate::state::types::AppMode::Normal;
+                                state.ui.reports = None;
+                                // Set focused task
+                                state.ui.focused_task_id = Some(tid.clone());
+                                // Update kanban focused index for the task's column
+                                if let Some(task) = state.tasks.get(&tid) {
+                                    let col_id = task.column.0.clone();
+                                    if let Some(task_ids) = state.kanban.columns.get(&col_id) {
+                                        if let Some(idx) = task_ids.iter().position(|id| id == &tid) {
+                                            state.kanban.focused_task_index.insert(col_id.clone(), idx);
+                                        }
+                                    }
+                                    state.ui.focused_column = col_id;
+                                }
+                                // Open task detail
+                                state.open_task_detail(&tid);
+                                state.ui.diff_review_source = Some(FocusedPanel::TaskDetail);
+                                Some((tid, reviewable, wd))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                // Async load changed files for reviewable tasks
+                if let Some((tid, reviewable, wd)) = result {
+                    if reviewable {
+                        if let Some(wd) = wd {
+                            let state = self.state.clone();
+                            tokio::task::spawn_blocking(move || {
+                                let numstat = std::process::Command::new("git")
+                                    .args(["diff", "--numstat", "HEAD"])
+                                    .current_dir(&wd)
+                                    .output();
+                                let name_status = std::process::Command::new("git")
+                                    .args(["diff", "--name-status", "HEAD"])
+                                    .current_dir(&wd)
+                                    .output();
+
+                                let mut files = Vec::new();
+
+                                if let (Ok(ns_out), Ok(ns_stat)) = (numstat, name_status) {
+                                    if ns_out.status.success() && ns_stat.status.success() {
+                                        use crate::state::types::{ChangedFileInfo, FileChangeStatus};
+
+                                        let mut status_map: std::collections::HashMap<String, (FileChangeStatus, Option<String>)> =
+                                            std::collections::HashMap::new();
+                                        for line in String::from_utf8_lossy(&ns_stat.stdout).lines() {
+                                            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                            if parts.len() >= 2 {
+                                                let status = match parts[0] {
+                                                    "A" => FileChangeStatus::Added,
+                                                    "M" => FileChangeStatus::Modified,
+                                                    "D" => FileChangeStatus::Deleted,
+                                                    "R" => FileChangeStatus::Renamed,
+                                                    "C" => FileChangeStatus::Copied,
+                                                    _ => FileChangeStatus::Modified,
+                                                };
+                                                let old_path = if (status == FileChangeStatus::Renamed
+                                                    || status == FileChangeStatus::Copied)
+                                                    && parts.len() >= 3
+                                                {
+                                                    Some(parts[1].to_string())
+                                                } else {
+                                                    None
+                                                };
+                                                let path = if old_path.is_some() {
+                                                    parts.get(2).unwrap_or(&parts[1]).to_string()
+                                                } else {
+                                                    parts[1].to_string()
+                                                };
+                                                status_map.insert(path, (status, old_path));
+                                            }
+                                        }
+
+                                        let mut count_map: std::collections::HashMap<String, (u32, u32)> =
+                                            std::collections::HashMap::new();
+                                        for line in String::from_utf8_lossy(&ns_out.stdout).lines() {
+                                            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                                            if parts.len() >= 3 {
+                                                let adds: u32 = parts[0].parse().unwrap_or(0);
+                                                let dels: u32 = parts[1].parse().unwrap_or(0);
+                                                let real_adds = if parts[0] == "-" { 0 } else { adds };
+                                                let real_dels = if parts[1] == "-" { 0 } else { dels };
+                                                count_map.insert(parts[2].to_string(), (real_adds, real_dels));
+                                            }
+                                        }
+
+                                        for (path, (status, old_path)) in &status_map {
+                                            let (additions, deletions) =
+                                                count_map.get(path).copied().unwrap_or((0, 0));
+                                            files.push(ChangedFileInfo {
+                                                path: path.clone(),
+                                                old_path: old_path.clone(),
+                                                status: status.clone(),
+                                                additions,
+                                                deletions,
+                                            });
+                                        }
+                                    }
+                                }
+
+                                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                                if state.ui.viewing_task_id.as_deref() == Some(&tid) {
+                                    state.ui.changed_files = if files.is_empty() {
+                                        None
+                                    } else {
+                                        Some(files)
+                                    };
+                                    state.ui.selected_changed_file_index = 0;
+                                    state.mark_render_dirty();
+                                }
+                            });
+                        }
+                    }
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut reports) = state.ui.reports {
-                    crate::tui::reports::scroll_reports(reports, 1);
+                    match reports.focused_pane {
+                        ReportsFocusedPane::Tasks => {
+                            crate::tui::reports::scroll_tasks(reports, 1);
+                        }
+                        ReportsFocusedPane::Commits => {
+                            crate::tui::reports::scroll_reports(reports, 1);
+                        }
+                    }
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut reports) = state.ui.reports {
-                    crate::tui::reports::scroll_reports(reports, -1);
+                    match reports.focused_pane {
+                        ReportsFocusedPane::Tasks => {
+                            crate::tui::reports::scroll_tasks(reports, -1);
+                        }
+                        ReportsFocusedPane::Commits => {
+                            crate::tui::reports::scroll_reports(reports, -1);
+                        }
+                    }
                 }
             }
             _ => {}

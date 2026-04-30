@@ -67,6 +67,8 @@ pub struct UIState {
     pub selected_changed_file_index: usize,
     /// Whether the changed-files sidebar is focused (for key routing).
     pub changed_files_focused: bool,
+    /// Scroll offset for the help overlay (0 = top).
+    pub help_scroll_offset: usize,
     /// Track whether we entered DiffReview from TaskDetail (so Esc returns correctly).
     pub diff_review_source: Option<FocusedPanel>,
     /// State for the reports view. When `Some`, the user is viewing
@@ -95,6 +97,7 @@ impl Default for UIState {
             changed_files: None,
             selected_changed_file_index: 0,
             changed_files_focused: false,
+            help_scroll_offset: 0,
             diff_review_source: None,
             reports: None,
         }
@@ -810,6 +813,19 @@ pub struct DiffLine {
 
 // ─── Reports Types ────────────────────────────────────────────────────────
 
+/// Which pane in the reports view is currently focused.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReportsFocusedPane {
+    Tasks,
+    Commits,
+}
+
+impl Default for ReportsFocusedPane {
+    fn default() -> Self {
+        Self::Tasks
+    }
+}
+
 /// State for the reports view, stored on `UIState`.
 #[derive(Debug, Clone)]
 pub struct ReportsState {
@@ -823,6 +839,14 @@ pub struct ReportsState {
     pub scroll_offset: usize,
     /// Error message if git log or stats computation failed.
     pub error: Option<String>,
+    /// Sorted list of task IDs (newest first).
+    pub task_ids: Vec<String>,
+    /// Currently highlighted task in the task list.
+    pub selected_task_index: usize,
+    /// Scroll offset for the task list.
+    pub task_scroll_offset: usize,
+    /// Which pane is currently focused.
+    pub focused_pane: ReportsFocusedPane,
 }
 
 /// A single git commit entry from `git log`.

@@ -6,7 +6,7 @@
 //! - `scroll_reports()` — scroll the commit list up/down
 
 use crate::config::types::ThemeConfig;
-use crate::state::types::{AppState, GitCommit, ReportsState, TaskStats};
+use crate::state::types::{AppState, GitCommit, ReportsFocusedPane, ReportsState, TaskStats};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -85,12 +85,19 @@ pub fn render_reports(f: &mut Frame, area: Rect, state: &mut AppState, theme: &T
     // Left pane: Task Statistics
     render_stats_pane(f, h_layout[0], &reports.stats, theme);
 
-    // Right pane: Git Commits
-    render_commits_pane(f, h_layout[1], reports);
+    // Right pane: Tasks or Commits depending on focused pane
+    match reports.focused_pane {
+        ReportsFocusedPane::Tasks => {
+            render_tasks_pane(f, h_layout[1], reports, state, theme);
+        }
+        ReportsFocusedPane::Commits => {
+            render_commits_pane(f, h_layout[1], reports);
+        }
+    }
 
     // Footer with keybinding hints
     let footer_text = Span::styled(
-        " j/k: scroll  Esc/q: close ",
+        " Tab: switch pane  j/k: navigate  Enter: open task  Esc/q: close ",
         Style::default().fg(Color::Rgb(140, 144, 170)),
     );
     let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
@@ -116,6 +123,10 @@ pub fn load_reports_data(state: &std::sync::Arc<std::sync::Mutex<AppState>>) {
             selected_index: 0,
             scroll_offset: 0,
             error: None,
+            task_ids: Vec::new(),
+            selected_task_index: 0,
+            task_scroll_offset: 0,
+            focused_pane: ReportsFocusedPane::default(),
         });
 
         let working_dir = state
@@ -156,7 +167,6 @@ pub fn load_reports_data(state: &std::sync::Arc<std::sync::Mutex<AppState>>) {
                 matches!(
                     t.agent_status,
                     crate::state::types::AgentStatus::Running
-                        | crate::state::types::AgentStatus::Pending
                 )
             })
             .count();
@@ -208,6 +218,22 @@ pub fn load_reports_data(state: &std::sync::Arc<std::sync::Mutex<AppState>>) {
             reports.stats = stats;
         }
 
+        // Populate task IDs sorted by creation time (newest first)
+        // Collect outside the mutable borrow to satisfy the borrow checker
+        let mut task_ids: Vec<String> = state.tasks.keys().cloned().collect();
+        task_ids.sort_by(|a, b| {
+            state
+                .tasks
+                .get(b)
+                .map(|t| t.created_at)
+                .unwrap_or(0)
+                .cmp(&state.tasks.get(a).map(|t| t.created_at).unwrap_or(0))
+        });
+
+        if let Some(ref mut reports) = state.ui.reports {
+            reports.task_ids = task_ids;
+        }
+
         state.mark_render_dirty();
 
         working_dir
@@ -247,6 +273,17 @@ pub fn scroll_reports(state: &mut ReportsState, direction: i32) {
 
     let new_index = (state.selected_index as i32 + direction).clamp(0, (total - 1) as i32) as usize;
     state.selected_index = new_index;
+}
+
+/// Scroll the task list by `direction` items (-1 = up, +1 = down).
+pub fn scroll_tasks(state: &mut ReportsState, direction: i32) {
+    let total = state.task_ids.len();
+    if total == 0 {
+        return;
+    }
+
+    let new_index = (state.selected_task_index as i32 + direction).clamp(0, (total - 1) as i32) as usize;
+    state.selected_task_index = new_index;
 }
 
 // ─── Git Log ──────────────────────────────────────────────────────────────
@@ -385,14 +422,228 @@ fn render_stats_pane(f: &mut Frame, area: Rect, stats: &TaskStats, _theme: &Them
     f.render_widget(stats_para, area);
 }
 
-/// Render the right pane with the scrollable commit list.
-fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
+/// Render the right pane with the task list.
+fn render_tasks_pane(
+    f: &mut Frame,
+    area: Rect,
+    reports: &ReportsState,
+    state: &AppState,
+    _theme: &ThemeConfig,
+) {
     let inner = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+        .border_style(if reports.focused_pane == ReportsFocusedPane::Tasks {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::Rgb(60, 64, 80))
+        })
+        .title(Span::styled(
+            format!(" Tasks ({}) ", reports.task_ids.len()),
+            if reports.focused_pane == ReportsFocusedPane::Tasks {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Rgb(140, 144, 170))
+            },
+        ))
+        .inner(area);
+
+    if reports.task_ids.is_empty() {
+        let empty = Paragraph::new(Span::styled(
+            "No tasks",
+            Style::default().fg(Color::Rgb(140, 144, 170)),
+        ))
+        .alignment(Alignment::Center);
+        f.render_widget(empty, inner);
+        // Re-render the block
+        f.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(if reports.focused_pane == ReportsFocusedPane::Tasks {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Rgb(60, 64, 80))
+                })
+                .title(Span::styled(
+                    " Tasks (0) ",
+                    if reports.focused_pane == ReportsFocusedPane::Tasks {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::Rgb(140, 144, 170))
+                    },
+                )),
+            area,
+        );
+        return;
+    }
+
+    let visible_height = inner.height as usize;
+    if visible_height == 0 {
+        return;
+    }
+
+    // Adjust scroll offset so selected item is visible
+    let selected = reports.selected_task_index;
+    let mut scroll = reports.task_scroll_offset;
+    if selected < scroll {
+        scroll = selected;
+    } else if selected >= scroll + visible_height {
+        scroll = selected - visible_height + 1;
+    }
+
+    let visible_task_ids: Vec<&String> = reports
+        .task_ids
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .collect();
+
+    // Dynamic truncation lengths based on available width.
+    // Each task line: " ▶ " or "   " (3 chars) + "#NN " (~5 chars) + title + " [column] " (~15 chars) + buffer
+    let max_title_len = inner.width.saturating_sub(3 + 6 + 16 + 2).max(10) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, task_id) in visible_task_ids.iter().enumerate() {
+        let actual_index = scroll + i;
+        let is_selected = actual_index == selected;
+
+        let task = state.tasks.get(*task_id);
+
+        let (title, column_name, status_icon) = match task {
+            Some(t) => (
+                if t.title.is_empty() { "Untitled".to_string() } else { t.title.clone() },
+                t.column.0.clone(),
+                t.agent_status.icon().to_string(),
+            ),
+            None => (
+                "Unknown task".to_string(),
+                String::new(),
+                "?".to_string(),
+            ),
+        };
+
+        if is_selected {
+            lines.push(Line::from(vec![
+                Span::styled(" ▶ ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("#{} ", task.as_ref().map(|t| t.number).unwrap_or(0)),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    truncate_str(&title, max_title_len),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" [{}] ", column_name),
+                    Style::default().fg(Color::Rgb(140, 144, 170)),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("   ", Style::default()),
+                Span::styled(
+                    format!("#{} ", task.as_ref().map(|t| t.number).unwrap_or(0)),
+                    Style::default().fg(Color::Rgb(140, 144, 170)),
+                ),
+                Span::styled(
+                    truncate_str(&title, max_title_len),
+                    Style::default().fg(Color::Rgb(180, 184, 200)),
+                ),
+                Span::styled(
+                    format!(" [{}] ", column_name),
+                    Style::default().fg(Color::Rgb(100, 104, 120)),
+                ),
+            ]));
+        }
+
+        // Second line: status indicator
+        let meta_color = if is_selected {
+            Color::Rgb(180, 184, 200)
+        } else {
+            Color::Rgb(100, 104, 120)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("     ", Style::default()),
+            Span::styled(
+                format!("status: {} ", status_icon),
+                Style::default().fg(meta_color),
+            ),
+        ]));
+    }
+
+    let tasks_para = Paragraph::new(lines);
+    f.render_widget(tasks_para, inner);
+
+    // Re-render the block on top
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(if reports.focused_pane == ReportsFocusedPane::Tasks {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Rgb(60, 64, 80))
+            })
+            .title(Span::styled(
+                format!(" Tasks ({}) ", reports.task_ids.len()),
+                if reports.focused_pane == ReportsFocusedPane::Tasks {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Rgb(140, 144, 170))
+                },
+            )),
+        area,
+    );
+
+    // Scroll indicator
+    if reports.task_ids.len() > visible_height {
+        let scroll_ratio =
+            scroll as f64 / (reports.task_ids.len() - visible_height) as f64;
+        let indicator_height = std::cmp::max(
+            1,
+            (visible_height as f64
+                * (visible_height as f64 / reports.task_ids.len() as f64))
+                as u16,
+        );
+        let max_scroll_pos = inner.height.saturating_sub(indicator_height);
+        let indicator_y =
+            inner.y + (scroll_ratio * max_scroll_pos as f64) as u16;
+
+        let indicator =
+            Paragraph::new("█").style(Style::default().fg(Color::Rgb(80, 84, 100)));
+        f.render_widget(
+            indicator,
+            Rect::new(
+                inner.x + inner.width.saturating_sub(1),
+                indicator_y,
+                1,
+                indicator_height,
+            ),
+        );
+    }
+}
+
+/// Render the right pane with the scrollable commit list.
+fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
+    let is_focused = reports.focused_pane == ReportsFocusedPane::Commits;
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::Rgb(60, 64, 80))
+    };
+    let title_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::Rgb(140, 144, 170))
+    };
+
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
         .title(Span::styled(
             format!(" Recent Commits ({}) ", reports.commits.len()),
-            Style::default().fg(Color::Rgb(140, 144, 170)),
+            title_style,
         ))
         .inner(area);
 
@@ -407,10 +658,10 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
         f.render_widget(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+                .border_style(border_style)
                 .title(Span::styled(
                     " Recent Commits (0) ",
-                    Style::default().fg(Color::Rgb(140, 144, 170)),
+                    title_style,
                 )),
             area,
         );
@@ -438,6 +689,12 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
         .take(visible_height)
         .collect();
 
+    // Dynamic truncation lengths based on available width.
+    // Message line prefix: " ▶ " or "   " (3 chars) + hash + space (~8 chars) + buffer (2 chars).
+    let max_msg_len = inner.width.saturating_sub(3 + 8 + 2).max(10) as usize;
+    // Meta line indent: 5 chars + date (~15 chars) + buffer (2 chars).
+    let max_author_len = inner.width.saturating_sub(5 + 2 + 15).max(8) as usize;
+
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, commit) in visible_commits.iter().enumerate() {
@@ -454,7 +711,7 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    truncate_str(&commit.message, 40),
+                    truncate_str(&commit.message, max_msg_len),
                     Style::default().fg(Color::White),
                 ),
             ]));
@@ -466,7 +723,7 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
                     Style::default().fg(Color::Rgb(140, 144, 170)),
                 ),
                 Span::styled(
-                    truncate_str(&commit.message, 40),
+                    truncate_str(&commit.message, max_msg_len),
                     Style::default().fg(Color::Rgb(180, 184, 200)),
                 ),
             ]));
@@ -481,7 +738,7 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
         lines.push(Line::from(vec![
             Span::styled("     ", Style::default()),
             Span::styled(
-                truncate_str(&commit.author, 20),
+                truncate_str(&commit.author, max_author_len),
                 Style::default().fg(meta_color),
             ),
             Span::styled(
@@ -498,10 +755,10 @@ fn render_commits_pane(f: &mut Frame, area: Rect, reports: &ReportsState) {
     f.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+            .border_style(border_style)
             .title(Span::styled(
                 format!(" Recent Commits ({}) ", reports.commits.len()),
-                Style::default().fg(Color::Rgb(140, 144, 170)),
+                title_style,
             )),
         area,
     );
