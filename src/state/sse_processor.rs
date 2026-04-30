@@ -467,6 +467,14 @@ impl AppState {
             details: None,
         };
         self.add_permission_request(&task_id, request);
+
+        // Track write operations for completion status logic.
+        // process_permission_asked is only called for non-safe tools,
+        // so this reliably indicates the agent attempted modifications.
+        if let Some(task) = self.tasks.get_mut(&task_id) {
+            task.had_write_operations = true;
+            self.mark_task_dirty(&task_id);
+        }
     }
 
     /// Extract plan output from the session's streaming text or message history

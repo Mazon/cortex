@@ -163,6 +163,9 @@ impl App {
                 if state.clear_expired_notifications() {
                     state.mark_render_dirty();
                 }
+                if state.clear_expired_highlight() {
+                    state.mark_render_dirty();
+                }
             }
 
             // Periodic hung-agent detection
@@ -217,8 +220,8 @@ impl App {
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
-                            let help_scroll = state.ui.help_scroll_offset as u16;
-                            crate::tui::help::render_help_overlay(f, &config.keybindings, help_scroll);
+                            let help_tab = state.ui.help_tab;
+                            crate::tui::help::render_help_overlay(f, &config.keybindings, help_tab);
                         }
                         crate::state::types::AppMode::ProjectRename => {
                             crate::tui::render_normal(f, state, config);
@@ -404,31 +407,39 @@ impl App {
                 self.handle_editor_key(key);
             }
             crate::state::types::AppMode::Help => {
+                use crate::state::types::HelpTab;
                 use crossterm::event::{KeyCode, KeyModifiers};
                 match (key.code, key.modifiers) {
-                    (KeyCode::Up | KeyCode::Char('k'), KeyModifiers::NONE) => {
+                    // Tab or Right/l → next tab
+                    (KeyCode::Tab, KeyModifiers::NONE)
+                    | (KeyCode::Right, KeyModifiers::NONE)
+                    | (KeyCode::Char('l'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_sub(1);
+                        state.ui.help_tab = state.ui.help_tab.next();
                     }
-                    (KeyCode::Down | KeyCode::Char('j'), KeyModifiers::NONE) => {
+                    // Shift+Tab or Left/h → previous tab
+                    (KeyCode::BackTab, _)
+                    | (KeyCode::Left, KeyModifiers::NONE)
+                    | (KeyCode::Char('h'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_add(1);
+                        state.ui.help_tab = state.ui.help_tab.prev();
                     }
-                    (KeyCode::PageUp, KeyModifiers::NONE) => {
+                    // Number keys 1-4 → jump directly to tab
+                    (KeyCode::Char('1'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_sub(20);
+                        state.ui.help_tab = HelpTab::Global;
                     }
-                    (KeyCode::PageDown, KeyModifiers::NONE) => {
+                    (KeyCode::Char('2'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = state.ui.help_scroll_offset.saturating_add(20);
+                        state.ui.help_tab = HelpTab::Kanban;
                     }
-                    (KeyCode::Home, KeyModifiers::NONE) => {
+                    (KeyCode::Char('3'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = 0;
+                        state.ui.help_tab = HelpTab::Review;
                     }
-                    (KeyCode::End, KeyModifiers::NONE) => {
+                    (KeyCode::Char('4'), KeyModifiers::NONE) => {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_scroll_offset = usize::MAX; // clamped in render
+                        state.ui.help_tab = HelpTab::Editor;
                     }
                     _ => {
                         // Any other key dismisses help
@@ -1159,68 +1170,54 @@ impl App {
                                     // Check if the task should transition out of Question status
                                     let needs_reassess = s.should_reassess_after_question(&tid);
                                     if needs_reassess {
-                                        // Set back to Complete, then re-apply Ready/Complete logic
-                                        // and auto-progression (same as SessionIdle handler).
-                                        s.update_task_agent_status(
-                                            &tid,
-                                            crate::state::types::AgentStatus::Complete,
-                                        );
-                                        if let Some(ref col) =
-                                            s.tasks.get(&tid).map(|t| t.column.clone())
-                                        {
-                                            let has_auto_progress =
-                                                columns_config.auto_progress_for(&col.0).is_some();
-                                            let has_plan = s
-                                                .tasks
-                                                .get(&tid)
-                                                .and_then(|t| t.plan_output.as_ref())
-                                                .map(|p| !p.trim().is_empty())
-                                                .unwrap_or(false);
-                                            if !has_auto_progress && has_plan {
-                                                s.update_task_agent_status(
-                                                    &tid,
-                                                    crate::state::types::AgentStatus::Ready,
-                                                );
-                                            }
-                                        }
-                                        let action =
-                                            crate::orchestration::engine::on_agent_completed(
-                                                &tid,
-                                                &mut s,
-                                                &columns_config,
+                                        // Determine Ready vs Complete + whether to auto-progress
+                                        // (same logic as SessionIdle handler in dispatch.rs).
+                                        let (status, should_progress) =
+                                            crate::opencode::events::determine_completion_status(
+                                                &mut s, &tid,
                                             );
-                                        if let Some(a) = action {
-                                            match a {
-                                                crate::orchestration::engine::AgentCompletionAction::AutoProgress(ap) => {
-                                                    let col = ap.target_column.clone();
-                                                    let tid_clone = tid.clone();
-                                                    drop(s);
-                                                    crate::orchestration::engine::on_task_moved(
-                                                        &tid_clone,
-                                                        &col,
-                                                        &state,
-                                                        &client,
-                                                        &columns_config,
-                                                        &opencode_config,
-                                                        None,
-                                                    );
-                                                }
-                                                crate::orchestration::engine::AgentCompletionAction::SendQueuedPrompt {
-                                                    task_id: qp_tid,
-                                                    prompt: qp_prompt,
-                                                    session_id: qp_sid,
-                                                    agent_type: qp_agent,
-                                                } => {
-                                                    drop(s);
-                                                    crate::orchestration::engine::send_follow_up_prompt(
-                                                        &qp_tid,
-                                                        &qp_prompt,
-                                                        &qp_sid,
-                                                        &qp_agent,
-                                                        &state,
-                                                        &client,
-                                                        &opencode_config,
-                                                    );
+                                        s.update_task_agent_status(&tid, status);
+
+                                        if should_progress {
+                                            let action =
+                                                crate::orchestration::engine::on_agent_completed(
+                                                    &tid,
+                                                    &mut s,
+                                                    &columns_config,
+                                                );
+                                            if let Some(a) = action {
+                                                match a {
+                                                    crate::orchestration::engine::AgentCompletionAction::AutoProgress(ap) => {
+                                                        let col = ap.target_column.clone();
+                                                        let tid_clone = tid.clone();
+                                                        drop(s);
+                                                        crate::orchestration::engine::on_task_moved(
+                                                            &tid_clone,
+                                                            &col,
+                                                            &state,
+                                                            &client,
+                                                            &columns_config,
+                                                            &opencode_config,
+                                                            None,
+                                                        );
+                                                    }
+                                                    crate::orchestration::engine::AgentCompletionAction::SendQueuedPrompt {
+                                                        task_id: qp_tid,
+                                                        prompt: qp_prompt,
+                                                        session_id: qp_sid,
+                                                        agent_type: qp_agent,
+                                                    } => {
+                                                        drop(s);
+                                                        crate::orchestration::engine::send_follow_up_prompt(
+                                                            &qp_tid,
+                                                            &qp_prompt,
+                                                            &qp_sid,
+                                                            &qp_agent,
+                                                            &state,
+                                                            &client,
+                                                            &opencode_config,
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -1342,8 +1339,9 @@ impl App {
     }
 
     fn handle_help_toggle(&mut self) {
+        use crate::state::types::HelpTab;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.ui.help_scroll_offset = 0;
+        state.ui.help_tab = HelpTab::Global;
         state.ui.mode = crate::state::types::AppMode::Help;
     }
 
@@ -3358,6 +3356,9 @@ impl App {
 
                         // Focus the newly created/saved task
                         state.ui.focused_task_id = Some(task_id.clone());
+
+                        // Highlight the saved task for visual feedback
+                        state.highlight_task(task_id.clone(), 3000);
 
                         // Update focused column to match the saved task's column
                         if let Some(ref col_id) = column_id {

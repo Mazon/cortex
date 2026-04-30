@@ -34,6 +34,8 @@ fn make_task(id: &str, title: &str) -> CortexTask {
         queued_prompt: None,
         pending_permission_count: 0,
         pending_question_count: 0,
+        review_status: cortex::state::types::ReviewStatus::Pending,
+        had_write_operations: false,
         entered_column_at: 0,
         last_activity_at: 0,
         created_at: 0,

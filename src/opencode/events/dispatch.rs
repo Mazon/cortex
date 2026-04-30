@@ -16,6 +16,35 @@ const MAX_CONCURRENT_AUTO_APPROVES: usize = 8;
 static AUTO_APPROVE_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
     std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_AUTO_APPROVES));
 
+/// After an agent completes, determine whether the task should be
+/// "Ready" (plan created / no changes) or "Complete" (no plan / changes made).
+/// Returns the appropriate status and whether auto-progression should proceed.
+pub(crate) fn determine_completion_status(
+    state: &mut crate::state::types::AppState,
+    task_id: &str,
+) -> (AgentStatus, bool) {
+    let (column, has_plan, had_writes) = state
+        .tasks
+        .get(task_id)
+        .map(|t| {
+            (
+                t.column.0.as_str(),
+                t.plan_output
+                    .as_ref()
+                    .map_or(false, |p| !p.trim().is_empty()),
+                t.had_write_operations,
+            )
+        })
+        .unwrap_or(("", false, false));
+
+    match column {
+        "planning" if has_plan => (AgentStatus::Ready, true),
+        "planning" => (AgentStatus::Complete, false),
+        "running" if had_writes => (AgentStatus::Complete, true),
+        "running" => (AgentStatus::Ready, false),
+        _ => (AgentStatus::Complete, true),
+    }
+}
 
 /// Process a single SSE event, updating state directly.
 /// Returns a tuple of:
@@ -84,11 +113,23 @@ pub(crate) fn process_event(
                         if has_questions {
                             state.update_task_agent_status(tid, AgentStatus::Question);
                             None
-                        } else if let Some(ref _col) = state.tasks.get(tid).map(|t| t.column.clone())
-                        {
-                            on_agent_completed(tid, state, columns_config)
                         } else {
-                            None
+                            // Determine Ready vs Complete + whether to auto-progress
+                            let (status, should_progress) =
+                                determine_completion_status(state, tid);
+                            state.update_task_agent_status(tid, status);
+
+                            if should_progress {
+                                if let Some(ref _col) =
+                                    state.tasks.get(tid).map(|t| t.column.clone())
+                                {
+                                    on_agent_completed(tid, state, columns_config)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
                         }
                     } else {
                         None
@@ -110,22 +151,32 @@ pub(crate) fn process_event(
                 // overwrite with the full message-based version.
                 state.extract_plan_output(&task_id);
 
-                // Check if the task has pending questions — if so,
-                // set Question status and block auto-progression.
+                // Check for pending questions first
                 let has_questions = state
                     .tasks
                     .get(&task_id)
                     .map(|t| t.pending_question_count > 0)
                     .unwrap_or(false);
-
                 if has_questions {
                     state.update_task_agent_status(&task_id, AgentStatus::Question);
                     None
-                } else if let Some(ref _col) = state.tasks.get(&task_id).map(|t| t.column.clone()) {
-                    // Trigger auto-progression if configured for this column
-                    on_agent_completed(&task_id, state, columns_config)
                 } else {
-                    None
+                    // Determine Ready vs Complete + whether to auto-progress
+                    let (status, should_progress) =
+                        determine_completion_status(state, &task_id);
+                    state.update_task_agent_status(&task_id, status);
+
+                    if should_progress {
+                        if let Some(ref _col) =
+                            state.tasks.get(&task_id).map(|t| t.column.clone())
+                        {
+                            on_agent_completed(&task_id, state, columns_config)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
             } else {
                 None

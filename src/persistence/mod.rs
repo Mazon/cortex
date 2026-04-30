@@ -204,7 +204,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
 mod tests {
     use super::*;
     use crate::state::types::{
-        AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus,
+        AgentStatus, CortexProject, CortexTask, KanbanColumn, ProjectStatus, ReviewStatus,
     };
     use std::collections::HashMap;
 
@@ -236,6 +236,7 @@ mod tests {
             pending_permission_count: 3,
             pending_question_count: 1,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1_710_000_000_000,
             updated_at: 1_710_001_000_000,
             project_id: "proj-1".to_string(),
@@ -776,6 +777,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-a".to_string(),
@@ -799,6 +801,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1001,
             updated_at: 1001,
             project_id: "proj-a".to_string(),
@@ -871,6 +874,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 2001,
             updated_at: 2001,
             project_id: "proj-b".to_string(),

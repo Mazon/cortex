@@ -143,6 +143,12 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         && task_idx == focused_idx
                         && state.ui.focused_task_id.as_deref() == Some(task_id.as_str());
 
+                    let is_highlighted = state
+                        .ui
+                        .highlighted_task_id
+                        .as_deref()
+                        == Some(task_id.as_str());
+
                     let card_height = 5u16;
                     if card_y + card_height > inner.y + inner.height {
                         break;
@@ -162,6 +168,7 @@ pub fn render_kanban(f: &mut Frame, area: Rect, state: &AppState, config: &Corte
                         is_task_focused,
                         &config.theme,
                         now,
+                        is_highlighted,
                     );
                     card_y += card_height;
                     rendered_count += 1;

@@ -176,8 +176,18 @@ pub async fn sse_event_loop(
                                             // can detect the agent change and create a fresh session.
                                             // The mapping is what matters for event routing.
                                         }
-                                        state.update_task_agent_status(&a.task_id, AgentStatus::Running);
+                                        // Only set Running if task is not already Ready (e.g., planning→running
+                                        // should preserve Ready status until the do agent actually starts).
+                                        let current_status = state.tasks.get(&a.task_id)
+                                            .map(|t| t.agent_status.clone());
+                                        if !matches!(current_status, Some(AgentStatus::Ready)) {
+                                            state.update_task_agent_status(&a.task_id, AgentStatus::Running);
+                                        }
                                         state.set_task_agent_type(&a.task_id, Some(a.agent.clone()));
+                                        // Reset write tracking for the new agent session
+                                        if let Some(task) = state.tasks.get_mut(&a.task_id) {
+                                            task.had_write_operations = false;
+                                        }
                                         // Return the task_id for finalization since we just broke the
                                         // session→task lookup that the finalize logic depends on.
                                         let finalize_task_id = Some(a.task_id.clone());

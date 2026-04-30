@@ -67,13 +67,17 @@ pub struct UIState {
     pub selected_changed_file_index: usize,
     /// Whether the changed-files sidebar is focused (for key routing).
     pub changed_files_focused: bool,
-    /// Scroll offset for the help overlay (0 = top).
-    pub help_scroll_offset: usize,
+    /// Currently active tab in the help overlay.
+    pub help_tab: HelpTab,
     /// Track whether we entered DiffReview from TaskDetail (so Esc returns correctly).
     pub diff_review_source: Option<FocusedPanel>,
     /// State for the reports view. When `Some`, the user is viewing
     /// project statistics and recent git commits.
     pub reports: Option<ReportsState>,
+    /// ID of a task to highlight with a "just saved" visual effect.
+    pub highlighted_task_id: Option<String>,
+    /// Unix timestamp (milliseconds) when the highlight should expire.
+    pub highlight_expires_at: i64,
 }
 
 impl Default for UIState {
@@ -97,9 +101,11 @@ impl Default for UIState {
             changed_files: None,
             selected_changed_file_index: 0,
             changed_files_focused: false,
-            help_scroll_offset: 0,
+            help_tab: HelpTab::Global,
             diff_review_source: None,
             reports: None,
+            highlighted_task_id: None,
+            highlight_expires_at: 0,
         }
     }
 }
@@ -1622,6 +1628,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
@@ -1661,6 +1668,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),

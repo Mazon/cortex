@@ -50,6 +50,11 @@ pub struct CortexTask {
     pub pending_question_count: u32,
     /// Review decision status for tasks in the review column.
     pub review_status: ReviewStatus,
+    /// Whether the agent made any write/modification operations during this
+    /// task's current agent session. Reset when a new agent starts (auto-progression).
+    /// Used to determine completion status: do agents with no writes are marked
+    /// "Ready" instead of "Complete" to signal they need attention.
+    pub had_write_operations: bool,
     /// Unix timestamp (seconds) when the task was created.
     pub created_at: i64,
     /// Unix timestamp (seconds) when the task was last updated.
@@ -332,6 +337,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),

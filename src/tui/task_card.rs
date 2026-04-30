@@ -14,8 +14,12 @@ pub fn render_task_card(
     is_selected: bool,
     theme: &ThemeConfig,
     now: i64,
+    is_highlighted: bool,
 ) {
-    let border_color = if is_selected {
+    let border_color = if is_highlighted {
+        // "Just saved" highlight — bright green border
+        Color::Rgb(100, 220, 100)
+    } else if is_selected {
         Color::Cyan
     } else if task.review_status == ReviewStatus::AwaitingDecision {
         // Tasks awaiting review decision get a yellow/amber border
@@ -28,7 +32,9 @@ pub fn render_task_card(
         Color::DarkGray
     };
 
-    let bg_color = if is_selected {
+    let bg_color = if is_highlighted {
+        Color::Rgb(20, 40, 20)
+    } else if is_selected {
         Color::Rgb(36, 40, 56)
     } else {
         Color::Reset

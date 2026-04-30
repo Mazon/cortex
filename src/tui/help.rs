@@ -1,64 +1,83 @@
-//! Help overlay — keybinding reference overlay.
+//! Help overlay — tabbed keybinding reference overlay.
 
 use crate::config::types::{EditorKeybindingConfig, KeybindingConfig};
+use crate::state::types::HelpTab;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-/// Render a centered help overlay on top of the current view.
+/// Render a centered help overlay with tabs on top of the current view.
 /// The keybindings displayed are pulled from the actual config, so custom
 /// bindings are shown instead of a hardcoded default list.
-pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig, scroll_offset: u16) {
+pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig, active_tab: HelpTab) {
     let area = centered_rect(60, 70, f.area());
 
     // Clear the area behind the overlay
     f.render_widget(Clear, area);
 
-    let help_text = build_help_text(kb, &kb.editor);
-    let total_lines = help_text.lines().count() as u16;
-
-    // Clamp scroll offset to valid range
-    let visible_height = area.height.saturating_sub(2); // minus top/bottom border
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    let scroll_offset = scroll_offset.min(max_scroll);
-
-    // Build scroll indicator for the title
-    let scroll_indicator = if total_lines <= visible_height {
-        String::new()
-    } else if scroll_offset == 0 {
-        " [↓]".to_string()
-    } else if scroll_offset >= max_scroll {
-        " [↑]".to_string()
-    } else {
-        " [↑↓]".to_string()
+    // Build tab bar as the title
+    let tabs_spans: Vec<Span> = HelpTab::ALL
+        .iter()
+        .map(|tab| {
+            if *tab == active_tab {
+                Span::styled(
+                    format!(" {} ", tab.label()),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled(
+                    format!(" {} ", tab.label()),
+                    Style::default().fg(Color::DarkGray),
+                )
+            }
+        })
+        .collect();
+    let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+    let title: Line = {
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, s) in tabs_spans.iter().enumerate() {
+            if i > 0 {
+                spans.push(separator.clone());
+            }
+            spans.push(s.clone());
+        }
+        Line::from(spans)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            format!(" Help — Keybindings{scroll_indicator} "),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(title)
         .style(Style::default().bg(Color::Rgb(36, 40, 56)));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_para = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::White))
-        .scroll((scroll_offset, 0));
+    let help_text = build_tab_help_text(active_tab, kb, &kb.editor);
+    let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
     f.render_widget(help_para, inner);
 }
 
-/// Build the help text dynamically from the configured keybindings.
-fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String {
+/// Build the help text for the currently active tab.
+fn build_tab_help_text(
+    tab: HelpTab,
+    kb: &KeybindingConfig,
+    ek: &EditorKeybindingConfig,
+) -> String {
+    match tab {
+        HelpTab::Global => build_global_text(kb),
+        HelpTab::Kanban => build_kanban_text(kb),
+        HelpTab::Review => build_review_text(kb),
+        HelpTab::Editor => build_editor_text(ek),
+    }
+}
+
+/// Build the Global keybindings tab.
+fn build_global_text(kb: &KeybindingConfig) -> String {
     use std::fmt::Write;
-
-    let mut s = String::with_capacity(1024);
-
+    let mut s = String::with_capacity(512);
     let _ = writeln!(s);
     let _ = writeln!(s, " Global Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
@@ -85,7 +104,16 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         format_combo(&kb.delete_project)
     );
     let _ = writeln!(s, "   {:<16} Reset circuit breaker", "Ctrl+r");
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
+    let _ = writeln!(s, " ");
+    s
+}
 
+/// Build the Kanban keybindings tab.
+fn build_kanban_text(kb: &KeybindingConfig) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(512);
     let _ = writeln!(s);
     let _ = writeln!(s, " Kanban Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
@@ -156,7 +184,16 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} Drill down into subagent",
         format_combo(&kb.drill_down_subagent)
     );
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
+    let _ = writeln!(s, " ");
+    s
+}
 
+/// Build the Review keybindings tab.
+fn build_review_text(kb: &KeybindingConfig) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(256);
     let _ = writeln!(s);
     let _ = writeln!(s, " Review Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
@@ -175,6 +212,16 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
         "   {:<16} View git diff for changes",
         format_combo(&kb.review_changes)
     );
+    let _ = writeln!(s);
+    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
+    let _ = writeln!(s, " ");
+    s
+}
+
+/// Build the Task Editor keybindings tab.
+fn build_editor_text(ek: &EditorKeybindingConfig) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(512);
     let _ = writeln!(s);
     let _ = writeln!(s, " Task Editor Keys");
     let _ = writeln!(s, " ──────────────────────────────────────");
@@ -195,11 +242,9 @@ fn build_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String
     let _ = writeln!(s, "   Page Up/Down  Scroll description");
     let _ = writeln!(s, "   Backspace     Delete character before cursor");
     let _ = writeln!(s, "   Delete        Delete character at cursor");
-
     let _ = writeln!(s);
-    let _ = writeln!(s, " ↑/↓/j/k scroll · any other key to close");
+    let _ = writeln!(s, " Tab/←/→ switch tab · any other key to close");
     let _ = writeln!(s, " ");
-
     s
 }
 
@@ -309,30 +354,79 @@ mod tests {
     }
 
     #[test]
-    fn test_build_help_text_default_config() {
+    fn test_build_global_text_default_config() {
         let kb = KeybindingConfig::default();
-        let text = build_help_text(&kb, &kb.editor);
+        let text = build_global_text(&kb);
         assert!(text.contains("Global Keys"));
-        assert!(text.contains("Kanban Keys"));
-        assert!(text.contains("Task Editor Keys"));
         assert!(text.contains("Ctrl+q"));
-        assert!(text.contains("h / ←"));
-        assert!(text.contains("Shift+M"));
+        assert!(text.contains("Ctrl+j / Ctrl+k")); // next/prev project
     }
 
     #[test]
-    fn test_build_help_text_custom_config() {
+    fn test_build_kanban_text_default_config() {
+        let kb = KeybindingConfig::default();
+        let text = build_kanban_text(&kb);
+        assert!(text.contains("Kanban Keys"));
+        assert!(text.contains("h / ←"));
+    }
+
+    #[test]
+    fn test_build_review_text_default_config() {
+        let kb = KeybindingConfig::default();
+        let text = build_review_text(&kb);
+        assert!(text.contains("Review Keys"));
+    }
+
+    #[test]
+    fn test_build_editor_text_default_config() {
+        let kb = KeybindingConfig::default();
+        let text = build_editor_text(&kb.editor);
+        assert!(text.contains("Task Editor Keys"));
+    }
+
+    #[test]
+    fn test_build_global_text_custom_config() {
         let mut kb = KeybindingConfig::default();
         kb.quit = "ctrl+x".to_string();
-        kb.kanban_left = "a".to_string();
+        let text = build_global_text(&kb);
+        assert!(text.contains("Ctrl+x"));
+        assert!(!text.contains("Ctrl+q"));
+    }
+
+    #[test]
+    fn test_build_editor_text_custom_config() {
+        let mut kb = KeybindingConfig::default();
         kb.editor.save = "ctrl+w".to_string();
         kb.editor.cancel = "ctrl+g".to_string();
-        let text = build_help_text(&kb, &kb.editor);
-        assert!(text.contains("Ctrl+x"));
-        assert!(text.contains("a"));
-        assert!(!text.contains("Ctrl+q"));
-        assert!(!text.contains("h / ←"));
+        let text = build_editor_text(&kb.editor);
         assert!(text.contains("Ctrl+w"));
         assert!(text.contains("Ctrl+g"));
+    }
+
+    #[test]
+    fn test_help_tab_navigation() {
+        assert_eq!(HelpTab::Global.next(), HelpTab::Kanban);
+        assert_eq!(HelpTab::Kanban.next(), HelpTab::Review);
+        assert_eq!(HelpTab::Review.next(), HelpTab::Editor);
+        assert_eq!(HelpTab::Editor.next(), HelpTab::Global);
+
+        assert_eq!(HelpTab::Global.prev(), HelpTab::Editor);
+        assert_eq!(HelpTab::Kanban.prev(), HelpTab::Global);
+        assert_eq!(HelpTab::Review.prev(), HelpTab::Kanban);
+        assert_eq!(HelpTab::Editor.prev(), HelpTab::Review);
+    }
+
+    #[test]
+    fn test_build_tab_help_text_all_tabs() {
+        let kb = KeybindingConfig::default();
+        for tab in HelpTab::ALL {
+            let text = build_tab_help_text(tab, &kb, &kb.editor);
+            assert!(!text.is_empty(), "Tab {:?} should produce text", tab);
+            assert!(
+                text.contains("Tab/←/→ switch tab"),
+                "Tab {:?} should contain footer hint",
+                tab
+            );
+        }
     }
 }

@@ -604,4 +604,27 @@ impl AppState {
         }
         self.ui.notifications.len() != before
     }
+
+    // ─── Task Highlight ───────────────────────────────────────────────────
+
+    /// Highlight a task with a "just saved" visual effect for the given duration.
+    /// The highlight auto-expires and is cleared by `clear_expired_highlight()`.
+    pub fn highlight_task(&mut self, task_id: String, duration_ms: i64) {
+        self.ui.highlighted_task_id = Some(task_id);
+        self.ui.highlight_expires_at = chrono::Utc::now().timestamp_millis() + duration_ms;
+    }
+
+    /// Clear the task highlight if it has expired. Returns `true` if the
+    /// highlight was active and has now been cleared (caller should mark
+    /// render dirty).
+    pub fn clear_expired_highlight(&mut self) -> bool {
+        if self.ui.highlighted_task_id.is_some() {
+            let now = chrono::Utc::now().timestamp_millis();
+            if now >= self.ui.highlight_expires_at {
+                self.ui.highlighted_task_id = None;
+                return true;
+            }
+        }
+        false
+    }
 }

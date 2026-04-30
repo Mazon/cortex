@@ -7,6 +7,7 @@ mod event_loop;
 mod tests;
 
 pub use event_loop::sse_event_loop;
+pub(crate) use dispatch::determine_completion_status;
 pub(crate) use dispatch::process_event;
 
 /// Default maximum consecutive SSE reconnection attempts.

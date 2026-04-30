@@ -131,6 +131,7 @@ mod tests {
             pending_permission_count: 0,
             pending_question_count: question_count,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),

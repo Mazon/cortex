@@ -43,6 +43,7 @@ impl AppState {
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: now,
             updated_at: now,
             project_id: project_id.to_string(),

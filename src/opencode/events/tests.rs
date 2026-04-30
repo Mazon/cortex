@@ -39,6 +39,7 @@
             pending_permission_count: 0,
             pending_question_count: 0,
             review_status: ReviewStatus::Pending,
+            had_write_operations: false,
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
@@ -1643,4 +1644,163 @@
         };
         let (_action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
         // Should not panic — silently ignored
+    }
+
+    // ── Running → review fallback (integration) ──────────────────────────
+
+    #[test]
+    fn session_idle_running_to_review_fallback() {
+        // When a task in "running" column has no auto_progress_to configured
+        // but a "review" column exists, SessionIdle should trigger the fallback
+        // and move the task to "review".
+        let (mut state, task_id, session_id) = make_test_state();
+        let client = OpenCodeClient::new("http://127.0.0.1:1").unwrap();
+
+        // Config: "running" has NO auto_progress_to, but "review" column exists
+        let mut columns_config = make_columns_config();
+        columns_config.definitions[2].auto_progress_to = None; // running → no auto-progress
+
+        // Move task to "running" column
+        state.move_task(&task_id, KanbanColumn("running".to_string()));
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "running");
+
+        let event = EventListResponse::SessionIdle {
+            properties: opencode_sdk_rs::resources::event::SessionIdleProps {
+                session_id: session_id.clone(),
+            },
+        };
+        let (action, _finalize) = process_event(&event, &mut state, &client, &columns_config);
+
+        // Task should have been moved to "review" via fallback
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        assert!(state
+            .kanban
+            .columns
+            .get("review")
+            .unwrap()
+            .contains(&task_id));
+        assert!(!state
+            .kanban
+            .columns
+            .get("running")
+            .unwrap()
+            .contains(&task_id));
+        // Should return an auto-progress action for the reviewer agent
+        assert!(action.is_some());
+        match action.unwrap() {
+            crate::orchestration::engine::AgentCompletionAction::AutoProgress(a) => {
+                assert_eq!(a.target_column.0, "review");
+                assert_eq!(a.agent, "reviewer-alpha");
+            }
+            crate::orchestration::engine::AgentCompletionAction::SendQueuedPrompt { .. } => {
+                panic!("Expected AutoProgress")
+            }
+        }
+    }
+
+    // ── determine_completion_status tests ────────────────────────────────────
+
+    /// Helper to build a minimal AppState with a task in a specific column.
+    fn make_state_for_status_test(column: &str, plan: Option<&str>, had_writes: bool) -> (AppState, String) {
+        let mut state = AppState::default();
+        let project = CortexProject {
+            id: "proj-1".to_string(),
+            name: "Test".to_string(),
+            working_directory: "/tmp".to_string(),
+            status: ProjectStatus::Idle,
+            position: 0,
+            ..Default::default()
+        };
+        state.add_project(project);
+        state.project_registry.active_project_id = Some("proj-1".to_string());
+
+        let task_id = "task-1".to_string();
+        let task = CortexTask {
+            id: task_id.clone(),
+            number: 1,
+            title: "Test".to_string(),
+            description: String::new(),
+            column: KanbanColumn(column.to_string()),
+            session_id: None,
+            agent_type: None,
+            agent_status: AgentStatus::Complete,
+            entered_column_at: 1000,
+            last_activity_at: 1000,
+            error_message: None,
+            plan_output: plan.map(|s| s.to_string()),
+            planning_context: None,
+            pending_description: None,
+            queued_prompt: None,
+            pending_permission_count: 0,
+            pending_question_count: 0,
+            review_status: ReviewStatus::Pending,
+            had_write_operations: had_writes,
+            created_at: 1000,
+            updated_at: 1000,
+            project_id: "proj-1".to_string(),
+        };
+        state.tasks.insert(task_id.clone(), task);
+        state
+            .kanban
+            .columns
+            .entry(column.to_string())
+            .or_default()
+            .push(task_id.clone());
+        (state, task_id)
+    }
+
+    #[test]
+    fn planning_with_plan_auto_progresses_with_ready_status() {
+        let (mut state, task_id) = make_state_for_status_test("planning", Some("A plan"), false);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Ready);
+        assert!(should_progress);
+    }
+
+    #[test]
+    fn planning_without_plan_stays_complete_no_progress() {
+        let (mut state, task_id) = make_state_for_status_test("planning", None, false);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Complete);
+        assert!(!should_progress);
+    }
+
+    #[test]
+    fn planning_with_empty_plan_stays_complete_no_progress() {
+        let (mut state, task_id) = make_state_for_status_test("planning", Some("   "), false);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Complete);
+        assert!(!should_progress);
+    }
+
+    #[test]
+    fn do_with_writes_auto_progresses_with_complete_status() {
+        let (mut state, task_id) = make_state_for_status_test("running", None, true);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Complete);
+        assert!(should_progress);
+    }
+
+    #[test]
+    fn do_without_writes_stays_ready_no_progress() {
+        let (mut state, task_id) = make_state_for_status_test("running", None, false);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Ready);
+        assert!(!should_progress);
+    }
+
+    #[test]
+    fn reviewer_completion_unaffected() {
+        let (mut state, task_id) = make_state_for_status_test("review", None, false);
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, &task_id);
+        assert_eq!(status, AgentStatus::Complete);
+        assert!(should_progress);
+    }
+
+    #[test]
+    fn nonexistent_task_returns_complete() {
+        let mut state = AppState::default();
+        let (status, should_progress) = crate::opencode::events::determine_completion_status(&mut state, "nonexistent");
+        assert_eq!(status, AgentStatus::Complete);
+        assert!(should_progress);
     }
