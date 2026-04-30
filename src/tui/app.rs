@@ -209,11 +209,70 @@ impl App {
             if needs_render {
                 let config = &self.config;
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                // Auto-open permission modal when permissions/questions arrive
+                if !state.ui.permission_modal_active
+                    && state.ui.mode == crate::state::types::AppMode::Normal
+                    && state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
+                {
+                    if let Some(ref tid) = state.ui.viewing_task_id {
+                        // Check both the main task session and the drilled-in
+                        // subagent session for pending permissions/questions.
+                        let main_has_pending = state
+                            .session_tracker
+                            .task_sessions
+                            .get(tid)
+                            .map(|s| {
+                                !s.pending_permissions.is_empty()
+                                    || !s.pending_questions.is_empty()
+                            })
+                            .unwrap_or(false);
+                        let sub_has_pending = state
+                            .get_drilldown_session_id()
+                            .and_then(|sid| {
+                                state
+                                    .session_tracker
+                                    .subagent_session_data
+                                    .get(sid)
+                            })
+                            .map(|s| {
+                                !s.pending_permissions.is_empty()
+                                    || !s.pending_questions.is_empty()
+                            })
+                            .unwrap_or(false);
+                        if main_has_pending || sub_has_pending {
+                            state.ui.permission_modal_active = true;
+                            state.ui.permission_modal_selected_index = 0;
+                        }
+                    }
+                }
                 self.terminal.draw(|f| {
                     let state = &mut *state;
                     match state.ui.mode {
                         crate::state::types::AppMode::Normal => {
                             crate::tui::render_normal(f, state, config);
+                            // Render permission/question modal overlay if active
+                            if state.ui.permission_modal_active {
+                                crate::tui::permission_modal::render_permission_modal(
+                                    f, f.area(), state, &config.theme,
+                                );
+                                // Re-render the status bar on top of the modal so
+                                // notifications (e.g. API errors) remain visible to the user.
+                                let area = f.area();
+                                let v_constraints = ratatui::layout::Constraint::from_lengths([
+                                    0, // content area (min, we just need the status bar)
+                                    2, // status bar height
+                                ]);
+                                let v_layout = ratatui::layout::Layout::default()
+                                    .direction(ratatui::layout::Direction::Vertical)
+                                    .constraints(v_constraints)
+                                    .split(area);
+                                let status_area = v_layout[1].inner(
+                                    ratatui::layout::Margin { horizontal: 1, vertical: 0 },
+                                );
+                                crate::tui::status_bar::render_status_bar(
+                                    f, status_area, state, &config.theme,
+                                );
+                            }
                         }
                         crate::state::types::AppMode::TaskEditor => {
                             crate::tui::task_editor::render_task_editor(f, state, config);
@@ -950,6 +1009,88 @@ impl App {
             }
         }
 
+        // ── Modal key interception ────────────────────────────────────
+        {
+            let modal_active = {
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.permission_modal_active
+            };
+            if modal_active {
+                use crossterm::event::KeyCode;
+                match key.code {
+                    // Arrow keys / vim keys for navigation
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if state.ui.permission_modal_selected_index > 0 {
+                            state.ui.permission_modal_selected_index -= 1;
+                            state.mark_render_dirty();
+                        }
+                        return;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        let max_options = self.get_modal_option_count(&state);
+                        if state.ui.permission_modal_selected_index + 1 < max_options {
+                            state.ui.permission_modal_selected_index += 1;
+                            state.mark_render_dirty();
+                        }
+                        return;
+                    }
+                    // Enter — execute selected option
+                    KeyCode::Enter => {
+                        self.handle_modal_confirm();
+                        return;
+                    }
+                    // Esc — close modal
+                    KeyCode::Esc => {
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.ui.permission_modal_active = false;
+                        state.ui.permission_modal_selected_index = 0;
+                        state.mark_render_dirty();
+                        return;
+                    }
+                    // Quick shortcuts
+                    KeyCode::Char('y') => {
+                        // Quick-approve (only for permissions)
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if self.has_pending_permission(&state) {
+                            state.ui.permission_modal_selected_index = 0; // Yes
+                            drop(state);
+                            self.handle_modal_confirm();
+                        }
+                        return;
+                    }
+                    KeyCode::Char('n') => {
+                        // Quick-reject (only for permissions)
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if self.has_pending_permission(&state) {
+                            state.ui.permission_modal_selected_index = 1; // No
+                            drop(state);
+                            self.handle_modal_confirm();
+                        }
+                        return;
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                        // Quick-select answer by number (only for questions)
+                        let idx = (c as usize) - ('1' as usize);
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        if !self.has_pending_permission(&state)
+                            && idx < self.get_modal_option_count(&state)
+                        {
+                            state.ui.permission_modal_selected_index = idx;
+                            drop(state);
+                            self.handle_modal_confirm();
+                        }
+                        return;
+                    }
+                    _ => {
+                        // Consume all other keys while modal is active
+                        return;
+                    }
+                }
+            }
+        }
+
         // Check if we're in task detail view — Escape pops subagent stack or closes detail
         {
             let is_detail_escape = {
@@ -1055,10 +1196,8 @@ impl App {
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
-                        let perm = state
-                            .session_tracker
-                            .task_sessions
-                            .get(tid)
+                        let session = self.get_effective_session(&state);
+                        let perm = session
                             .and_then(|s| s.pending_permissions.first().cloned());
                         let client = state
                             .project_registry
@@ -1131,10 +1270,8 @@ impl App {
                     if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
                         (None, None, None)
                     } else if let Some(ref tid) = state.ui.viewing_task_id {
-                        let question = state
-                            .session_tracker
-                            .task_sessions
-                            .get(tid)
+                        let session = self.get_effective_session(&state);
+                        let question = session
                             .and_then(|s| s.pending_questions.first().cloned())
                             .filter(|q| answer_index < q.answers.len());
                         let client = state
@@ -3541,6 +3678,301 @@ impl App {
         )?;
         crossterm::terminal::disable_raw_mode()?;
         Ok(())
+    }
+
+    // ── Permission Modal helpers ──────────────────────────────────────
+
+    /// Get the effective session for the current view context.
+    ///
+    /// When drilled into a subagent, returns the subagent's session data
+    /// (keyed by session ID in `subagent_session_data`).
+    /// Otherwise, returns the main task's session data
+    /// (keyed by task ID in `task_sessions`).
+    ///
+    /// This mirrors the data-source selection used by the modal renderer
+    /// in `permission_modal.rs`.
+    fn get_effective_session<'a>(
+        &self,
+        state: &'a AppState,
+    ) -> Option<&'a crate::state::types::TaskDetailSession> {
+        if let Some(sid) = state.get_drilldown_session_id() {
+            state.session_tracker.subagent_session_data.get(sid)
+        } else if let Some(ref tid) = state.ui.viewing_task_id {
+            state.session_tracker.task_sessions.get(tid)
+        } else {
+            None
+        }
+    }
+
+    /// Check if there's a pending permission (vs question) for the current view.
+    fn has_pending_permission(&self, state: &AppState) -> bool {
+        if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+            return false;
+        }
+        self.get_effective_session(state)
+            .map(|s| !s.pending_permissions.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Get the number of options in the current modal.
+    fn get_modal_option_count(&self, state: &AppState) -> usize {
+        if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+            return 0;
+        }
+        self.get_effective_session(state)
+            .map(|s| {
+                if !s.pending_permissions.is_empty() {
+                    2 // Yes, No
+                } else if !s.pending_questions.is_empty() {
+                    s.pending_questions[0].answers.len()
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    /// Execute the currently selected modal option (approve/reject permission or answer question).
+    fn handle_modal_confirm(&self) {
+        tracing::debug!("handle_modal_confirm: invoked");
+        // Determine what to do based on what's pending
+        let (pending_perm, pending_question, task_id, client): (
+            Option<crate::state::types::PermissionRequest>,
+            Option<crate::state::types::QuestionRequest>,
+            Option<String>,
+            Option<OpenCodeClient>,
+        ) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.ui.focused_panel != crate::state::types::FocusedPanel::TaskDetail {
+                (None, None, None, None)
+            } else {
+                let session = self.get_effective_session(&state);
+                let perm = session
+                    .and_then(|s| s.pending_permissions.first().cloned());
+                let question = session
+                    .and_then(|s| s.pending_questions.first().cloned());
+                let client = state
+                    .project_registry
+                    .active_project_id
+                    .as_ref()
+                    .and_then(|pid| self.opencode_clients.get(pid))
+                    .cloned();
+                // task_id is the viewing_task_id (main task) — permissions are
+                // always resolved against the parent task regardless of drill-down.
+                let tid = state.ui.viewing_task_id.clone();
+                (perm, question, tid, client)
+            }
+        };
+
+        let selected_index = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.ui.permission_modal_selected_index
+        };
+
+        // --- Precondition checks with user-visible feedback ---
+
+        if pending_perm.is_none() && pending_question.is_none() {
+            if task_id.is_some() {
+                tracing::warn!(
+                    "handle_modal_confirm: no pending permission/question found for task {:?}",
+                    task_id
+                );
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.permission_modal_active = false;
+                state.ui.permission_modal_selected_index = 0;
+                state.set_notification(
+                    "No pending permission or question to resolve".to_string(),
+                    crate::state::types::NotificationVariant::Warning,
+                    3000,
+                );
+                state.mark_render_dirty();
+            } else {
+                tracing::debug!("handle_modal_confirm: no active task context");
+            }
+            return;
+        }
+
+        if client.is_none() {
+            tracing::error!("handle_modal_confirm: no OpenCode client for active project");
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.set_notification(
+                "Cannot resolve: no server connection for this project".to_string(),
+                crate::state::types::NotificationVariant::Error,
+                5000,
+            );
+            state.mark_render_dirty();
+            return;
+        }
+
+        // At this point: client, task_id, and at least one of pending_perm/pending_question are Some.
+        let client = client.unwrap();
+        let task_id = task_id.unwrap();
+
+        if let Some(perm) = pending_perm {
+            // Permission — selected_index 0 = Yes (approve), 1+ = No (reject)
+            let approve = selected_index == 0;
+            let state = self.state.clone();
+            let perm_id = perm.id.clone();
+            let session_id = perm.session_id.clone();
+            let tid = task_id.clone();
+            tokio::spawn(async move {
+                match client
+                    .resolve_permission(&session_id, &perm_id, approve)
+                    .await
+                {
+                    Ok(()) => {
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                        s.resolve_permission_request(&tid, &perm_id, approve);
+                        // Check if more permissions/questions remain
+                        let has_more = s
+                            .session_tracker
+                            .task_sessions
+                            .get(&tid)
+                            .map(|sess| {
+                                !sess.pending_permissions.is_empty()
+                                    || !sess.pending_questions.is_empty()
+                            })
+                            .unwrap_or(false);
+                        if has_more {
+                            s.ui.permission_modal_selected_index = 0;
+                        } else {
+                            s.ui.permission_modal_active = false;
+                            s.ui.permission_modal_selected_index = 0;
+                        }
+                        s.mark_render_dirty();
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to resolve permission {}: {}",
+                            perm_id,
+                            e
+                        );
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                        s.set_notification(
+                            format!("Failed to resolve permission: {}", e),
+                            crate::state::types::NotificationVariant::Error,
+                            5000,
+                        );
+                        s.mark_render_dirty();
+                    }
+                }
+            });
+        } else if let Some(question) = pending_question {
+            // Question — selected_index maps to answer index
+            if selected_index < question.answers.len() {
+                let answer = question.answers[selected_index].clone();
+                let state = self.state.clone();
+                let columns_config = self.config.columns.clone();
+                let opencode_config = self.config.opencode.clone();
+                let question_id = question.id.clone();
+                let session_id = question.session_id.clone();
+                let answer_preview = answer.chars().take(30).collect::<String>();
+                let tid = task_id.clone();
+                tokio::spawn(async move {
+                    match client
+                        .resolve_question(&session_id, &question_id, &answer)
+                        .await
+                    {
+                        Ok(()) => {
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                            s.resolve_question_request(&tid, &question_id);
+
+                            // Check if task should transition out of Question status
+                            let needs_reassess = s.should_reassess_after_question(&tid);
+                            if needs_reassess {
+                                let (status, should_progress) =
+                                    crate::opencode::events::determine_completion_status(
+                                        &mut s, &tid,
+                                    );
+                                s.update_task_agent_status(&tid, status);
+
+                                if should_progress {
+                                    let action =
+                                        crate::orchestration::engine::on_agent_completed(
+                                            &tid,
+                                            &mut s,
+                                            &columns_config,
+                                        );
+                                    if let Some(a) = action {
+                                        match a {
+                                            crate::orchestration::engine::AgentCompletionAction::AutoProgress(ap) => {
+                                                let col = ap.target_column.clone();
+                                                let tid_clone = tid.clone();
+                                                drop(s);
+                                                crate::orchestration::engine::on_task_moved(
+                                                    &tid_clone,
+                                                    &col,
+                                                    &state,
+                                                    &client,
+                                                    &columns_config,
+                                                    &opencode_config,
+                                                    None,
+                                                );
+                                            }
+                                            crate::orchestration::engine::AgentCompletionAction::SendQueuedPrompt {
+                                                task_id: qp_tid,
+                                                prompt: qp_prompt,
+                                                session_id: qp_sid,
+                                                agent_type: qp_agent,
+                                            } => {
+                                                drop(s);
+                                                crate::orchestration::engine::send_follow_up_prompt(
+                                                    &qp_tid,
+                                                    &qp_prompt,
+                                                    &qp_sid,
+                                                    &qp_agent,
+                                                    &state,
+                                                    &client,
+                                                    &opencode_config,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                            // Check if more questions remain
+                            let has_more = s
+                                .session_tracker
+                                .task_sessions
+                                .get(&tid)
+                                .map(|sess| {
+                                    !sess.pending_questions.is_empty()
+                                        || !sess.pending_permissions.is_empty()
+                                })
+                                .unwrap_or(false);
+                            if has_more {
+                                s.ui.permission_modal_selected_index = 0;
+                            } else {
+                                s.ui.permission_modal_active = false;
+                                s.ui.permission_modal_selected_index = 0;
+                            }
+                            s.set_notification(
+                                format!("Answered: {}", answer_preview),
+                                crate::state::types::NotificationVariant::Success,
+                                3000,
+                            );
+                            s.mark_render_dirty();
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to resolve question {}: {}",
+                                question_id,
+                                e
+                            );
+                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                            s.set_notification(
+                                format!("Failed to answer question: {}", e),
+                                crate::state::types::NotificationVariant::Error,
+                                5000,
+                            );
+                            s.mark_render_dirty();
+                        }
+                    }
+                });
+            }
+        }
     }
 }
 

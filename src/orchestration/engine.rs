@@ -702,11 +702,12 @@ pub fn on_agent_completed(
             }
         } else {
             // No auto-progression configured.
-            // Fallback: if the task is in "running" and a "review" column exists,
-            // automatically move it there so completed work doesn't clutter
-            // the running column. This handles the case where a user's config
-            // doesn't explicitly set auto_progress_to for the running column.
-            if col.0 == "running"
+            // Fallback: if the task is in a non-terminal column (not "review" or "done")
+            // and a "review" column exists, automatically move it there so completed
+            // work doesn't clutter the board. This handles any column where the user's
+            // config doesn't explicitly set auto_progress_to.
+            if col.0 != "review"
+                && col.0 != "done"
                 && columns_config
                     .definitions
                     .iter()
@@ -714,7 +715,8 @@ pub fn on_agent_completed(
             {
                 tracing::info!(
                     task_id = %task_id,
-                    "Running column has no auto_progress_to configured — falling back to review column"
+                    from_column = %col.0,
+                    "Column has no auto_progress_to configured — falling back to review column"
                 );
                 state.move_task(task_id, KanbanColumn("review".to_string()));
 
@@ -1126,6 +1128,105 @@ mod tests {
             }
             AgentCompletionAction::SendQueuedPrompt { .. } => panic!("Expected AutoProgress"),
         }
+    }
+
+    #[test]
+    fn auto_progress_falls_back_to_review_for_custom_column() {
+        // When a task in a custom (non-running) column has no auto_progress_to
+        // configured, it should automatically fall back to moving to "review"
+        // if that column exists.
+        let (mut state, task_id) = make_state_with_task_in_column("custom");
+
+        // Config: "custom" has NO auto_progress_to, but "review" column exists
+        let mut columns_config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig {
+                    id: "custom".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("do".to_string()),
+                    auto_progress_to: None, // No explicit auto-progression
+                },
+                ColumnConfig {
+                    id: "review".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("reviewer-alpha".to_string()),
+                    auto_progress_to: None,
+                },
+            ],
+            visible_ids: Vec::new(),
+        };
+        columns_config.finalize();
+
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
+
+        // Task should have moved to "review"
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "review");
+        assert!(state
+            .kanban
+            .columns
+            .get("review")
+            .unwrap()
+            .contains(&task_id));
+        assert!(!state
+            .kanban
+            .columns
+            .get("custom")
+            .unwrap()
+            .contains(&task_id));
+        // Should return an action to start the reviewer agent
+        assert!(action.is_some());
+        match action.unwrap() {
+            AgentCompletionAction::AutoProgress(a) => {
+                assert_eq!(a.task_id, task_id);
+                assert_eq!(a.target_column.0, "review");
+                assert_eq!(a.agent, "reviewer-alpha");
+            }
+            AgentCompletionAction::SendQueuedPrompt { .. } => panic!("Expected AutoProgress"),
+        }
+    }
+
+    #[test]
+    fn auto_progress_no_fallback_for_done_column() {
+        // When a task in "done" column completes, it should stay in "done"
+        // and NOT be moved to "review" (preventing infinite loops).
+        let (mut state, task_id) = make_state_with_task_in_column("done");
+
+        // Config: "done" and "review" columns exist
+        let mut columns_config = ColumnsConfig {
+            definitions: vec![
+                ColumnConfig {
+                    id: "done".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: None,
+                    auto_progress_to: None,
+                },
+                ColumnConfig {
+                    id: "review".to_string(),
+                    display_name: None,
+                    visible: true,
+                    agent: Some("reviewer-alpha".to_string()),
+                    auto_progress_to: None,
+                },
+            ],
+            visible_ids: Vec::new(),
+        };
+        columns_config.finalize();
+
+        let action = on_agent_completed(&task_id, &mut state, &columns_config);
+
+        // Task should stay in "done"
+        assert_eq!(state.tasks.get(&task_id).unwrap().column.0, "done");
+        assert!(state
+            .kanban
+            .columns
+            .get("done")
+            .unwrap()
+            .contains(&task_id));
+        // No action returned
+        assert!(action.is_none());
     }
 
     #[test]

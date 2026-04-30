@@ -102,7 +102,7 @@ impl Db {
                     pending_description: row.get(17)?,
                     queued_prompt: None, // Transient — not persisted
                     review_status: parse_review_status(&row.get::<_, String>(18)?),
-                    had_write_operations: row.get(19)?,
+                    had_write_operations: false, // Transient — not persisted
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

@@ -7,6 +7,7 @@ pub mod help;
 pub mod kanban;
 pub mod keys;
 pub mod loading;
+pub mod permission_modal;
 pub mod prompt;
 pub mod reports;
 pub mod sidebar;

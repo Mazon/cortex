@@ -137,8 +137,9 @@ pub fn render_task_detail(
     let footer_height: u16 = 1;
     // Prompt input: bordered block needs 3 rows (border top + text + border bottom)
     let prompt_input_height: u16 = 3;
-    // Permissions: bordered block needs 3 rows
-    let permission_rows: u16 = if has_permissions { 3 } else { 0 };
+    // Permissions: bordered block needs 3 rows (hidden when modal is active to avoid duplication)
+    let modal_is_active = state.ui.permission_modal_active;
+    let permission_rows: u16 = if has_permissions && !modal_is_active { 3 } else { 0 };
     // Review summary: bordered block needs 3 rows
     let review_summary_rows: u16 = if is_awaiting_review { 3 } else { 0 };
 

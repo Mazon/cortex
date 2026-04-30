@@ -78,6 +78,10 @@ pub struct UIState {
     pub highlighted_task_id: Option<String>,
     /// Unix timestamp (milliseconds) when the highlight should expire.
     pub highlight_expires_at: i64,
+    /// Whether the permission/question modal is currently displayed.
+    pub permission_modal_active: bool,
+    /// Index of the currently highlighted option in the modal (0-based).
+    pub permission_modal_selected_index: usize,
 }
 
 impl Default for UIState {
@@ -106,6 +110,8 @@ impl Default for UIState {
             reports: None,
             highlighted_task_id: None,
             highlight_expires_at: 0,
+            permission_modal_active: false,
+            permission_modal_selected_index: 0,
         }
     }
 }
