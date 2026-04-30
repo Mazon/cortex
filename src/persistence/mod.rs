@@ -120,7 +120,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
         for task in &tasks {
             // Validate: task must reference its parent project
             if task.project_id != project.id {
-                tracing::warn!(
+                tracing::debug!(
                     "Task {} references project {} but was loaded under project {}, skipping",
                     task.id,
                     task.project_id,
@@ -136,7 +136,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
             if let Ok(counter) = counter_str.parse::<u32>() {
                 counters.insert(project.id.clone(), counter);
             } else {
-                tracing::warn!(
+                tracing::debug!(
                     "Invalid task number counter for project {}: {:?}",
                     project.id,
                     counter_str,
@@ -160,7 +160,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
                     if valid_task_ids.contains(tid.as_str()) {
                         true
                     } else {
-                        tracing::warn!(
+                        tracing::debug!(
                             "Kanban order references unknown task {} in column {}, skipping",
                             tid,
                             col_id,
@@ -180,7 +180,7 @@ pub fn restore_state(state: &mut AppState, db: &Db) -> Result<()> {
         if valid_project_ids.contains(pid.as_str()) {
             true
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 "Active project ID {:?} does not match any loaded project, ignoring",
                 pid,
             );

@@ -575,7 +575,7 @@ fn parse_agent_status(s: &str) -> AgentStatus {
         "done" | "complete" | "completed" | "idle" => AgentStatus::Complete,
         "failed" | "error" => AgentStatus::Error,
         _ => {
-            tracing::warn!(
+            tracing::debug!(
                 "Unknown agent_status value in database: {:?}, defaulting to Pending",
                 s
             );
@@ -594,7 +594,7 @@ fn parse_project_status(s: &str) -> ProjectStatus {
         "error" => ProjectStatus::Error,
         "hung" => ProjectStatus::Hung,
         _ => {
-            tracing::warn!(
+            tracing::debug!(
                 "Unknown project_status value in database: {:?}, defaulting to Disconnected",
                 s
             );
@@ -630,7 +630,7 @@ fn parse_review_status(s: &str) -> ReviewStatus {
         "approved" => ReviewStatus::Approved,
         "rejected" => ReviewStatus::Rejected,
         _ => {
-            tracing::warn!(
+            tracing::debug!(
                 "Unknown review_status value in database: {:?}, defaulting to Pending",
                 s
             );

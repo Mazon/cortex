@@ -192,7 +192,7 @@ impl AppState {
             .collect();
 
         for task_id in &hung_task_ids {
-            tracing::warn!(
+            tracing::debug!(
                 task_id = %task_id,
                 idle_secs = now - self.tasks.get(task_id).map(|t| t.last_activity_at).unwrap_or(0),
                 "Marking task as Hung — no activity for {}s",

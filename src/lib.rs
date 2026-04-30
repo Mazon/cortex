@@ -181,7 +181,9 @@ pub fn run() -> Result<()> {
                 tracing::error!("AppState mutex poisoned, recovering: {}", e);
                 e.into_inner()
             });
-            if let Err(e) = persistence::restore_state(&mut state, &db) {
+            let restore_result = persistence::restore_state(&mut state, &db);
+            drop(state); // Release lock before tracing
+            if let Err(e) = restore_result {
                 tracing::error!("Failed to restore persisted state: {}", e);
             }
         }
@@ -454,15 +456,17 @@ pub fn run() -> Result<()> {
                     while let Some((task_id, session_id, result)) = futures.next().await {
                         match result {
                             Ok(messages) => {
+                                let msg_count = messages.len();
                                 let mut state = state.lock().unwrap_or_else(|e| {
                                     tracing::error!("AppState mutex poisoned, recovering: {}", e);
                                     e.into_inner()
                                 });
                                 state.rehydrate_task_session(&task_id, messages.clone());
+                                drop(state); // Release lock before tracing
                                 tracing::info!(
                                     task_id = %task_id,
                                     session_id = %session_id,
-                                    msg_count = messages.len(),
+                                    msg_count = msg_count,
                                     "Rehydrated session for active task"
                                 );
                             }
