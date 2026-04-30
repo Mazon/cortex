@@ -283,8 +283,7 @@ impl App {
                         }
                         crate::state::types::AppMode::Help => {
                             crate::tui::render_normal(f, state, config);
-                            let help_tab = state.ui.help_tab;
-                            crate::tui::help::render_help_overlay(f, &config.keybindings, help_tab);
+                            crate::tui::help::render_help_overlay(f, &config.keybindings);
                         }
                         crate::state::types::AppMode::ProjectRename => {
                             crate::tui::render_normal(f, state, config);
@@ -470,46 +469,9 @@ impl App {
                 self.handle_editor_key(key);
             }
             crate::state::types::AppMode::Help => {
-                use crate::state::types::HelpTab;
-                use crossterm::event::{KeyCode, KeyModifiers};
-                match (key.code, key.modifiers) {
-                    // Tab or Right/l → next tab
-                    (KeyCode::Tab, KeyModifiers::NONE)
-                    | (KeyCode::Right, KeyModifiers::NONE)
-                    | (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = state.ui.help_tab.next();
-                    }
-                    // Shift+Tab or Left/h → previous tab
-                    (KeyCode::BackTab, _)
-                    | (KeyCode::Left, KeyModifiers::NONE)
-                    | (KeyCode::Char('h'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = state.ui.help_tab.prev();
-                    }
-                    // Number keys 1-4 → jump directly to tab
-                    (KeyCode::Char('1'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = HelpTab::Global;
-                    }
-                    (KeyCode::Char('2'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = HelpTab::Kanban;
-                    }
-                    (KeyCode::Char('3'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = HelpTab::Review;
-                    }
-                    (KeyCode::Char('4'), KeyModifiers::NONE) => {
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.help_tab = HelpTab::Editor;
-                    }
-                    _ => {
-                        // Any other key dismisses help
-                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        state.ui.mode = crate::state::types::AppMode::Normal;
-                    }
-                }
+                // Any key dismisses the help overlay
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.ui.mode = crate::state::types::AppMode::Normal;
             }
             crate::state::types::AppMode::ProjectRename => {
                 self.handle_rename_key(key);
@@ -1466,9 +1428,7 @@ impl App {
     }
 
     fn handle_help_toggle(&mut self) {
-        use crate::state::types::HelpTab;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.ui.help_tab = HelpTab::Global;
         state.ui.mode = crate::state::types::AppMode::Help;
     }
 
