@@ -28,11 +28,26 @@ pub fn render_permission_modal(
     let drilled_session_id = state.get_drilldown_session_id().map(|s| s.to_string());
 
     // Gather pending permission/question data
-    let (is_permission, tool_or_question, description_or_details, options, total_pending, current_index) = {
+    let (is_permission, tool_or_question, description_or_details, options, total_pending, _current_index) = {
         if let Some(ref sid) = drilled_session_id {
-            // Drilled into subagent — read from subagent session data
-            let session = state.session_tracker.subagent_session_data.get(sid);
-            gather_modal_data(session, state.ui.permission_modal_selected_index)
+            // Permissions/questions for subagents are stored in the parent task's
+            // session, not in subagent_session_data (see sse_processor.rs —
+            // process_permission_asked always routes to the parent task).
+            // Try subagent data first (for messages/output), then fall through
+            // to parent task session for permissions/questions.
+            let sub_session = state.session_tracker.subagent_session_data.get(sid);
+            let result = gather_modal_data(sub_session, state.ui.permission_modal_selected_index);
+            if result.1.is_none() {
+                // No data in subagent session — fall through to parent task session
+                let session = state
+                    .ui
+                    .viewing_task_id
+                    .as_ref()
+                    .and_then(|tid| state.session_tracker.task_sessions.get(tid));
+                gather_modal_data(session, state.ui.permission_modal_selected_index)
+            } else {
+                result
+            }
         } else if let Some(ref tid) = viewing_task_id {
             // Main task view
             let session = state.session_tracker.task_sessions.get(tid);
@@ -75,7 +90,7 @@ pub fn render_permission_modal(
     // ── Build title ───────────────────────────────────────────────────
     let (title_icon, title_label, border_color) = if is_permission {
         let counter = if total_pending > 1 {
-            format!(" ({}/{})", current_index + 1, total_pending)
+            format!(" {} pending ", total_pending)
         } else {
             String::new()
         };
@@ -86,7 +101,7 @@ pub fn render_permission_modal(
         )
     } else {
         let counter = if total_pending > 1 {
-            format!(" ({}/{})", current_index + 1, total_pending)
+            format!(" {} pending ", total_pending)
         } else {
             String::new()
         };
@@ -298,13 +313,29 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         let mut current = String::new();
         for word in line.split_whitespace() {
             if current.is_empty() {
-                current = word.to_string();
+                // Word itself exceeds max_width — truncate with ellipsis
+                if word.chars().count() > max_width {
+                    let truncated: String =
+                        word.chars().take(max_width.saturating_sub(1)).collect();
+                    lines.push(format!("{}…", truncated));
+                    current = String::new();
+                } else {
+                    current = word.to_string();
+                }
             } else if current.len() + 1 + word.len() <= max_width {
                 current.push(' ');
                 current.push_str(word);
             } else {
                 lines.push(current);
-                current = word.to_string();
+                // Handle oversized word on its own line
+                if word.chars().count() > max_width {
+                    let truncated: String =
+                        word.chars().take(max_width.saturating_sub(1)).collect();
+                    lines.push(format!("{}…", truncated));
+                    current = String::new();
+                } else {
+                    current = word.to_string();
+                }
             }
         }
         if !current.is_empty() {

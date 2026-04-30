@@ -69,6 +69,7 @@ impl AppState {
         self.ui.viewing_task_id = Some(task_id.to_string());
         self.ui.focused_panel = FocusedPanel::TaskDetail;
         self.ui.user_scroll_offset = None;
+        self.ui.permission_modal_dismissed_at = None;
 
         // Initialize the prompt input editor as empty — it's a follow-up prompt field,
         // not a description editor. The task description is shown as pinned context
@@ -84,6 +85,7 @@ impl AppState {
         self.ui.user_scroll_offset = None;
         self.ui.session_nav_stack.clear();
         self.ui.detail_editor = None;
+        self.ui.permission_modal_dismissed_at = None;
         self.ui.clear_changed_files();
     }
 

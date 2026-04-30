@@ -1,6 +1,7 @@
 //! UI state types for the Cortex application.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 use super::enums::*;
 use super::task::{CortexTask, SessionRef, TaskDetailSession};
@@ -82,6 +83,9 @@ pub struct UIState {
     pub permission_modal_active: bool,
     /// Index of the currently highlighted option in the modal (0-based).
     pub permission_modal_selected_index: usize,
+    /// Timestamp when the user last dismissed the permission modal via Esc.
+    /// Used to prevent auto-reopen for a cooldown period.
+    pub permission_modal_dismissed_at: Option<Instant>,
 }
 
 impl Default for UIState {
@@ -112,6 +116,7 @@ impl Default for UIState {
             highlight_expires_at: 0,
             permission_modal_active: false,
             permission_modal_selected_index: 0,
+            permission_modal_dismissed_at: None,
         }
     }
 }

@@ -210,7 +210,11 @@ impl App {
                 let config = &self.config;
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 // Auto-open permission modal when permissions/questions arrive
+                let dismissed_recently = state.ui.permission_modal_dismissed_at
+                    .map(|t| t.elapsed().as_secs() < 5)
+                    .unwrap_or(false);
                 if !state.ui.permission_modal_active
+                    && !dismissed_recently
                     && state.ui.mode == crate::state::types::AppMode::Normal
                     && state.ui.focused_panel == crate::state::types::FocusedPanel::TaskDetail
                 {
@@ -1016,6 +1020,14 @@ impl App {
                 state.ui.permission_modal_active
             };
             if modal_active {
+                // Clamp selected_index against current option count
+                {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    let max = self.get_modal_option_count(&state);
+                    if max > 0 && state.ui.permission_modal_selected_index >= max {
+                        state.ui.permission_modal_selected_index = max - 1;
+                    }
+                }
                 use crossterm::event::KeyCode;
                 match key.code {
                     // Arrow keys / vim keys for navigation
@@ -1046,6 +1058,7 @@ impl App {
                         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                         state.ui.permission_modal_active = false;
                         state.ui.permission_modal_selected_index = 0;
+                        state.ui.permission_modal_dismissed_at = Some(std::time::Instant::now());
                         state.mark_render_dirty();
                         return;
                     }
@@ -1213,37 +1226,13 @@ impl App {
 
                 if let (Some(perm), Some(tid)) = (pending_perm, task_id) {
                     if let Some(client) = client {
-                        let state = self.state.clone();
-                        let perm_id = perm.id.clone();
-                        let session_id = perm.session_id.clone();
-                        tokio::spawn(async move {
-                            match client
-                                .resolve_permission(&session_id, &perm_id, approve)
-                                .await
-                            {
-                                Ok(()) => {
-                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                                    s.resolve_permission_request(&tid, &perm_id, approve);
-                                    s.mark_render_dirty();
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to resolve permission {}: {}",
-                                        perm_id,
-                                        e
-                                    );
-                                    // Keep the permission in the pending list so the user can retry
-                                    // Note: tracing layer also captures this error automatically
-                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                                    s.set_notification(
-                                        format!("Failed to resolve permission: {}", e),
-                                        crate::state::types::NotificationVariant::Error,
-                                        5000,
-                                    );
-                                    s.mark_render_dirty();
-                                }
-                            }
-                        });
+                        self.resolve_permission_async(
+                            client,
+                            perm.session_id.clone(),
+                            perm.id.clone(),
+                            tid,
+                            approve,
+                        );
                     }
                 } else {
                     // In TaskDetail view with no pending permission — consume y/n
@@ -1361,6 +1350,7 @@ impl App {
                                     }
 
                                     let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                                    Self::sync_modal_after_resolve(&mut s, &tid);
                                     s.set_notification(
                                         format!("Answered: {}", answer_preview),
                                         crate::state::types::NotificationVariant::Success,
@@ -3732,6 +3722,72 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// Resolve a permission request asynchronously.
+    /// Handles the common pattern of: API call → state update → modal sync → notification.
+    fn resolve_permission_async(
+        &self,
+        client: OpenCodeClient,
+        session_id: String,
+        perm_id: String,
+        task_id: String,
+        approve: bool,
+    ) {
+        let state = self.state.clone();
+        tokio::spawn(async move {
+            match client
+                .resolve_permission(&session_id, &perm_id, approve)
+                .await
+            {
+                Ok(()) => {
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.resolve_permission_request(&task_id, &perm_id, approve);
+                    Self::sync_modal_after_resolve(&mut s, &task_id);
+                    s.set_notification(
+                        if approve {
+                            "Permission approved".to_string()
+                        } else {
+                            "Permission rejected".to_string()
+                        },
+                        crate::state::types::NotificationVariant::Success,
+                        2000,
+                    );
+                    s.mark_render_dirty();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to resolve permission {}: {}", perm_id, e);
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                    s.set_notification(
+                        format!("Failed to resolve permission: {}", e),
+                        crate::state::types::NotificationVariant::Error,
+                        5000,
+                    );
+                    s.mark_render_dirty();
+                }
+            }
+        });
+    }
+
+    /// After resolving a permission/question, sync modal state.
+    /// Closes the modal if no more pending items remain, resets selection otherwise.
+    fn sync_modal_after_resolve(s: &mut AppState, task_id: &str) {
+        if s.ui.permission_modal_active {
+            let has_more = s
+                .session_tracker
+                .task_sessions
+                .get(task_id)
+                .map(|sess| {
+                    !sess.pending_permissions.is_empty() || !sess.pending_questions.is_empty()
+                })
+                .unwrap_or(false);
+            if has_more {
+                s.ui.permission_modal_selected_index = 0;
+            } else {
+                s.ui.permission_modal_active = false;
+                s.ui.permission_modal_selected_index = 0;
+            }
+        }
+    }
+
     /// Execute the currently selected modal option (approve/reject permission or answer question).
     fn handle_modal_confirm(&self) {
         tracing::debug!("handle_modal_confirm: invoked");
@@ -3809,54 +3865,19 @@ impl App {
         let task_id = task_id.unwrap();
 
         if let Some(perm) = pending_perm {
-            // Permission — selected_index 0 = Yes (approve), 1+ = No (reject)
+            // Bounds check — permissions have exactly 2 options (Yes/No)
+            if selected_index > 1 {
+                return;
+            }
+            // Permission — selected_index 0 = Yes (approve), 1 = No (reject)
             let approve = selected_index == 0;
-            let state = self.state.clone();
-            let perm_id = perm.id.clone();
-            let session_id = perm.session_id.clone();
-            let tid = task_id.clone();
-            tokio::spawn(async move {
-                match client
-                    .resolve_permission(&session_id, &perm_id, approve)
-                    .await
-                {
-                    Ok(()) => {
-                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                        s.resolve_permission_request(&tid, &perm_id, approve);
-                        // Check if more permissions/questions remain
-                        let has_more = s
-                            .session_tracker
-                            .task_sessions
-                            .get(&tid)
-                            .map(|sess| {
-                                !sess.pending_permissions.is_empty()
-                                    || !sess.pending_questions.is_empty()
-                            })
-                            .unwrap_or(false);
-                        if has_more {
-                            s.ui.permission_modal_selected_index = 0;
-                        } else {
-                            s.ui.permission_modal_active = false;
-                            s.ui.permission_modal_selected_index = 0;
-                        }
-                        s.mark_render_dirty();
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to resolve permission {}: {}",
-                            perm_id,
-                            e
-                        );
-                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                        s.set_notification(
-                            format!("Failed to resolve permission: {}", e),
-                            crate::state::types::NotificationVariant::Error,
-                            5000,
-                        );
-                        s.mark_render_dirty();
-                    }
-                }
-            });
+            self.resolve_permission_async(
+                client,
+                perm.session_id.clone(),
+                perm.id.clone(),
+                task_id,
+                approve,
+            );
         } else if let Some(question) = pending_question {
             // Question — selected_index maps to answer index
             if selected_index < question.answers.len() {
@@ -3932,22 +3953,7 @@ impl App {
                             }
 
                             let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
-                            // Check if more questions remain
-                            let has_more = s
-                                .session_tracker
-                                .task_sessions
-                                .get(&tid)
-                                .map(|sess| {
-                                    !sess.pending_questions.is_empty()
-                                        || !sess.pending_permissions.is_empty()
-                                })
-                                .unwrap_or(false);
-                            if has_more {
-                                s.ui.permission_modal_selected_index = 0;
-                            } else {
-                                s.ui.permission_modal_active = false;
-                                s.ui.permission_modal_selected_index = 0;
-                            }
+                            Self::sync_modal_after_resolve(&mut s, &tid);
                             s.set_notification(
                                 format!("Answered: {}", answer_preview),
                                 crate::state::types::NotificationVariant::Success,
