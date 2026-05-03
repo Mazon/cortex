@@ -237,7 +237,7 @@ pub fn render_permission_modal(
 /// Returns `(is_permission, tool_or_question, description_or_details, options, total_pending, current_index)`.
 fn gather_modal_data(
     session: Option<&crate::state::types::TaskDetailSession>,
-    _selected_index: usize,
+    selected_index: usize,
 ) -> (
     bool,
     Option<String>,
@@ -255,8 +255,8 @@ fn gather_modal_data(
 
     if has_perms {
         let total = session.pending_permissions.len();
-        // Show the first permission (index 0) — stacked display is for future enhancement
-        let perm = &session.pending_permissions[0];
+        let idx = selected_index.min(total.saturating_sub(1));
+        let perm = &session.pending_permissions[idx];
         let options = vec!["Yes (approve)".to_string(), "No (reject)".to_string()];
         (
             true,
@@ -268,11 +268,12 @@ fn gather_modal_data(
             ),
             options,
             total,
-            0,
+            idx,
         )
     } else if has_questions {
         let total = session.pending_questions.len();
-        let question = &session.pending_questions[0];
+        let idx = selected_index.min(total.saturating_sub(1));
+        let question = &session.pending_questions[idx];
         let options: Vec<String> = question
             .answers
             .iter()
@@ -285,7 +286,7 @@ fn gather_modal_data(
             None,
             options,
             total,
-            0,
+            idx,
         )
     } else {
         (false, None, None, Vec::new(), 0, 0)
