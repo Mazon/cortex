@@ -477,7 +477,11 @@ pub fn parse_git_diff(output: &str) -> Vec<DiffFile> {
 
     // Truncate large output
     let output = if output.len() > MAX_DIFF_SIZE {
-        let truncated = &output[..MAX_DIFF_SIZE];
+        let mut end = MAX_DIFF_SIZE;
+        while !output.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        let truncated = &output[..end];
         files.push(DiffFile {
             path: "[TRUNCATED]".to_string(),
             old_path: None,
