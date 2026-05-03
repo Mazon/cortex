@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 /// The keybindings displayed are pulled from the actual config, so custom
 /// bindings are shown instead of a hardcoded default list.
 pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
-    let area = centered_rect(70, 90, f.area());
+    let area = centered_rect(80, 90, f.area());
 
     // Clear the area behind the overlay
     f.render_widget(Clear, area);
@@ -28,22 +28,58 @@ pub fn render_help_overlay(f: &mut Frame, kb: &KeybindingConfig) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let help_text = build_all_help_text(kb, &kb.editor);
-    let help_para = Paragraph::new(help_text).style(Style::default().fg(Color::White));
-    f.render_widget(help_para, inner);
+    // Split inner area into two rows: main content (flex) + footer (fixed 2 lines)
+    let main_and_footer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(2)])
+        .split(inner);
+
+    // Split main content into two columns with a 1-cell gap
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Length(1), Constraint::Percentage(50)])
+        .split(main_and_footer[0]);
+
+    // Left column: Global + Kanban keys
+    let left_text = build_left_column_text(kb);
+    let left_para = Paragraph::new(left_text).style(Style::default().fg(Color::White));
+    f.render_widget(left_para, columns[0]);
+
+    // Vertical separator
+    let separator = Paragraph::new(
+        (0..columns[1].height)
+            .map(|_| "│")
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .style(Style::default().fg(Color::Rgb(80, 90, 110)));
+    f.render_widget(separator, columns[1]);
+
+    // Right column: Review + Task Editor keys
+    let right_text = build_right_column_text(kb);
+    let right_para = Paragraph::new(right_text).style(Style::default().fg(Color::White));
+    f.render_widget(right_para, columns[2]);
+
+    // Footer centered at the bottom
+    let footer = Paragraph::new("Press any key to close")
+        .style(Style::default().fg(Color::Rgb(150, 160, 180)))
+        .alignment(Alignment::Center);
+    f.render_widget(footer, main_and_footer[1]);
 }
 
-/// Build the help text for all sections concatenated into one page.
-fn build_all_help_text(kb: &KeybindingConfig, ek: &EditorKeybindingConfig) -> String {
+/// Build the left column text: Global + Kanban keys.
+fn build_left_column_text(kb: &KeybindingConfig) -> String {
     let mut s = String::new();
     s.push_str(&build_global_text(kb));
     s.push_str(&build_kanban_text(kb));
+    s
+}
+
+/// Build the right column text: Review + Task Editor keys.
+fn build_right_column_text(kb: &KeybindingConfig) -> String {
+    let mut s = String::new();
     s.push_str(&build_review_text(kb));
-    s.push_str(&build_editor_text(ek));
-    // Footer
-    use std::fmt::Write;
-    let _ = writeln!(s);
-    let _ = writeln!(s, " Press any key to close");
+    s.push_str(&build_editor_text(&kb.editor));
     s
 }
 
@@ -369,14 +405,24 @@ mod tests {
     }
 
     #[test]
-    fn test_build_all_help_text_contains_all_sections() {
+    fn test_build_left_column_text() {
         let kb = KeybindingConfig::default();
-        let text = build_all_help_text(&kb, &kb.editor);
-        assert!(!text.is_empty(), "All-section help text should not be empty");
+        let text = build_left_column_text(&kb);
+        assert!(!text.is_empty(), "Left column text should not be empty");
         assert!(text.contains("Global Keys"));
         assert!(text.contains("Kanban Keys"));
+        assert!(!text.contains("Review Keys"));
+        assert!(!text.contains("Task Editor Keys"));
+    }
+
+    #[test]
+    fn test_build_right_column_text() {
+        let kb = KeybindingConfig::default();
+        let text = build_right_column_text(&kb);
+        assert!(!text.is_empty(), "Right column text should not be empty");
         assert!(text.contains("Review Keys"));
         assert!(text.contains("Task Editor Keys"));
-        assert!(text.contains("Press any key to close"));
+        assert!(!text.contains("Global Keys"));
+        assert!(!text.contains("Kanban Keys"));
     }
 }
