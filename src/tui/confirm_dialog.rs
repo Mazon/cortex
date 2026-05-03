@@ -2,7 +2,7 @@
 
 use crate::state::types::AppState;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 /// Render a centered confirmation dialog for task deletion.
 pub fn render_confirm_delete_dialog(f: &mut Frame, area: Rect, state: &AppState) {
@@ -27,6 +27,7 @@ pub fn render_confirm_delete_dialog(f: &mut Frame, area: Rect, state: &AppState)
         .wrap(Wrap { trim: true })
         .alignment(Alignment::Center);
     let dialog_area = centered_rect(50, 7, area);
+    f.render_widget(Clear, dialog_area);
     f.render_widget(paragraph, dialog_area);
 }
 

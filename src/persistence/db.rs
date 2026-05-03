@@ -404,6 +404,9 @@ CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_kanban_order_task_id ON kanban_order(task_id);
 "#;
 
 /// Read the current schema version from the `_meta` table.

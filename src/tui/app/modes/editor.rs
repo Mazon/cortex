@@ -343,6 +343,12 @@ fn handle_text_input(app: &mut App, key: crossterm::event::KeyEvent, prompt: Inp
             }
         }
         KeyCode::Char(c) => {
+            if key
+                .modifiers
+                .intersects(crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT)
+            {
+                return;
+            }
             let mut state = app.state.lock().unwrap_or_else(|e| e.into_inner());
             let char_count = state.ui.input_text.chars().count();
             let cursor = state.ui.input_cursor.min(char_count);

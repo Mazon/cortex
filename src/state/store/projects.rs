@@ -83,11 +83,12 @@ impl AppState {
         self.mark_dirty();
     }
 
-    /// Set the active project and rebuild the kanban board for it.
+    /// Set the active project and rebuild the kanban board for it. Marks state dirty.
     pub fn select_project(&mut self, project_id: &str) {
         self.project_registry.active_project_id = Some(project_id.to_string());
         // Rebuild kanban for selected project
         self.rebuild_kanban_for_project(project_id);
+        self.mark_dirty();
     }
 
     /// Get tasks for the active project in a given column.
