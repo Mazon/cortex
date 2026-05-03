@@ -109,10 +109,9 @@ pub fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {
         state.mark_render_dirty();
     } else {
         // Click in the task area — determine which task was clicked
-        // Tasks start at row 2 (after the header), each task card is 6 rows
-        // (5 rows for card + 1 row gap)
+        // Tasks start at row 2 (after the header), each task card is 5 rows
         let task_row = (mouse.row - 2) as usize;
-        let card_height = 6usize; // 5 rows for card + 1 row gap
+        let card_height = 5usize;
         let task_index = task_row / card_height;
 
         let task_id = {
