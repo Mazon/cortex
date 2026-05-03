@@ -219,7 +219,10 @@ pub fn run() -> Result<()> {
         // Start a single shared server using the first project's working directory.
         let projects_snapshot: Vec<(String, String, String)> = state
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| {
+                tracing::error!("AppState mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .project_registry
             .projects
             .iter()
@@ -380,7 +383,10 @@ pub fn run() -> Result<()> {
         if !opencode_clients.is_empty() {
             let project_ids: Vec<String> = state
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| {
+                    tracing::error!("AppState mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                })
                 .project_registry
                 .projects
                 .iter()
