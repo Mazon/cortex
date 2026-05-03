@@ -564,7 +564,7 @@ pub fn run() -> Result<()> {
         });
 
         // Run TUI event loop
-        let mut app = App::new(state.clone(), config.clone(), opencode_clients)?;
+        let mut app = App::new(state.clone(), config.clone(), config_path, opencode_clients)?;
         let result = app.run().await;
 
         // Graceful shutdown

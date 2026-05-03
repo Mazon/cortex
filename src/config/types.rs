@@ -439,6 +439,14 @@ pub struct KeybindingConfig {
     pub reject_review: String,
     #[serde(default = "default_reports")]
     pub reports: String,
+    #[serde(default = "default_add_dependency")]
+    pub add_dependency: String,
+    #[serde(default = "default_remove_dependency")]
+    pub remove_dependency: String,
+    #[serde(default = "default_view_archive")]
+    pub view_archive: String,
+    #[serde(default = "default_open_config_editor")]
+    pub open_config_editor: String,
     /// Editor-specific keybindings (task editor mode).
     #[serde(default)]
     pub editor: EditorKeybindingConfig,
@@ -521,6 +529,18 @@ fn default_reject_review() -> String {
 fn default_reports() -> String {
     "shift+p".to_string()
 }
+fn default_add_dependency() -> String {
+    "ctrl+d".to_string()
+}
+fn default_remove_dependency() -> String {
+    "ctrl+shift+d".to_string()
+}
+fn default_view_archive() -> String {
+    "shift+a".to_string()
+}
+fn default_open_config_editor() -> String {
+    "shift+e".to_string()
+}
 
 impl Default for KeybindingConfig {
     fn default() -> Self {
@@ -550,6 +570,10 @@ impl Default for KeybindingConfig {
             accept_review: default_accept_review(),
             reject_review: default_reject_review(),
             reports: default_reports(),
+            add_dependency: default_add_dependency(),
+            remove_dependency: default_remove_dependency(),
+            view_archive: default_view_archive(),
+            open_config_editor: default_open_config_editor(),
             editor: EditorKeybindingConfig::default(),
         }
     }

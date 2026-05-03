@@ -84,6 +84,12 @@ pub struct UIState {
     /// Timestamp when the user last dismissed the permission modal via Esc.
     /// Used to prevent auto-reopen for a cooldown period.
     pub permission_modal_dismissed_at: Option<Instant>,
+    /// ID of the task pending deletion (ConfirmDelete mode).
+    pub pending_delete_task_id: Option<String>,
+    /// State for the archive viewer (Archive mode).
+    pub archive_state: Option<ArchiveState>,
+    /// State for the config editor (ConfigEditor mode).
+    pub config_editor_state: Option<ConfigEditorState>,
 }
 
 impl Default for UIState {
@@ -114,6 +120,9 @@ impl Default for UIState {
             permission_modal_active: false,
             permission_modal_selected_index: 0,
             permission_modal_dismissed_at: None,
+            pending_delete_task_id: None,
+            archive_state: None,
+            config_editor_state: None,
         }
     }
 }
@@ -1012,6 +1021,221 @@ impl DirtyFlags {
     }
 }
 
+// ─── Config Editor State ───────────────────────────────────────────────────
+
+/// State for the fullscreen config editor (TOML file editing).
+#[derive(Debug, Clone)]
+pub struct ConfigEditorState {
+    /// Path to the config file being edited.
+    pub config_path: std::path::PathBuf,
+    /// Editor content stored as individual lines.
+    pub lines: Vec<String>,
+    /// Cached file content; used to detect unsaved changes.
+    pub cached_content: Option<String>,
+    /// Cursor row (0-indexed).
+    pub cursor_row: usize,
+    /// Cursor column (0-indexed, char position).
+    pub cursor_col: usize,
+    /// Scroll offset for the editor viewport.
+    pub scroll_offset: usize,
+    /// Whether the editor content differs from the cached file content.
+    pub has_unsaved_changes: bool,
+    /// Inline validation error displayed in the status bar.
+    pub validation_error: Option<String>,
+}
+
+impl ConfigEditorState {
+    /// Create a new config editor state by reading the file at `path`.
+    /// Returns `None` if the file cannot be read.
+    pub fn from_path(path: &std::path::Path) -> Option<Self> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let cached_content = content.clone();
+        let lines: Vec<String> = if content.is_empty() {
+            vec![String::new()]
+        } else {
+            content.split('\n').map(String::from).collect()
+        };
+        Some(Self {
+            config_path: path.to_path_buf(),
+            lines,
+            cached_content: Some(cached_content),
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_offset: 0,
+            has_unsaved_changes: false,
+            validation_error: None,
+        })
+    }
+
+    /// Returns the editor content as a single string (lines joined by newline).
+    pub fn content(&self) -> String {
+        self.lines.join("\n")
+    }
+
+    /// Ensures the cursor is visible within the given viewport height.
+    pub fn ensure_cursor_visible(&mut self, visible_rows: usize) {
+        if visible_rows == 0 {
+            return;
+        }
+        if self.cursor_row < self.scroll_offset {
+            self.scroll_offset = self.cursor_row;
+        } else if self.cursor_row >= self.scroll_offset + visible_rows {
+            self.scroll_offset = self.cursor_row - visible_rows + 1;
+        }
+    }
+
+    /// Inserts a character at cursor position in the current line.
+    pub fn insert_char(&mut self, ch: char) {
+        let row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        let line_len = self.lines.get(row).map_or(0, |l| l.chars().count());
+        let col = self.cursor_col.min(line_len);
+        if let Some(line) = self.lines.get_mut(row) {
+            let byte_pos = line
+                .char_indices()
+                .nth(col)
+                .map(|(i, _)| i)
+                .unwrap_or(line.len());
+            line.insert(byte_pos, ch);
+            self.cursor_col = col + 1;
+            self.cursor_row = row;
+        }
+        self.has_unsaved_changes = true;
+        self.validation_error = None;
+    }
+
+    /// Inserts a newline at cursor position, splitting the current line.
+    pub fn insert_newline(&mut self) {
+        let row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        let line_len = self.lines.get(row).map_or(0, |l| l.chars().count());
+        let col = self.cursor_col.min(line_len);
+        if let Some(line) = self.lines.get(row).cloned() {
+            let (before, after) = split_line_at_char(&line, col);
+            self.lines[row] = before;
+            self.lines.insert(row + 1, after);
+            self.cursor_row = row + 1;
+            self.cursor_col = 0;
+        }
+        self.has_unsaved_changes = true;
+    }
+
+    /// Deletes character before cursor (backspace).
+    pub fn delete_char_back(&mut self) {
+        let row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        let line_len = self.lines.get(row).map_or(0, |l| l.chars().count());
+        let col = self.cursor_col.min(line_len);
+
+        if col > 0 {
+            if let Some(line) = self.lines.get_mut(row) {
+                let char_indices: Vec<(usize, char)> = line.char_indices().collect();
+                if let Some(&(byte_start, ch)) = char_indices.get(col - 1) {
+                    let byte_end = byte_start + ch.len_utf8();
+                    line.replace_range(byte_start..byte_end, "");
+                }
+                self.cursor_col = col - 1;
+            }
+        } else if row > 0 {
+            let prev_len = self
+                .lines
+                .get(row - 1)
+                .map_or(0, |l| l.chars().count());
+            if let (Some(prev), Some(cur)) =
+                (self.lines.get(row - 1).cloned(), self.lines.get(row).cloned())
+            {
+                let merged = format!("{}{}", prev, cur);
+                self.lines[row - 1] = merged;
+                self.lines.remove(row);
+                self.cursor_row = row - 1;
+                self.cursor_col = prev_len;
+            }
+        }
+
+        self.has_unsaved_changes = true;
+    }
+
+    /// Deletes character after cursor (forward delete).
+    pub fn delete_char_forward(&mut self) {
+        let row = self.cursor_row.min(self.lines.len().saturating_sub(1));
+        let line_len = self.lines.get(row).map_or(0, |l| l.chars().count());
+        let col = self.cursor_col.min(line_len);
+
+        if col < line_len {
+            if let Some(line) = self.lines.get_mut(row) {
+                let char_indices: Vec<(usize, char)> = line.char_indices().collect();
+                if let Some(&(byte_start, ch)) = char_indices.get(col) {
+                    let byte_end = byte_start + ch.len_utf8();
+                    line.replace_range(byte_start..byte_end, "");
+                }
+            }
+        } else if row + 1 < self.lines.len() {
+            if let (Some(cur), Some(next)) =
+                (self.lines.get(row).cloned(), self.lines.get(row + 1).cloned())
+            {
+                let merged = format!("{}{}", cur, next);
+                self.lines[row] = merged;
+                self.lines.remove(row + 1);
+            }
+        }
+
+        self.has_unsaved_changes = true;
+    }
+
+    /// Moves the cursor in the specified direction.
+    pub fn move_cursor(&mut self, direction: CursorDirection) {
+        match direction {
+            CursorDirection::Up => {
+                if self.cursor_row > 0 {
+                    self.cursor_row -= 1;
+                    let line_len = self
+                        .lines
+                        .get(self.cursor_row)
+                        .map_or(0, |l| l.chars().count());
+                    self.cursor_col = self.cursor_col.min(line_len);
+                }
+            }
+            CursorDirection::Down => {
+                if self.cursor_row + 1 < self.lines.len() {
+                    self.cursor_row += 1;
+                    let line_len = self
+                        .lines
+                        .get(self.cursor_row)
+                        .map_or(0, |l| l.chars().count());
+                    self.cursor_col = self.cursor_col.min(line_len);
+                }
+            }
+            CursorDirection::Left => {
+                self.cursor_col = self.cursor_col.saturating_sub(1);
+            }
+            CursorDirection::Right => {
+                let line_len = self
+                    .lines
+                    .get(self.cursor_row)
+                    .map_or(0, |l| l.chars().count());
+                if self.cursor_col < line_len {
+                    self.cursor_col += 1;
+                }
+            }
+            CursorDirection::Home => {
+                self.cursor_col = 0;
+            }
+            CursorDirection::End => {
+                self.cursor_col = self
+                    .lines
+                    .get(self.cursor_row)
+                    .map_or(0, |l| l.chars().count());
+            }
+        }
+    }
+}
+
+// ─── Archive State ─────────────────────────────────────────────────────────
+
+/// State for the archive viewer mode.
+#[derive(Debug, Clone, Default)]
+pub struct ArchiveState {
+    /// Index of the currently selected archived task in the list.
+    pub selected_index: usize,
+}
+
 // ─── AppState ─────────────────────────────────────────────────────────────
 
 use super::project::{KanbanState, ProjectRegistry};
@@ -1640,6 +1864,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
         };
         let editor =
             TaskEditorState::new_for_edit(&task, vec!["todo".to_string(), "planning".to_string()]);
@@ -1680,6 +1905,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
         };
         let editor = TaskEditorState::new_for_edit(&task, vec!["todo".to_string()]);
         assert_eq!(editor.desc_lines, vec![String::new()]);

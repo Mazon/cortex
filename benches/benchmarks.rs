@@ -41,6 +41,7 @@ fn make_task(id: &str, title: &str) -> CortexTask {
         created_at: 0,
         updated_at: 0,
         project_id: "bench-project".to_string(),
+        blocked_by: Vec::new(),
     }
 }
 

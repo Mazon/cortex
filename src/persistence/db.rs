@@ -103,6 +103,7 @@ impl Db {
                     queued_prompt: None, // Transient — not persisted
                     review_status: parse_review_status(&row.get::<_, String>(18)?),
                     had_write_operations: false, // Transient — not persisted
+                    blocked_by: Vec::new(), // Not persisted yet — new field
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

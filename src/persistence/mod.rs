@@ -240,6 +240,7 @@ mod tests {
             created_at: 1_710_000_000_000,
             updated_at: 1_710_001_000_000,
             project_id: "proj-1".to_string(),
+            blocked_by: Vec::new(),
         }
     }
 
@@ -781,6 +782,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-a".to_string(),
+            blocked_by: Vec::new(),
         };
         let task_a2 = CortexTask {
             id: "task-a2".to_string(),
@@ -805,6 +807,7 @@ mod tests {
             created_at: 1001,
             updated_at: 1001,
             project_id: "proj-a".to_string(),
+            blocked_by: Vec::new(),
         };
 
         // ── Build AppState with Project A ──
@@ -878,6 +881,7 @@ mod tests {
             created_at: 2001,
             updated_at: 2001,
             project_id: "proj-b".to_string(),
+            blocked_by: Vec::new(),
         };
 
         // Add Project B and its task to the state

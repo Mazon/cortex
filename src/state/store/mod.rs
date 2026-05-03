@@ -8,6 +8,7 @@
 //! navigation/UI methods in [`crate::state::navigation`], and
 //! permission/question handling in [`crate::state::permissions`].
 
+mod archive_deps;
 mod dirty;
 mod persistence;
 mod projects;

@@ -135,6 +135,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+            blocked_by: Vec::new(),
         };
         state.tasks.insert(task_id.clone(), task);
         (state, task_id)

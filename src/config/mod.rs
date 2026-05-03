@@ -114,6 +114,13 @@ pub fn save_config(config: &CortexConfig, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reload config from a TOML file. Wraps [`load_config`] but returns
+/// `Result<CortexConfig, Vec<String>>` so the caller can display multiple
+/// validation errors to the user.
+pub fn reload_config(path: &Path) -> Result<CortexConfig, Vec<String>> {
+    load_config(path).map_err(|e| vec![e.to_string()])
+}
+
 /// Maximum allowed length for column IDs. Very long IDs can cause rendering issues
 /// in the TUI and are almost certainly a user mistake.
 const MAX_COLUMN_ID_LENGTH: usize = 64;

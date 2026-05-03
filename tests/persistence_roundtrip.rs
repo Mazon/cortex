@@ -53,6 +53,7 @@ fn make_task(id: &str, project_id: &str, column: &str) -> CortexTask {
         created_at: 1000,
         updated_at: 1000,
         project_id: project_id.to_string(),
+        blocked_by: Vec::new(),
     }
 }
 
@@ -197,6 +198,7 @@ fn task_with_all_fields_round_trips() {
         created_at: 1_699_999_000_000,
         updated_at: 1_700_000_100_000,
         project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
     };
 
     let mut original = AppState::default();

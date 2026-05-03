@@ -38,6 +38,12 @@ pub enum Action {
     // Project operations
     SetWorkingDirectory,
     DeleteProject,
+    // Dependency management
+    AddDependency,
+    RemoveDependency,
+    // Archive and config
+    ViewArchive,
+    OpenConfigEditor,
 }
 
 /// Matches crossterm KeyEvents to Actions based on config.
@@ -91,6 +97,18 @@ impl KeyMatcher {
             Action::SetWorkingDirectory,
         );
         parse_and_add(&mut bindings, &config.delete_project, Action::DeleteProject);
+        parse_and_add(&mut bindings, &config.add_dependency, Action::AddDependency);
+        parse_and_add(
+            &mut bindings,
+            &config.remove_dependency,
+            Action::RemoveDependency,
+        );
+        parse_and_add(&mut bindings, &config.view_archive, Action::ViewArchive);
+        parse_and_add(
+            &mut bindings,
+            &config.open_config_editor,
+            Action::OpenConfigEditor,
+        );
 
         Self { bindings }
     }

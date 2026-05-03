@@ -47,6 +47,7 @@ impl AppState {
             created_at: now,
             updated_at: now,
             project_id: project_id.to_string(),
+            blocked_by: Vec::new(),
         };
 
         // Add to kanban

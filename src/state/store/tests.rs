@@ -45,6 +45,7 @@ mod tests {
                 created_at: 1000,
                 updated_at: 1000,
                 project_id: "proj-1".to_string(),
+            blocked_by: Vec::new(),
             };
             state.tasks.insert(task.id.clone(), task.clone());
             state
@@ -1287,6 +1288,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
         };
         let mut kanban = HashMap::new();
         kanban.insert("todo".to_string(), vec!["task-1".to_string()]);
@@ -1361,6 +1363,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
         };
         let task2 = CortexTask {
             id: "task-2".to_string(),
@@ -1385,6 +1388,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-2".to_string(),
+        blocked_by: Vec::new(),
         };
 
         state.restore_state(
@@ -1436,6 +1440,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+        blocked_by: Vec::new(),
         };
 
         state.restore_state(
@@ -1486,6 +1491,7 @@ mod tests {
             updated_at: 1000,
             project_id: "proj-1".to_string(),
             agent_type: None,
+            blocked_by: Vec::new(),
         };
         let task2 = CortexTask {
             id: "task-2".to_string(),
@@ -1510,6 +1516,7 @@ mod tests {
             updated_at: 1000,
             project_id: "proj-1".to_string(),
             agent_type: None,
+            blocked_by: Vec::new(),
         };
 
         state.restore_state(
@@ -1602,6 +1609,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-2".to_string(),
+        blocked_by: Vec::new(),
         };
         state.tasks.insert("task-p2".to_string(), p2_task);
 

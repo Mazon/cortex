@@ -143,6 +143,12 @@ pub enum AppMode {
     DiffReview,
     /// Reports mode — view project statistics and recent git commits.
     Reports,
+    /// Confirm delete mode — y/n confirmation dialog for task deletion.
+    ConfirmDelete,
+    /// Archive viewer — view and manage archived tasks.
+    Archive,
+    /// Config editor — inline TOML editor for cortex.toml.
+    ConfigEditor,
 }
 
 /// Which field is focused in the task editor.

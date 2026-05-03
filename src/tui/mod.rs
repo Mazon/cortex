@@ -1,6 +1,9 @@
 //! TUI module — terminal user interface for cortex.
 
 pub mod app;
+pub mod archive_viewer;
+pub mod config_editor;
+pub mod confirm_dialog;
 pub mod diff_view;
 pub mod editor_handler;
 pub mod help;

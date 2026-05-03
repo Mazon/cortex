@@ -61,6 +61,9 @@ pub struct CortexTask {
     pub updated_at: i64,
     /// ID of the project this task belongs to.
     pub project_id: String,
+    /// List of task IDs this task is blocked by (dependency chain).
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
 }
 
 /// A message in a task's session.
@@ -341,6 +344,7 @@ mod tests {
             created_at: 1000,
             updated_at: 1000,
             project_id: "proj-1".to_string(),
+            blocked_by: Vec::new(),
         }
     }
 
