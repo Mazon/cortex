@@ -360,7 +360,7 @@ pub fn handle_retry_task(app: &mut App) {
     // Batch read: extract task info, client, and column config in one lock hold.
     let (task_info, client) = {
         let state = app.state.lock().unwrap_or_else(|e| e.into_inner());
-        let tid = app.state.lock().unwrap_or_else(|e| e.into_inner()).ui.focused_task_id.clone();
+        let tid = state.ui.focused_task_id.clone();
         let info = tid.as_ref().and_then(|id| {
             let task = state.tasks.get(id)?;
             Some((
