@@ -358,7 +358,8 @@ pub fn handle_normal_key(app: &mut App, key: crossterm::event::KeyEvent) {
                     (KeyCode::PageDown, KeyModifiers::NONE) => {
                         let mut state = app.state.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(ed) = state.ui.detail_editor.as_mut() {
-                            ed.scroll_offset = ed.scroll_offset + 5;
+                            ed.scroll_offset =
+                                (ed.scroll_offset + 5).min(ed.desc_lines.len().saturating_sub(1));
                         }
                         state.mark_render_dirty();
                         return;
