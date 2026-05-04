@@ -1,18 +1,7 @@
 # Cortex
 
-A terminal Kanban board that assigns AI agents to your tasks. Built in Rust, integrates with [OpenCode](https://github.com/opencode-ai/opencode).
+A terminal Kanban board that assigns AI agents to your tasks. Built in Rust, integrates with Opencode
 
-```
-┌──────────┬────────────┬────────────┬────────────┬────────────┐
-│ Projects │   Todo     │   Plan     │   Run      │   Review   │
-│          │            │            │            │            │
-│ ● Default│ 1. Add ... │ 3. Refac.. │ 5. Fix ..  │            │
-│          │            │   ◐ work.. │   ◐ work.. │            │
-│          │ 2. Write.. │            │            │            │
-├──────────┴────────────┴────────────┴────────────┴────────────┤
-│ ● connected  │  Default  │  5 tasks  │  ? for help          │
-└──────────────────────────────────────────────────────────────┘
-```
 
 ## Install
 
